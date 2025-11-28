@@ -98,9 +98,17 @@ class AutomationComponent(Component):
         """Ensure pyautogui is installed"""
         try:
             import pyautogui
+            # Set failsafe to False to avoid issues
+            pyautogui.FAILSAFE = False
         except ImportError:
             logger.info("Installing pyautogui...")
             subprocess.run(["pip", "install", "pyautogui"], check=True, capture_output=True)
+        except Exception as e:
+            # Catch display connection errors
+            if "display" in str(e).lower() or "authorization" in str(e).lower():
+                logger.warning(f"Display connection issue: {e}. Running in headless mode may require xvfb.")
+            else:
+                raise
     
     def _click(self, data: Any) -> Dict:
         """Click mouse at position"""
@@ -125,6 +133,18 @@ class AutomationComponent(Component):
             }
         except ImportError:
             raise ComponentError("pyautogui not installed. Install: pip install pyautogui")
+        except Exception as e:
+            error_msg = str(e)
+            if "display" in error_msg.lower() or "authorization" in error_msg.lower():
+                raise ComponentError(
+                    "Cannot connect to display. This may happen when:\n"
+                    "1. Running in SSH without X11 forwarding (use: ssh -X)\n"
+                    "2. Running as different user (try: xhost +local:)\n"
+                    "3. Running in Docker/headless (install xvfb: apt-get install xvfb)\n"
+                    "4. DISPLAY variable not set correctly\n\n"
+                    f"Original error: {error_msg}"
+                )
+            raise
     
     def _move(self, data: Any) -> Dict:
         """Move mouse to position"""

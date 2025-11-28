@@ -194,6 +194,7 @@ Shortcuts:
     media_parser.add_argument('--file', help='Input file')
     media_parser.add_argument('--text', help='Text for TTS')
     media_parser.add_argument('--model', default='llava', help='AI model')
+    media_parser.add_argument('--prompt', help='Custom prompt for AI analysis')
     media_parser.add_argument('--output', help='Output file')
     
     # Service command
@@ -747,6 +748,8 @@ def handle_media(args) -> int:
         uri += f"text={args.text}&"
     if args.model:
         uri += f"model={args.model}&"
+    if hasattr(args, 'prompt') and args.prompt:
+        uri += f"prompt={args.prompt}&"
     if args.output:
         uri += f"output={args.output}&"
     
