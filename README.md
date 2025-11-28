@@ -150,9 +150,13 @@ flow("sms://send?provider=twilio&to=+1234567890").run("Alert: System down!")
 # Bulk SMS
 flow("sms://bulk?numbers=+123,+456,+789").run("Broadcast message")
 ```
+
+```python
 flow("http://api.example.com/users")
+```
 
 # POST with data
+```python
 flow("http://api.example.com/users?method=post") \
     .with_data({"name": "John", "email": "john@example.com"})
 ```

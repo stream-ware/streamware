@@ -1,0 +1,3 @@
+"""
+Streamware test suite
+"""
