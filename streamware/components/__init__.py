@@ -172,6 +172,13 @@ from .automation import (
     automate,
 )
 
+from .vscode_bot import (
+    VSCodeBotComponent,
+    click_accept,
+    click_reject,
+    continue_bot,
+)
+
 __all__ = [
     # CurLLM
     "CurLLMComponent",
@@ -314,4 +321,10 @@ __all__ = [
     "click",
     "type_text",
     "automate",
+    
+    # VSCode Bot
+    "VSCodeBotComponent",
+    "click_accept",
+    "click_reject",
+    "continue_bot",
 ]

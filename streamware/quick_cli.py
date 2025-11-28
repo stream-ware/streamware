@@ -223,6 +223,17 @@ Shortcuts:
     auto_parser.add_argument('--keys', help='Key combination (e.g., ctrl+c)')
     auto_parser.add_argument('--task', help='Task description for AI automation')
     
+    # VSCode Bot command
+    bot_parser = subparsers.add_parser('bot', help='VSCode automation bot')
+    bot_parser.add_argument('operation', choices=['click_button', 'find_button', 'generate_prompt', 'commit_changes', 'accept_changes', 'reject_changes', 'continue_work', 'watch'],
+                           help='Bot operation')
+    bot_parser.add_argument('--button', default='accept_all', help='Button to click (accept_all, reject_all, run, skip, continue)')
+    bot_parser.add_argument('--iterations', type=int, default=5, help='Number of iterations')
+    bot_parser.add_argument('--delay', type=float, default=2.0, help='Delay between actions')
+    bot_parser.add_argument('--message', default='Auto commit by bot', help='Git commit message')
+    bot_parser.add_argument('--task', default='continue development', help='Task description')
+    bot_parser.add_argument('--workspace', default='.', help='Workspace directory')
+    
     # Deploy command
     deploy_parser = subparsers.add_parser('deploy', help='Deploy to K8s, Compose, Swarm')
     deploy_parser.add_argument('platform', choices=['k8s', 'kubernetes', 'compose', 'swarm', 'docker'],
@@ -297,6 +308,8 @@ Shortcuts:
             return handle_voice(args)
         elif args.command == 'auto':
             return handle_auto(args)
+        elif args.command == 'bot':
+            return handle_bot(args)
         elif args.command == 'deploy':
             return handle_deploy(args)
         else:
@@ -839,6 +852,36 @@ def handle_auto(args) -> int:
         return 0
     except Exception as e:
         print(f"Automation operation failed: {e}", file=sys.stderr)
+        return 1
+
+
+def handle_bot(args) -> int:
+    """Handle bot command"""
+    uri = f"vscode://{args.operation}?"
+    
+    if args.button:
+        uri += f"button={args.button}&"
+    if args.iterations:
+        uri += f"iterations={args.iterations}&"
+    if args.delay:
+        uri += f"delay={args.delay}&"
+    if args.message:
+        uri += f"message={args.message}&"
+    if args.task:
+        uri += f"task={args.task}&"
+    if args.workspace:
+        uri += f"workspace={args.workspace}&"
+    
+    try:
+        result = flow(uri).run()
+        
+        if not args.quiet:
+            import json
+            print(json.dumps(result, indent=2))
+        
+        return 0
+    except Exception as e:
+        print(f"Bot operation failed: {e}", file=sys.stderr)
         return 1
 
 
