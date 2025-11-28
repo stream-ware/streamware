@@ -143,6 +143,105 @@ Shortcuts:
     llm_parser.add_argument('--execute', action='store_true', help='Execute generated command')
     llm_parser.add_argument('--input', '-i', help='Input file')
     
+    # Setup command
+    setup_parser = subparsers.add_parser('setup', help='Setup and install dependencies')
+    setup_parser.add_argument('operation', choices=['check', 'install', 'python', 'system', 'ollama', 'all'],
+                             help='Setup operation')
+    setup_parser.add_argument('--packages', help='Comma-separated package list')
+    setup_parser.add_argument('--component', help='Component name for auto-install')
+    setup_parser.add_argument('--model', help='Ollama model name')
+    setup_parser.add_argument('--force', action='store_true', help='Force reinstall')
+    
+    # Template command
+    template_parser = subparsers.add_parser('template', help='Generate project templates')
+    template_parser.add_argument('operation', choices=['generate', 'list', 'info'],
+                                help='Template operation')
+    template_parser.add_argument('--name', help='Template name')
+    template_parser.add_argument('--output', default='.', help='Output directory')
+    template_parser.add_argument('--no-install', action='store_true', help='Skip auto-install')
+    
+    # Registry command
+    registry_parser = subparsers.add_parser('registry', help='Resource registry')
+    registry_parser.add_argument('operation', choices=['register', 'lookup', 'list', 'remove'],
+                                help='Registry operation')
+    registry_parser.add_argument('--type', default='component', help='Resource type')
+    registry_parser.add_argument('--name', help='Resource name')
+    registry_parser.add_argument('--tags', help='Comma-separated tags')
+    
+    # WebApp command
+    webapp_parser = subparsers.add_parser('webapp', help='Create web applications')
+    webapp_parser.add_argument('operation', choices=['create', 'serve', 'build'],
+                               help='WebApp operation')
+    webapp_parser.add_argument('--framework', choices=['flask', 'fastapi', 'streamlit', 'gradio', 'dash'],
+                              default='flask', help='Web framework')
+    webapp_parser.add_argument('--name', default='myapp', help='App name')
+    webapp_parser.add_argument('--port', type=int, help='Port number')
+    webapp_parser.add_argument('--output', default='.', help='Output directory')
+    
+    # Desktop command
+    desktop_parser = subparsers.add_parser('desktop', help='Create desktop applications')
+    desktop_parser.add_argument('operation', choices=['create', 'run', 'build'],
+                                help='Desktop operation')
+    desktop_parser.add_argument('--framework', choices=['tkinter', 'pyqt', 'kivy'],
+                               default='tkinter', help='GUI framework')
+    desktop_parser.add_argument('--name', default='myapp', help='App name')
+    desktop_parser.add_argument('--output', default='.', help='Output directory')
+    
+    # Media command
+    media_parser = subparsers.add_parser('media', help='Analyze multimedia with AI')
+    media_parser.add_argument('operation', choices=['describe_video', 'describe_image', 'transcribe', 'speak', 'caption'],
+                             help='Media operation')
+    media_parser.add_argument('--file', help='Input file')
+    media_parser.add_argument('--text', help='Text for TTS')
+    media_parser.add_argument('--model', default='llava', help='AI model')
+    media_parser.add_argument('--output', help='Output file')
+    
+    # Service command
+    service_parser = subparsers.add_parser('service', help='Manage background services')
+    service_parser.add_argument('operation', choices=['start', 'stop', 'restart', 'status', 'install', 'uninstall', 'list'],
+                               help='Service operation')
+    service_parser.add_argument('--name', help='Service name')
+    service_parser.add_argument('--command', help='Command to run')
+    service_parser.add_argument('--dir', default='.', help='Working directory')
+    
+    # Voice command
+    voice_parser = subparsers.add_parser('voice', help='Voice input/output (STT/TTS)')
+    voice_parser.add_argument('operation', choices=['listen', 'speak', 'command', 'interactive'],
+                             help='Voice operation')
+    voice_parser.add_argument('--text', help='Text to speak')
+    voice_parser.add_argument('--language', default='en', help='Language code')
+    
+    # Automation command
+    auto_parser = subparsers.add_parser('auto', help='Desktop automation (mouse/keyboard)')
+    auto_parser.add_argument('operation', choices=['click', 'move', 'type', 'press', 'hotkey', 'automate', 'screenshot'],
+                            help='Automation operation')
+    auto_parser.add_argument('--x', type=int, help='X coordinate')
+    auto_parser.add_argument('--y', type=int, help='Y coordinate')
+    auto_parser.add_argument('--text', help='Text to type')
+    auto_parser.add_argument('--key', help='Key to press')
+    auto_parser.add_argument('--keys', help='Key combination (e.g., ctrl+c)')
+    auto_parser.add_argument('--task', help='Task description for AI automation')
+    
+    # Deploy command
+    deploy_parser = subparsers.add_parser('deploy', help='Deploy to K8s, Compose, Swarm')
+    deploy_parser.add_argument('platform', choices=['k8s', 'kubernetes', 'compose', 'swarm', 'docker'],
+                               help='Deployment platform')
+    deploy_parser.add_argument('--apply', action='store_true', help='Apply deployment')
+    deploy_parser.add_argument('--delete', action='store_true', help='Delete deployment')
+    deploy_parser.add_argument('--update', action='store_true', help='Update deployment')
+    deploy_parser.add_argument('--scale', type=int, metavar='REPLICAS', help='Scale replicas')
+    deploy_parser.add_argument('--status', action='store_true', help='Get status')
+    deploy_parser.add_argument('--logs', action='store_true', help='Get logs')
+    deploy_parser.add_argument('--rollback', action='store_true', help='Rollback deployment')
+    deploy_parser.add_argument('--file', '-f', help='Manifest/compose file')
+    deploy_parser.add_argument('--namespace', '-n', default='default', help='K8s namespace')
+    deploy_parser.add_argument('--name', help='Deployment/service name')
+    deploy_parser.add_argument('--image', help='Docker image')
+    deploy_parser.add_argument('--tag', default='latest', help='Image tag')
+    deploy_parser.add_argument('--project', '-p', help='Compose project name')
+    deploy_parser.add_argument('--stack', '-s', help='Swarm stack name')
+    deploy_parser.add_argument('--context', help='K8s context')
+    
     # Global options
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--quiet', '-q', action='store_true', help='Quiet mode')
@@ -179,6 +278,26 @@ Shortcuts:
             return handle_ssh(args)
         elif args.command == 'llm':
             return handle_llm(args)
+        elif args.command == 'setup':
+            return handle_setup(args)
+        elif args.command == 'template':
+            return handle_template(args)
+        elif args.command == 'registry':
+            return handle_registry(args)
+        elif args.command == 'webapp':
+            return handle_webapp(args)
+        elif args.command == 'desktop':
+            return handle_desktop(args)
+        elif args.command == 'media':
+            return handle_media(args)
+        elif args.command == 'service':
+            return handle_service(args)
+        elif args.command == 'voice':
+            return handle_voice(args)
+        elif args.command == 'auto':
+            return handle_auto(args)
+        elif args.command == 'deploy':
+            return handle_deploy(args)
         else:
             print(f"Unknown command: {args.command}", file=sys.stderr)
             return 1
@@ -492,6 +611,288 @@ def handle_llm(args) -> int:
         print(result)
     
     return 0
+
+
+def handle_setup(args) -> int:
+    """Handle setup command"""
+    uri = f"setup://{args.operation}?"
+    
+    if args.packages:
+        uri += f"packages={args.packages}&"
+    if args.component:
+        uri += f"component={args.component}&"
+    if args.model:
+        uri += f"model={args.model}&"
+    if args.force:
+        uri += "force=true&"
+    
+    try:
+        result = flow(uri).run()
+        
+        if not args.quiet:
+            import json
+            print(json.dumps(result, indent=2))
+        
+        return 0 if result.get("success", True) else 1
+    except Exception as e:
+        print(f"Setup failed: {e}", file=sys.stderr)
+        return 1
+
+
+def handle_template(args) -> int:
+    """Handle template command"""
+    uri = f"template://{args.operation}?"
+    
+    if args.name:
+        uri += f"name={args.name}&"
+    if args.output:
+        uri += f"output={args.output}&"
+    if args.no_install:
+        uri += "auto_install=false&"
+    
+    try:
+        result = flow(uri).run()
+        
+        if not args.quiet:
+            import json
+            print(json.dumps(result, indent=2))
+        
+        return 0
+    except Exception as e:
+        print(f"Template operation failed: {e}", file=sys.stderr)
+        return 1
+
+
+def handle_registry(args) -> int:
+    """Handle registry command"""
+    uri = f"registry://{args.operation}?"
+    
+    if args.type:
+        uri += f"type={args.type}&"
+    if args.name:
+        uri += f"name={args.name}&"
+    if args.tags:
+        uri += f"tags={args.tags}&"
+    
+    try:
+        result = flow(uri).run()
+        
+        if not args.quiet:
+            import json
+            print(json.dumps(result, indent=2))
+        
+        return 0
+    except Exception as e:
+        print(f"Registry operation failed: {e}", file=sys.stderr)
+        return 1
+
+
+def handle_webapp(args) -> int:
+    """Handle webapp command"""
+    uri = f"webapp://{args.operation}?"
+    
+    if args.framework:
+        uri += f"framework={args.framework}&"
+    if args.name:
+        uri += f"name={args.name}&"
+    if args.port:
+        uri += f"port={args.port}&"
+    if args.output:
+        uri += f"output={args.output}&"
+    
+    try:
+        result = flow(uri).run()
+        
+        if not args.quiet:
+            import json
+            print(json.dumps(result, indent=2))
+        
+        return 0
+    except Exception as e:
+        print(f"WebApp operation failed: {e}", file=sys.stderr)
+        return 1
+
+
+def handle_desktop(args) -> int:
+    """Handle desktop command"""
+    uri = f"desktop://{args.operation}?"
+    
+    if args.framework:
+        uri += f"framework={args.framework}&"
+    if args.name:
+        uri += f"name={args.name}&"
+    if args.output:
+        uri += f"output={args.output}&"
+    
+    try:
+        result = flow(uri).run()
+        
+        if not args.quiet:
+            import json
+            print(json.dumps(result, indent=2))
+        
+        return 0
+    except Exception as e:
+        print(f"Desktop operation failed: {e}", file=sys.stderr)
+        return 1
+
+
+def handle_media(args) -> int:
+    """Handle media command"""
+    uri = f"media://{args.operation}?"
+    
+    if args.file:
+        uri += f"file={args.file}&"
+    if args.text:
+        uri += f"text={args.text}&"
+    if args.model:
+        uri += f"model={args.model}&"
+    if args.output:
+        uri += f"output={args.output}&"
+    
+    try:
+        result = flow(uri).run()
+        
+        if not args.quiet:
+            import json
+            print(json.dumps(result, indent=2))
+        
+        return 0
+    except Exception as e:
+        print(f"Media operation failed: {e}", file=sys.stderr)
+        return 1
+
+
+def handle_service(args) -> int:
+    """Handle service command"""
+    uri = f"service://{args.operation}?"
+    
+    if args.name:
+        uri += f"name={args.name}&"
+    if args.command:
+        uri += f"command={args.command}&"
+    if args.dir:
+        uri += f"dir={args.dir}&"
+    
+    try:
+        result = flow(uri).run()
+        
+        if not args.quiet:
+            import json
+            print(json.dumps(result, indent=2))
+        
+        return 0
+    except Exception as e:
+        print(f"Service operation failed: {e}", file=sys.stderr)
+        return 1
+
+
+def handle_voice(args) -> int:
+    """Handle voice command"""
+    uri = f"voice://{args.operation}?"
+    
+    if args.text:
+        uri += f"text={args.text}&"
+    if args.language:
+        uri += f"language={args.language}&"
+    
+    try:
+        result = flow(uri).run()
+        
+        if not args.quiet:
+            import json
+            print(json.dumps(result, indent=2))
+        
+        return 0
+    except Exception as e:
+        print(f"Voice operation failed: {e}", file=sys.stderr)
+        return 1
+
+
+def handle_auto(args) -> int:
+    """Handle automation command"""
+    uri = f"automation://{args.operation}?"
+    
+    if args.x is not None:
+        uri += f"x={args.x}&"
+    if args.y is not None:
+        uri += f"y={args.y}&"
+    if args.text:
+        uri += f"text={args.text}&"
+    if args.key:
+        uri += f"key={args.key}&"
+    if args.keys:
+        uri += f"keys={args.keys}&"
+    if args.task:
+        uri += f"task={args.task}&"
+    
+    try:
+        result = flow(uri).run()
+        
+        if not args.quiet:
+            import json
+            print(json.dumps(result, indent=2))
+        
+        return 0
+    except Exception as e:
+        print(f"Automation operation failed: {e}", file=sys.stderr)
+        return 1
+
+
+def handle_deploy(args) -> int:
+    """Handle deploy command"""
+    # Determine operation
+    operation = "apply"
+    if args.delete:
+        operation = "delete"
+    elif args.update:
+        operation = "update"
+    elif args.scale:
+        operation = "scale"
+    elif args.status:
+        operation = "status"
+    elif args.logs:
+        operation = "logs"
+    elif args.rollback:
+        operation = "rollback"
+    
+    # Build URI
+    platform = args.platform
+    uri = f"deploy://{operation}?platform={platform}"
+    
+    if args.file:
+        uri += f"&file={args.file}"
+    if args.namespace:
+        uri += f"&namespace={args.namespace}"
+    if args.name:
+        uri += f"&name={args.name}"
+    if args.image:
+        uri += f"&image={args.image}&tag={args.tag}"
+    if args.scale:
+        uri += f"&replicas={args.scale}"
+    if args.project:
+        uri += f"&project={args.project}"
+    if args.stack:
+        uri += f"&stack={args.stack}"
+    if args.context:
+        uri += f"&context={args.context}"
+    
+    # Execute
+    try:
+        result = flow(uri).run()
+        
+        if not args.quiet:
+            if isinstance(result, dict):
+                import json
+                print(json.dumps(result, indent=2))
+            else:
+                print(result)
+        
+        return 0 if result.get("success", True) else 1
+        
+    except Exception as e:
+        print(f"Deployment failed: {e}", file=sys.stderr)
+        return 1
 
 
 def handle_ssh(args) -> int:

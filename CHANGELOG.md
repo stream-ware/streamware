@@ -80,6 +80,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 50+ usage examples
 - Production-ready patterns
 
+## [0.2.0] - 2025-11-28
+
+### Added
+- **Setup Component** - Auto-install dependencies on-the-fly
+  - Check installed dependencies
+  - Install Python packages automatically
+  - Install system packages (apt, brew)
+  - Setup Ollama and pull models
+  - Component-specific dependency resolution
+  
+- **Template Component** - Quick project generation
+  - Generate projects from templates
+  - Templates: video-captioning, text2streamware, api-pipeline, monitoring
+  - Auto-install dependencies when generating
+  - List and inspect available templates
+  
+- **Registry Component** - Centralized resource management
+  - Register and lookup components
+  - Model configurations
+  - Template definitions
+  - Pipeline presets
+  - Configuration sharing
+  
+- **Video Component** - Real-time video processing
+  - RTSP stream reading
+  - YOLO object detection
+  - Frame analysis with OpenCV
+  - AI caption generation
+  
+- **LLM Component** - Multi-provider LLM operations
+  - OpenAI, Anthropic, Ollama support
+  - Natural language to SQL conversion
+  - Text analysis and summarization
+  - Translation capabilities
+  
+- **Text2Streamware Component** - Natural language to commands
+  - Convert text to sq commands using Qwen2.5 14B
+  - Command explanation
+  - Command optimization
+  - Validation
+  
+- **Deploy Component** - Multi-platform deployment
+  - Kubernetes (apply, scale, update, rollback)
+  - Docker Compose
+  - Docker Swarm
+  - Complete CI/CD integration
+  
+- **SSH Component** - Secure file transfer and execution
+  - Upload/download files
+  - Execute remote commands
+  - Application deployment
+  - Supports paramiko and system SSH
+
+### Enhanced
+- **Quick CLI (sq)** - New commands added
+  - `sq setup` - Dependency management
+  - `sq template` - Project generation
+  - `sq registry` - Resource management
+  - `sq deploy` - Deployment operations
+  - `sq llm` - LLM operations
+  - `sq ssh` - SSH operations
+  
+- **Documentation** - Comprehensive updates
+  - REFACTORING.md - Architecture and migration guide
+  - Component-specific docs with inline menus
+  - 100+ real-world examples
+  - Complete API references
+
+### Changed
+- **Version** - Bumped from 0.1.0 to 0.2.0
+- **Status** - Alpha → Beta (Development Status :: 4)
+- **License Classifier** - Removed deprecated classifier (keeping Apache-2.0 license)
+- **Component Structure** - Standardized with menus and examples
+
+### Projects
+- **video-captioning** - Complete RTSP + YOLO + LLM web application
+- **text2streamware-demo** - Natural language command generation
+- Automated installation scripts
+- Docker environments
+- CI/CD integration examples
+
+### Infrastructure
+- Auto-install system for dependencies
+- Template-based project generation
+- Local registry at `~/.streamware/registry.json`
+- Component dependency tracking
+- Smart package management
+
 ## [Unreleased]
 
 ### Planned

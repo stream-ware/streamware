@@ -96,6 +96,82 @@ from .llm import (
     llm_analyze,
 )
 
+from .video import (
+    VideoComponent,
+    video_from_rtsp,
+    detect_objects,
+    generate_caption,
+)
+
+from .text2streamware import (
+    Text2StreamwareComponent,
+    text_to_sq,
+    explain_command,
+    optimize_command,
+)
+
+from .deploy import (
+    DeployComponent,
+    deploy_k8s,
+    deploy_compose,
+    scale_k8s,
+)
+
+from .setup import (
+    SetupComponent,
+    auto_install,
+    check_deps,
+)
+
+from .template import (
+    TemplateComponent,
+    generate_project,
+)
+
+from .registry import (
+    RegistryComponent,
+    lookup_component,
+    list_models,
+)
+
+from .webapp import (
+    WebAppComponent,
+    create_webapp,
+)
+
+from .desktop import (
+    DesktopAppComponent,
+    create_desktop_app,
+)
+
+from .media import (
+    MediaComponent,
+    describe_video,
+    transcribe,
+    speak,
+)
+
+from .service import (
+    ServiceComponent,
+    start_service,
+    stop_service,
+    service_status,
+)
+
+from .voice import (
+    VoiceComponent,
+    listen,
+    speak,
+    voice_command,
+)
+
+from .automation import (
+    AutomationComponent,
+    click,
+    type_text,
+    automate,
+)
+
 __all__ = [
     # CurLLM
     "CurLLMComponent",
@@ -174,4 +250,68 @@ __all__ = [
     "llm_to_sql",
     "llm_to_streamware",
     "llm_analyze",
+    
+    # Video
+    "VideoComponent",
+    "video_from_rtsp",
+    "detect_objects",
+    "generate_caption",
+    
+    # Text2Streamware
+    "Text2StreamwareComponent",
+    "text_to_sq",
+    "explain_command",
+    "optimize_command",
+    
+    # Deploy
+    "DeployComponent",
+    "deploy_k8s",
+    "deploy_compose",
+    "scale_k8s",
+    
+    # Setup
+    "SetupComponent",
+    "auto_install",
+    "check_deps",
+    
+    # Template
+    "TemplateComponent",
+    "generate_project",
+    
+    # Registry
+    "RegistryComponent",
+    "lookup_component",
+    "list_models",
+    
+    # WebApp
+    "WebAppComponent",
+    "create_webapp",
+    
+    # Desktop
+    "DesktopAppComponent",
+    "create_desktop_app",
+    
+    # Media
+    "MediaComponent",
+    "describe_video",
+    "transcribe",
+    "speak",
+    
+    # Service
+    "ServiceComponent",
+    "start_service",
+    "stop_service",
+    "service_status",
+    
+    # Voice
+    "VoiceComponent",
+    "listen",
+    "speak",
+    "voice_command",
+    
+    # Automation
+    "AutomationComponent",
+    "click",
+    "type_text",
+    "automate",
 ]

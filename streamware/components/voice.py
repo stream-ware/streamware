@@ -1,0 +1,316 @@
+"""
+Voice Component for Streamware
+
+Speech-to-Text (STT) and Text-to-Speech (TTS) for voice commands.
+Control sq with voice and hear responses!
+
+# Menu:
+- [Quick Start](#quick-start)
+- [Voice Commands](#voice-commands)
+- [TTS Output](#tts-output)
+- [Examples](#examples)
+"""
+
+from __future__ import annotations
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Any, Dict, Optional
+from ..core import Component, register
+from ..uri import StreamwareURI
+from ..exceptions import ComponentError
+from ..diagnostics import get_logger
+
+logger = get_logger(__name__)
+
+
+@register("voice")
+@register("speech")
+class VoiceComponent(Component):
+    """
+    Voice input/output component
+    
+    Operations:
+    - listen: Listen for voice command (STT)
+    - speak: Speak text (TTS)
+    - command: Listen and execute sq command
+    - interactive: Interactive voice mode
+    
+    Engines:
+    - whisper: OpenAI Whisper (STT)
+    - pyttsx3: Cross-platform TTS
+    - espeak: Linux TTS
+    - say: macOS TTS
+    
+    URI Examples:
+        voice://listen
+        voice://speak?text=Hello World
+        voice://command
+        voice://interactive
+    """
+    
+    input_mime = "*/*"
+    output_mime = "application/json"
+    
+    def __init__(self, uri: StreamwareURI):
+        super().__init__(uri)
+        self.operation = uri.operation or "listen"
+        
+        self.text = uri.get_param("text")
+        self.language = uri.get_param("language", "en")
+        self.voice = uri.get_param("voice")
+        self.output_file = uri.get_param("output")
+        self.engine = uri.get_param("engine", "auto")
+        
+        # Auto-install
+        self.auto_install = uri.get_param("auto_install", True)
+    
+    def process(self, data: Any) -> Dict:
+        """Process voice operation"""
+        if self.auto_install:
+            self._ensure_dependencies()
+        
+        operations = {
+            "listen": self._listen,
+            "speak": self._speak,
+            "command": self._voice_command,
+            "interactive": self._interactive,
+        }
+        
+        operation_func = operations.get(self.operation)
+        if not operation_func:
+            raise ComponentError(f"Unknown operation: {self.operation}")
+        
+        return operation_func(data)
+    
+    def _ensure_dependencies(self):
+        """Ensure voice dependencies are installed"""
+        # Check for STT
+        try:
+            import speech_recognition
+        except ImportError:
+            logger.info("Installing speech_recognition...")
+            subprocess.run(["pip", "install", "SpeechRecognition"], check=True, capture_output=True)
+        
+        # Check for TTS
+        try:
+            import pyttsx3
+        except ImportError:
+            logger.info("Installing pyttsx3...")
+            subprocess.run(["pip", "install", "pyttsx3"], check=True, capture_output=True)
+    
+    def _listen(self, data: Any) -> Dict:
+        """Listen for voice input (STT)"""
+        try:
+            import speech_recognition as sr
+            
+            recognizer = sr.Recognizer()
+            
+            # Listen from microphone
+            with sr.Microphone() as source:
+                logger.info("Listening... Speak now!")
+                print("🎤 Listening... Speak now!")
+                
+                # Adjust for ambient noise
+                recognizer.adjust_for_ambient_noise(source, duration=1)
+                
+                # Listen
+                audio = recognizer.listen(source, timeout=10)
+            
+            logger.info("Processing speech...")
+            print("🔄 Processing...")
+            
+            # Recognize speech
+            try:
+                text = recognizer.recognize_google(audio, language=self.language)
+                logger.info(f"Recognized: {text}")
+                
+                return {
+                    "success": True,
+                    "text": text,
+                    "language": self.language
+                }
+            except sr.UnknownValueError:
+                return {
+                    "success": False,
+                    "error": "Could not understand audio"
+                }
+            except sr.RequestError as e:
+                return {
+                    "success": False,
+                    "error": f"API error: {e}"
+                }
+                
+        except ImportError:
+            raise ComponentError("speech_recognition not installed. Install: pip install SpeechRecognition PyAudio")
+    
+    def _speak(self, data: Any) -> Dict:
+        """Speak text (TTS)"""
+        text = self.text or str(data)
+        if not text:
+            raise ComponentError("Text required for TTS")
+        
+        logger.info(f"Speaking: {text}")
+        
+        # Try different TTS engines
+        success = False
+        engine_used = None
+        
+        # Try pyttsx3 (cross-platform)
+        try:
+            import pyttsx3
+            engine = pyttsx3.init()
+            
+            if self.voice:
+                voices = engine.getProperty('voices')
+                for voice in voices:
+                    if self.voice.lower() in voice.name.lower():
+                        engine.setProperty('voice', voice.id)
+                        break
+            
+            engine.say(text)
+            engine.runAndWait()
+            success = True
+            engine_used = "pyttsx3"
+        except Exception as e:
+            logger.debug(f"pyttsx3 failed: {e}")
+        
+        # Try system commands
+        if not success:
+            import platform
+            system = platform.system()
+            
+            try:
+                if system == "Darwin":  # macOS
+                    subprocess.run(["say", text], check=True)
+                    engine_used = "say"
+                    success = True
+                elif system == "Linux":
+                    subprocess.run(["espeak", text], check=True)
+                    engine_used = "espeak"
+                    success = True
+                elif system == "Windows":
+                    subprocess.run(["powershell", "-Command", f"Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('{text}')"], check=True)
+                    engine_used = "powershell"
+                    success = True
+            except (subprocess.CalledProcessError, FileNotFoundError):
+                pass
+        
+        if success:
+            return {
+                "success": True,
+                "text": text,
+                "engine": engine_used
+            }
+        else:
+            raise ComponentError("No TTS engine available. Install: pip install pyttsx3")
+    
+    def _voice_command(self, data: Any) -> Dict:
+        """Listen for voice command and execute"""
+        # Listen
+        listen_result = self._listen(data)
+        
+        if not listen_result.get("success"):
+            self._speak({"text": "Sorry, I didn't understand that"})
+            return listen_result
+        
+        command_text = listen_result.get("text", "")
+        print(f"🎯 Command: {command_text}")
+        
+        # Convert to sq command using LLM
+        try:
+            from ..core import flow
+            
+            # Generate sq command
+            result = flow(f"text2sq://convert?prompt={command_text}").run()
+            sq_command = result if isinstance(result, str) else str(result)
+            
+            print(f"💻 Generated: {sq_command}")
+            
+            # Confirm
+            self._speak({"text": f"Executing: {sq_command}"})
+            
+            # Execute
+            output = subprocess.run(
+                sq_command,
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+            
+            # Speak result
+            if output.returncode == 0:
+                self._speak({"text": "Command completed successfully"})
+                result_text = output.stdout[:200]  # First 200 chars
+                if result_text:
+                    self._speak({"text": result_text})
+            else:
+                self._speak({"text": "Command failed"})
+            
+            return {
+                "success": True,
+                "voice_input": command_text,
+                "sq_command": sq_command,
+                "output": output.stdout,
+                "returncode": output.returncode
+            }
+            
+        except Exception as e:
+            self._speak({"text": f"Error: {str(e)}"})
+            return {
+                "success": False,
+                "error": str(e)
+            }
+    
+    def _interactive(self, data: Any) -> Dict:
+        """Interactive voice mode"""
+        print("🎤 Interactive Voice Mode")
+        print("Say 'exit' or 'quit' to stop")
+        
+        self._speak({"text": "Voice mode activated. Say your command."})
+        
+        commands_executed = []
+        
+        while True:
+            # Listen
+            result = self._voice_command(data)
+            
+            if result.get("success"):
+                voice_input = result.get("voice_input", "").lower()
+                
+                # Check for exit
+                if any(word in voice_input for word in ["exit", "quit", "stop", "goodbye"]):
+                    self._speak({"text": "Goodbye!"})
+                    break
+                
+                commands_executed.append(result)
+            else:
+                # Try again
+                continue
+        
+        return {
+            "success": True,
+            "commands_executed": len(commands_executed),
+            "commands": commands_executed
+        }
+
+
+# Quick helpers
+def listen() -> str:
+    """Quick voice listen"""
+    from ..core import flow
+    result = flow("voice://listen").run()
+    return result.get("text", "")
+
+
+def speak(text: str) -> Dict:
+    """Quick text to speech"""
+    from ..core import flow
+    return flow(f"voice://speak?text={text}").run()
+
+
+def voice_command() -> Dict:
+    """Quick voice command"""
+    from ..core import flow
+    return flow("voice://command").run()
