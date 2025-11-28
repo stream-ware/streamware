@@ -1,0 +1,34 @@
+[Unit]
+Description=Streamware Email to FTP Service
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/app
+Environment="EMAIL_HOST=imap.gmail.com"
+Environment="EMAIL_USER=notifications@company.com"
+Environment="FTP_HOST=ftp.company.com"
+Environment="FTP_USER=upload"
+Environment="CHECK_INTERVAL=60"
+
+# Load secrets from file
+EnvironmentFile=-/etc/streamware/email-ftp.env
+
+ExecStart=/app/docker/services/email-to-ftp.sh
+ExecStop=/bin/kill -SIGTERM $MAINPID
+
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=append:/logs/streamware-email-ftp.log
+StandardError=append:/logs/streamware-email-ftp-error.log
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

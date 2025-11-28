@@ -46,11 +46,19 @@ class StreamwareURI:
         """Parse standard Streamware URIs"""
         parsed = urlparse(uri)
         self.scheme = parsed.scheme
-        self.host = parsed.netloc
         
-        # Path is the operation for non-HTTP URIs
-        self.path = parsed.path.lstrip('/')
-        self.operation = self.path if self.path else None
+        # For Streamware URIs, netloc is usually the operation (e.g., file://read)
+        # unless there's an actual path (e.g., file:///path/to/file)
+        if parsed.netloc and not parsed.path.strip('/'):
+            # netloc is the operation
+            self.operation = parsed.netloc
+            self.host = None
+            self.path = parsed.netloc
+        else:
+            # path contains the operation
+            self.host = parsed.netloc if parsed.netloc else None
+            self.path = parsed.path.lstrip('/')
+            self.operation = self.path if self.path else None
         
         self.params = self._parse_params(parsed.query)
         

@@ -7,7 +7,7 @@ from typing import Any, List, Callable, Optional, Iterator, Union, Dict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import re
-from .core import Flow, Component, StreamComponent, registry
+from .core import Flow, Component, StreamComponent, registry, register
 from .uri import StreamwareURI
 from .diagnostics import get_logger
 
@@ -387,7 +387,7 @@ class FilterPattern:
 
 # Component implementations for patterns
 
-@registry.register("split")
+@register("split")
 class SplitComponent(StreamComponent):
     """Component for splitting data"""
     
@@ -410,7 +410,7 @@ class SplitComponent(StreamComponent):
                 yield part
 
 
-@registry.register("join")
+@register("join")
 class JoinComponent(Component):
     """Component for joining split data"""
     
@@ -426,7 +426,7 @@ class JoinComponent(Component):
         return data
 
 
-@registry.register("multicast")
+@register("multicast")
 class MulticastComponent(Component):
     """Component for multicasting to multiple destinations"""
     
@@ -442,7 +442,7 @@ class MulticastComponent(Component):
         return multicaster.multicast(data)
 
 
-@registry.register("choose")
+@register("choose")
 class ChooseComponent(Component):
     """Component for conditional routing"""
     
@@ -470,7 +470,7 @@ class ChooseComponent(Component):
         return choice.route(data)
 
 
-@registry.register("aggregate")
+@register("aggregate")
 class AggregateComponent(StreamComponent):
     """Component for aggregating data"""
     
@@ -496,7 +496,7 @@ class AggregateComponent(StreamComponent):
                 yield final
 
 
-@registry.register("filter")
+@register("filter")
 class FilterComponent(StreamComponent):
     """Component for filtering data"""
     

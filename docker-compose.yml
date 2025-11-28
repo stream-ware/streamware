@@ -1,0 +1,157 @@
+version: '3.8'
+
+services:
+  # Streamware main service
+  streamware:
+    build: .
+    container_name: streamware
+    volumes:
+      - .:/app
+      - ./data:/data
+      - ./logs:/logs
+    environment:
+      - PYTHONPATH=/app
+      - STREAMWARE_LOG_LEVEL=DEBUG
+      # Kafka
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      # PostgreSQL
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=streamware
+      - POSTGRES_PASSWORD=streamware
+      - POSTGRES_DB=streamware
+      # Redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      - kafka
+      - postgres
+      - redis
+      - mock-api
+      - rtsp-server
+    networks:
+      - streamware-network
+    command: bash
+
+  # Mock API for testing
+  mock-api:
+    image: mockoon/cli:latest
+    container_name: streamware-mock-api
+    volumes:
+      - ./docker/mockoon-data.json:/data/mockoon-data.json
+    ports:
+      - "8080:8080"
+    command: ["--data", "/data/mockoon-data.json", "--port", "8080"]
+    networks:
+      - streamware-network
+
+  # RTSP Mock Server for video streaming
+  rtsp-server:
+    image: ullaakut/rtspatt:latest
+    container_name: streamware-rtsp
+    ports:
+      - "8554:8554"
+      - "1935:1935"
+    volumes:
+      - ./docker/videos:/videos
+    environment:
+      - RTSP_PORT=8554
+    networks:
+      - streamware-network
+    command: >
+      sh -c "echo 'RTSP server ready on rtsp://rtsp-server:8554/stream' && 
+             sleep infinity"
+
+  # Kafka for message streaming
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: streamware-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - streamware-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: streamware-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    networks:
+      - streamware-network
+
+  # PostgreSQL for database operations
+  postgres:
+    image: postgres:15-alpine
+    container_name: streamware-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: streamware
+      POSTGRES_PASSWORD: streamware
+      POSTGRES_DB: streamware
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - streamware-network
+
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: streamware-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - streamware-network
+
+  # RabbitMQ for message queue
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: streamware-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: streamware
+      RABBITMQ_DEFAULT_PASS: streamware
+    networks:
+      - streamware-network
+
+  # Jupyter for interactive testing
+  jupyter:
+    build: .
+    container_name: streamware-jupyter
+    ports:
+      - "8888:8888"
+    volumes:
+      - .:/app
+      - ./notebooks:/notebooks
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+    command: >
+      jupyter lab 
+      --ip=0.0.0.0 
+      --port=8888 
+      --no-browser 
+      --allow-root
+      --NotebookApp.token=''
+      --NotebookApp.password=''
+    networks:
+      - streamware-network
+
+networks:
+  streamware-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  kafka-data:

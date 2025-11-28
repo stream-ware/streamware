@@ -80,6 +80,22 @@ from .sms import (
     SMSWebhookComponent,
 )
 
+from .ssh import (
+    SSHComponent,
+    ssh_upload,
+    ssh_download,
+    ssh_exec,
+    ssh_deploy,
+)
+
+from .llm import (
+    LLMComponent,
+    llm_generate,
+    llm_to_sql,
+    llm_to_streamware,
+    llm_analyze,
+)
+
 __all__ = [
     # CurLLM
     "CurLLMComponent",
@@ -144,4 +160,18 @@ __all__ = [
     # SMS
     "SMSComponent",
     "SMSWebhookComponent",
+    
+    # SSH
+    "SSHComponent",
+    "ssh_upload",
+    "ssh_download",
+    "ssh_exec",
+    "ssh_deploy",
+    
+    # LLM
+    "LLMComponent",
+    "llm_generate",
+    "llm_to_sql",
+    "llm_to_streamware",
+    "llm_analyze",
 ]

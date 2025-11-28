@@ -40,6 +40,17 @@ from .exceptions import (
     RoutingError,
 )
 
+# Simplified DSL imports
+from .dsl import (
+    Pipeline,
+    pipeline,
+    PipelineBuilder,
+    quick,
+    compose,
+    as_component,
+    pipeline_step,
+)
+
 # Convenience imports
 from .components import *
 
@@ -59,6 +70,15 @@ __all__ = [
     "choose",
     "aggregate",
     "filter_stream",
+    
+    # Simplified DSL
+    "Pipeline",
+    "pipeline",
+    "PipelineBuilder",
+    "quick",
+    "compose",
+    "as_component",
+    "pipeline_step",
     
     # Diagnostics
     "enable_diagnostics",

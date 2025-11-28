@@ -1,0 +1,155 @@
+version: '3.8'
+
+# Extended Docker Compose with FTP, SSH, and Service Examples
+# Based on main docker-compose.yml with additional services
+
+services:
+  # Extend existing services from main docker-compose.yml
+  
+  # FTP Server for file transfers
+  ftp-server:
+    image: fauria/vsftpd
+    container_name: streamware-ftp
+    ports:
+      - "20:20"
+      - "21:21"
+      - "21100-21110:21100-21110"
+    environment:
+      - FTP_USER=streamware
+      - FTP_PASS=streamware123
+      - PASV_ADDRESS=127.0.0.1
+      - PASV_MIN_PORT=21100
+      - PASV_MAX_PORT=21110
+    volumes:
+      - ftp-data:/home/vsftpd
+      - ./data:/home/vsftpd/streamware
+    networks:
+      - streamware-network
+
+  # SSH Server for secure file transfers
+  ssh-server:
+    image: lscr.io/linuxserver/openssh-server:latest
+    container_name: streamware-ssh
+    hostname: ssh-server
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Warsaw
+      - PUBLIC_KEY_FILE=/config/authorized_keys
+      - USER_NAME=streamware
+      - PASSWORD_ACCESS=true
+      - USER_PASSWORD=streamware123
+    volumes:
+      - ssh-config:/config
+      - ./data:/data
+    ports:
+      - "2222:2222"
+    networks:
+      - streamware-network
+
+  # Email-to-FTP Service
+  email-ftp-service:
+    build: .
+    container_name: streamware-email-ftp
+    volumes:
+      - ./docker/services:/app/services
+      - ./logs:/logs
+      - ./data:/data
+    environment:
+      - EMAIL_HOST=imap.gmail.com
+      - EMAIL_USER=${EMAIL_USER}
+      - EMAIL_PASSWORD=${EMAIL_PASSWORD}
+      - FTP_HOST=ftp-server
+      - FTP_USER=streamware
+      - FTP_PASSWORD=streamware123
+      - CHECK_INTERVAL=60
+    command: bash /app/services/email-to-ftp.sh
+    depends_on:
+      - ftp-server
+    networks:
+      - streamware-network
+    restart: unless-stopped
+
+  # Email-to-SSH Service
+  email-ssh-service:
+    build: .
+    container_name: streamware-email-ssh
+    volumes:
+      - ./docker/services:/app/services
+      - ./logs:/logs
+      - ./data:/data
+      - ssh-keys:/root/.ssh
+    environment:
+      - EMAIL_HOST=imap.gmail.com
+      - EMAIL_USER=${EMAIL_USER}
+      - EMAIL_PASSWORD=${EMAIL_PASSWORD}
+      - SSH_HOST=ssh-server
+      - SSH_USER=streamware
+      - SSH_PORT=2222
+      - REMOTE_PATH=/data/uploads
+    command: bash /app/services/email-to-ssh.sh
+    depends_on:
+      - ssh-server
+    networks:
+      - streamware-network
+    restart: unless-stopped
+
+  # Kafka-to-PostgreSQL Service
+  kafka-postgres-service:
+    build: .
+    container_name: streamware-kafka-postgres
+    volumes:
+      - ./docker/services:/app/services
+      - ./logs:/logs
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_TOPIC=events
+      - KAFKA_GROUP=db-writer
+      - POSTGRES_HOST=postgres
+      - POSTGRES_DB=streamware
+      - POSTGRES_USER=streamware
+      - POSTGRES_PASSWORD=streamware
+      - POSTGRES_TABLE=events
+    command: bash /app/services/kafka-to-postgres.sh
+    depends_on:
+      - kafka
+      - postgres
+    networks:
+      - streamware-network
+    restart: unless-stopped
+
+  # S3-compatible storage (MinIO)
+  minio:
+    image: minio/minio:latest
+    container_name: streamware-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=streamware
+      - MINIO_ROOT_PASSWORD=streamware123
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - streamware-network
+
+  # SMTP Server for email sending
+  mailhog:
+    image: mailhog/mailhog:latest
+    container_name: streamware-mailhog
+    ports:
+      - "1025:1025"  # SMTP
+      - "8025:8025"  # Web UI
+    networks:
+      - streamware-network
+
+networks:
+  streamware-network:
+    driver: bridge
+
+volumes:
+  ftp-data:
+  ssh-config:
+  ssh-keys:
+  minio-data:

@@ -2,6 +2,7 @@
 Kafka Component for Streamware
 """
 
+from __future__ import annotations
 import json
 from typing import Any, Optional, Iterator, Dict
 from ..core import Component, StreamComponent, register

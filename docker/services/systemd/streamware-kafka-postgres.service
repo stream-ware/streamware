@@ -1,0 +1,26 @@
+[Unit]
+Description=Streamware Kafka to PostgreSQL Pipeline
+After=network.target kafka.service postgres.service
+Requires=kafka.service postgres.service
+
+[Service]
+Type=simple
+User=streamware
+WorkingDirectory=/app
+Environment="KAFKA_TOPIC=events"
+Environment="KAFKA_GROUP=db-writer"
+Environment="POSTGRES_TABLE=events"
+
+EnvironmentFile=-/etc/streamware/kafka-postgres.env
+
+ExecStart=/app/docker/services/kafka-to-postgres.sh
+ExecStop=/bin/kill -SIGTERM $MAINPID
+
+Restart=always
+RestartSec=10
+
+StandardOutput=append:/logs/streamware-kafka-postgres.log
+StandardError=append:/logs/streamware-kafka-postgres-error.log
+
+[Install]
+WantedBy=multi-user.target

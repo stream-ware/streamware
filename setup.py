@@ -67,6 +67,7 @@ setup(
         "console_scripts": [
             "streamware=streamware.cli:main",
             "stream-handler=streamware.handler:main",
+            "sq=streamware.quick_cli:main",
         ],
     },
     classifiers=[

@@ -70,6 +70,7 @@ Repository = "https://github.com/softreck/streamware"
 [project.scripts]
 streamware = "streamware.cli:main"
 stream-handler = "streamware.handler:main"
+sq = "streamware.quick_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

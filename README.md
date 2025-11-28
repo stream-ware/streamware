@@ -23,12 +23,12 @@ Streamware is a lightweight, Pythonic stream processing framework that brings th
 
 ## 📦 Installation
 
-### Basic installation
+### Option 1: pip install (Basic)
 ```bash
 pip install streamware
 ```
 
-### With specific components
+### Option 2: pip install (Full)
 ```bash
 # For CurLLM integration (web automation with LLM)
 pip install streamware[curllm]
@@ -45,6 +45,23 @@ pip install streamware[multimedia]
 # Everything
 pip install streamware[all]
 ```
+
+### Option 3: Docker (Recommended for Testing) 🐳
+
+```bash
+# Clone and start
+git clone https://github.com/softreck/streamware.git
+cd streamware
+docker-compose up -d
+
+# Enter container
+docker-compose exec streamware bash
+
+# Start using!
+sq get mock-api:8080/users --json
+```
+
+See [DOCKER_QUICKSTART.md](DOCKER_QUICKSTART.md) for complete Docker guide.
 
 ## 🚀 Quick Start
 
