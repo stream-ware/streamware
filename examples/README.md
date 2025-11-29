@@ -2,76 +2,90 @@
 
 This directory contains example scripts demonstrating various features and usage patterns of the Streamware framework.
 
-## Available Examples
+## 📁 Project Examples
 
-### 1. Basic Usage (`basic_usage.py`)
+| Project | Description | Examples |
+|---------|-------------|----------|
+| [llm-ai/](llm-ai/) | AI text processing, code generation | `text_to_sql.py`, `chat_assistant.py`, `multi_provider.py` |
+| [voice-control/](voice-control/) | Voice commands, STT/TTS | `voice_keyboard.py`, `voice_mouse.py` |
+| [automation/](automation/) | Desktop automation | `mouse_control.py`, `keyboard_control.py` |
+| [communication/](communication/) | Email, Slack, Telegram | `slack_bot.py`, `telegram_bot.py` |
+| [data-pipelines/](data-pipelines/) | ETL, data transformation | `api_to_database.py`, `csv_processor.py` |
+| [deployment/](deployment/) | Docker, K8s, SSH deploy | `docker_deploy.py`, `ssh_deploy.sh` |
+| [media-processing/](media-processing/) | Image/video/audio AI | `video_captioning.py`, `video_modes_demo.py` |
 
-Fundamental concepts and basic usage patterns:
+## 🚀 Quick Start
 
-- **Example 1**: Simple data flow
-- **Example 2**: File operations (read/write)
-- **Example 3**: Data transformations (JSON, CSV, Base64)
-- **Example 4**: Pipeline chaining
-- **Example 5**: Custom components
-- **Example 6**: Using `with_data()` method
-- **Example 7**: Error handling
-- **Example 8**: Conditional logic
-
-**Run it:**
 ```bash
-python examples/basic_usage.py
+# LLM/AI
+python examples/llm-ai/text_to_sql.py "Get all users"
+python examples/llm-ai/chat_assistant.py --provider ollama/qwen2.5:14b
+
+# Voice Control
+python examples/voice-control/voice_keyboard.py --interactive
+python examples/voice-control/voice_mouse.py "click on button OK"
+
+# Automation
+python examples/automation/mouse_control.py 100 200
+
+# Communication
+python examples/communication/slack_bot.py general "Hello!"
+
+# Data Pipelines
+python examples/data-pipelines/api_to_database.py
+
+# Media - Video Analysis (3 modes!)
+python examples/media-processing/video_captioning.py video.mp4              # full mode
+python examples/media-processing/video_captioning.py video.mp4 --mode stream # frame-by-frame
+python examples/media-processing/video_captioning.py video.mp4 --mode diff   # changes
+python examples/media-processing/video_modes_demo.py video.mp4               # compare all
 ```
 
-### 2. Advanced Patterns (`advanced_patterns.py`)
+## 🎬 Video Analysis Modes
 
-Advanced workflow patterns and real-world scenarios:
+| Mode | Description | CLI Command |
+|------|-------------|-------------|
+| `full` | Coherent narrative | `sq media describe_video --file v.mp4 --mode full` |
+| `stream` | Frame-by-frame details | `sq media describe_video --file v.mp4 --mode stream` |
+| `diff` | Track changes | `sq media describe_video --file v.mp4 --mode diff` |
 
-- **Example 1**: Split/Join pattern
-- **Example 2**: Filter pattern
-- **Example 3**: Aggregation
-- **Example 4**: Parallel processing
-- **Example 5**: Error recovery
-- **Example 6**: Data enrichment
-- **Example 7**: Conditional routing
-- **Example 8**: Streaming simulation
-- **Example 9**: Batch processing
-- **Example 10**: Pipeline composition
+> 📚 Full documentation: [media-processing/README.md](media-processing/README.md)
 
-**Run it:**
-```bash
-python examples/advanced_patterns.py
-```
+## 📚 Related Documentation
 
-### 3. Communication Examples (`examples_communication.py`)
+| Document | Description |
+|----------|-------------|
+| [Quick Start](../docs/v2/guides/QUICK_START.md) | Get started in 5 minutes |
+| [Quick CLI](../docs/v2/components/QUICK_CLI.md) | `sq` command reference |
+| [LLM Component](../docs/v2/components/LLM_COMPONENT.md) | AI providers configuration |
+| [Voice Guide](../docs/v2/guides/VOICE_AUTOMATION_GUIDE.md) | Voice control setup |
+| [DSL Examples](../docs/v2/components/DSL_EXAMPLES.md) | Pipeline syntax |
 
-Communication component examples (in root directory):
+## 📦 Legacy Examples
 
-- Email integration (send, receive, watch)
-- Telegram bots and messaging
-- WhatsApp integration
-- Discord bots and webhooks
-- Slack integration
-- SMS messaging
+| File | Description |
+|------|-------------|
+| [basic_usage.py](basic_usage.py) | Fundamental concepts |
+| [advanced_patterns.py](advanced_patterns.py) | Workflow patterns |
+| [llm_examples.py](llm_examples.py) | LLM demonstrations |
+| [ssh_examples.py](ssh_examples.py) | SSH operations |
+| [deploy_examples.py](deploy_examples.py) | Deployment patterns |
+| [dsl_examples.py](dsl_examples.py) | DSL syntax |
+| [text2streamware_examples.py](text2streamware_examples.py) | Natural language to commands |
 
-**Run it:**
-```bash
-python examples_communication.py
-```
+## 🔗 Source Code References
 
-### 4. Advanced Communication (`examples_advanced_communication.py`)
-
-Production-ready communication patterns (in root directory):
-
-- Multi-channel notifications
-- Customer support systems
-- Marketing automation
-- Incident response
-- Monitoring and alerting
-
-**Run it:**
-```bash
-python examples_advanced_communication.py
-```
+| Component | Path |
+|-----------|------|
+| LLM | [streamware/components/llm.py](../streamware/components/llm.py) |
+| Voice | [streamware/components/voice.py](../streamware/components/voice.py) |
+| Voice Keyboard | [streamware/components/voice_keyboard.py](../streamware/components/voice_keyboard.py) |
+| Voice Mouse | [streamware/components/voice_mouse.py](../streamware/components/voice_mouse.py) |
+| Automation | [streamware/components/automation.py](../streamware/components/automation.py) |
+| Media | [streamware/components/media.py](../streamware/components/media.py) |
+| Email | [streamware/components/email.py](../streamware/components/email.py) |
+| Slack | [streamware/components/slack.py](../streamware/components/slack.py) |
+| Telegram | [streamware/components/telegram.py](../streamware/components/telegram.py)
 
 ## Quick Start
 
