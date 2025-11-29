@@ -2,11 +2,21 @@
 
 ## 🎬 Overview
 
-Streamware now includes powerful AI-powered multimedia analysis:
-- **Video**: Description and captioning with LLaVA
+Streamware includes powerful AI-powered multimedia analysis:
+- **Video**: Description with 3 analysis modes (full/stream/diff)
 - **Audio**: Transcription (STT) and generation (TTS)
 - **Image**: AI-powered descriptions
 - **Music**: Analysis and mood detection
+
+## 📂 Related Resources
+
+| Resource | Description |
+|----------|-------------|
+| [Examples: Media Processing](../../examples/media-processing/) | Working code examples |
+| [video_captioning.py](../../examples/media-processing/video_captioning.py) | Video analysis demo |
+| [video_modes_demo.py](../../examples/media-processing/video_modes_demo.py) | Compare all modes |
+| [Quick CLI Reference](../components/QUICK_CLI.md) | All `sq` commands |
+| [Source: media.py](../../streamware/components/media.py) | Implementation |
 
 ## 🚀 Quick Start
 
@@ -44,21 +54,72 @@ sq media caption --file media_file.mp4
 
 ## 📹 Video Analysis
 
-### Video Description
+Streamware offers **3 different modes** for video analysis. See [examples/media-processing/](../../examples/media-processing/) for working code.
+
+### Video Analysis Modes
+
+| Mode | Description | Best For |
+|------|-------------|----------|
+| `full` | Coherent narrative (default) | Summaries, SEO, accessibility |
+| `stream` | Frame-by-frame details | Documentation, training data |
+| `diff` | Track changes between frames | Surveillance, activity tracking |
+
+### Mode: `full` (default)
+
+Creates a coherent narrative tracking subjects through the video.
 
 ```bash
-# Get AI description of video
-sq media describe_video --file lecture.mp4
+sq media describe_video --file video.mp4 --mode full
 
 # Output:
 {
-  "success": true,
-  "file": "lecture.mp4",
-  "model": "llava",
-  "description": "A professor teaching in a classroom, pointing at a whiteboard with equations...",
-  "num_frames": 5
+  "mode": "full",
+  "description": "The video shows a presenter explaining...",
+  "num_frames": 8,
+  "scenes": 8,
+  "duration": "2:34"
 }
 ```
+
+### Mode: `stream`
+
+Detailed frame-by-frame analysis with subjects, objects, actions.
+
+```bash
+sq media describe_video --file video.mp4 --mode stream
+
+# Output:
+{
+  "mode": "stream",
+  "frames": [
+    {"frame": 1, "timestamp": "0:00", "description": "SUBJECTS: Person... OBJECTS: ..."},
+    {"frame": 2, "timestamp": "0:15", "description": "SUBJECTS: ..."}
+  ]
+}
+```
+
+### Mode: `diff`
+
+Tracks changes between frames - what appeared, moved, or disappeared.
+
+```bash
+sq media describe_video --file video.mp4 --mode diff
+
+# Output:
+{
+  "mode": "diff",
+  "timeline": [
+    {"frame": 1, "type": "start", "description": "Empty room..."},
+    {"frame": 2, "type": "change", "changes": "NEW: Person entered..."}
+  ],
+  "summary": "Person enters room, sits at desk...",
+  "significant_changes": 5
+}
+```
+
+> 📚 **Full documentation**: [examples/media-processing/README.md](../../examples/media-processing/README.md)
+
+### Video Description (Legacy)
 
 ### Video Surveillance
 

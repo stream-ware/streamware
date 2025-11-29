@@ -3,26 +3,62 @@
 ## Quick Navigation
 
 ### 📚 Guides
-- [Quick Start](guides/QUICK_START.md) - Get started in 5 minutes
-- [Quick Reference](guides/QUICK_REFERENCE.md) - Command cheatsheet
-- [Docker Quickstart](guides/DOCKER_QUICKSTART.md) - Container deployment
-- [App Creation Guide](guides/APP_CREATION_GUIDE.md) - Build apps with sq
-- [Voice Mouse Guide](guides/VOICE_MOUSE_GUIDE.md) - Voice-controlled mouse
-- [Voice Automation Guide](guides/VOICE_AUTOMATION_GUIDE.md) - Voice commands
-- [VSCode Bot Guide](guides/VSCODE_BOT_GUIDE.md) - AI pair programmer
-- [Media Guide](guides/MEDIA_GUIDE.md) - Image/video processing
-- [Test Guide](guides/TEST_GUIDE.md) - Testing workflows
+| Guide | Description |
+|-------|-------------|
+| [Quick Start](guides/QUICK_START.md) | Get started in 5 minutes |
+| [Quick Reference](guides/QUICK_REFERENCE.md) | Command cheatsheet |
+| [Docker Quickstart](guides/DOCKER_QUICKSTART.md) | Container deployment |
+| [App Creation Guide](guides/APP_CREATION_GUIDE.md) | Build apps with sq |
+| [Voice Mouse Guide](guides/VOICE_MOUSE_GUIDE.md) | Voice-controlled mouse |
+| [Voice Automation Guide](guides/VOICE_AUTOMATION_GUIDE.md) | Voice commands |
+| [VSCode Bot Guide](guides/VSCODE_BOT_GUIDE.md) | AI pair programmer |
+| [Media Guide](guides/MEDIA_GUIDE.md) | Image/video processing |
+| [Test Guide](guides/TEST_GUIDE.md) | Testing workflows |
 
 ### 🔧 Components
-- [CLI Usage](components/CLI_USAGE.md) - Full CLI reference
-- [Quick CLI](components/QUICK_CLI.md) - `sq` command reference
-- [LLM Component](components/LLM_COMPONENT.md) - AI text generation
-- [SSH Component](components/SSH_COMPONENT.md) - Remote operations
-- [Deploy Component](components/DEPLOY_COMPONENT.md) - Deployments
-- [Communication](components/COMMUNICATION.md) - Email, Slack, Telegram
-- [DSL Examples](components/DSL_EXAMPLES.md) - Pipeline examples
-- [Usage Guide](components/USAGE_GUIDE.md) - Complete usage
-- [Testing](components/TESTING.md) - Test framework
+| Component | Description |
+|-----------|-------------|
+| [CLI Usage](components/CLI_USAGE.md) | Full CLI reference |
+| [Quick CLI](components/QUICK_CLI.md) | `sq` command reference |
+| [LLM Component](components/LLM_COMPONENT.md) | AI text generation |
+| [SSH Component](components/SSH_COMPONENT.md) | Remote operations |
+| [Deploy Component](components/DEPLOY_COMPONENT.md) | Deployments |
+| [Communication](components/COMMUNICATION.md) | Email, Slack, Telegram |
+| [DSL Examples](components/DSL_EXAMPLES.md) | Pipeline examples |
+| [Usage Guide](components/USAGE_GUIDE.md) | Complete usage |
+| [Testing](components/TESTING.md) | Test framework |
+
+### 📂 Examples
+| Project | Description | Link |
+|---------|-------------|------|
+| LLM/AI | Text to SQL, Chat, Multi-provider | [examples/llm-ai/](../../examples/llm-ai/) |
+| Voice Control | Voice keyboard, mouse | [examples/voice-control/](../../examples/voice-control/) |
+| Automation | Desktop automation | [examples/automation/](../../examples/automation/) |
+| Communication | Slack, Telegram, Email | [examples/communication/](../../examples/communication/) |
+| Data Pipelines | ETL, transforms | [examples/data-pipelines/](../../examples/data-pipelines/) |
+| Deployment | Docker, K8s, SSH | [examples/deployment/](../../examples/deployment/) |
+| Media | Image/video AI (3 modes) | [examples/media-processing/](../../examples/media-processing/) |
+
+### 🎬 Video Analysis Modes
+
+| Mode | Command | Description |
+|------|---------|-------------|
+| `full` | `sq media describe_video --file v.mp4 --mode full` | Coherent narrative |
+| `stream` | `sq media describe_video --file v.mp4 --mode stream` | Frame-by-frame |
+| `diff` | `sq media describe_video --file v.mp4 --mode diff` | Track changes |
+
+> 📚 Full documentation: [examples/media-processing/README.md](../../examples/media-processing/README.md) | [Media Guide](guides/MEDIA_GUIDE.md)
+
+### 🔗 Source Code
+| Component | Path |
+|-----------|------|
+| LLM | [streamware/components/llm.py](../../streamware/components/llm.py) |
+| Voice | [streamware/components/voice.py](../../streamware/components/voice.py) |
+| Voice Keyboard | [streamware/components/voice_keyboard.py](../../streamware/components/voice_keyboard.py) |
+| Voice Mouse | [streamware/components/voice_mouse.py](../../streamware/components/voice_mouse.py) |
+| Automation | [streamware/components/automation.py](../../streamware/components/automation.py) |
+| Media | [streamware/components/media.py](../../streamware/components/media.py) |
+| Transform | [streamware/components/transform.py](../../streamware/components/transform.py) |
 
 ## LLM Provider Configuration
 
