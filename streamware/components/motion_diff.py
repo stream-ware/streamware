@@ -98,7 +98,7 @@ class MotionDiffComponent(Component):
         # Analysis settings
         self.interval = int(uri.get_param("interval", "5"))
         self.duration = int(uri.get_param("duration", "30"))
-        self.model = uri.get_param("model", "llava:13b")
+        self.model = uri.get_param("model", "llava:7b")
         self.focus = uri.get_param("focus", "person")
         
         # Save frames for report

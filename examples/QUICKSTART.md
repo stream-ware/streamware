@@ -1,0 +1,329 @@
+# Streamware Quick Start Guide
+
+One-liner examples for the most common tasks.
+
+## 🚀 Installation
+
+```bash
+pip install streamware
+ollama pull llava:13b  # For vision AI
+```
+
+## 📷 Network & Cameras
+
+### Find Cameras
+```bash
+# CLI
+sq network find "cameras" --yaml
+
+# Python
+from streamware.helpers import find_cameras
+cameras = find_cameras()
+for cam in cameras:
+    print(f"{cam['ip']}: {cam.get('connection', {}).get('rtsp', ['N/A'])[0]}")
+```
+
+### Scan Network
+```bash
+# CLI
+sq network scan --yaml
+
+# Python
+from streamware.helpers import scan_network
+result = scan_network()
+print(f"Found {result['total_devices']} devices")
+```
+
+## 🎥 Stream Analysis
+
+### Watch Camera for Activity
+```bash
+# CLI - detect people with low sensitivity (fewer false alarms)
+sq stream rtsp --url "rtsp://admin:pass@192.168.1.100:554/stream" \
+    --focus person --sensitivity low --duration 60
+
+# Python
+from streamware.helpers import watch_camera
+result = watch_camera("rtsp://admin:pass@camera/live", focus="person", duration=60)
+if result['significant_changes'] > 0:
+    print("Activity detected!")
+```
+
+### Generate HTML Report with Images
+```bash
+sq stream rtsp --url "rtsp://camera/live" \
+    --focus person --duration 60 \
+    --file security_report.html
+```
+
+### Quick Security Check
+```python
+from streamware.helpers import security_check, send_alert
+
+result = security_check("rtsp://camera/live", duration=30)
+if result['activity']:
+    send_alert("Motion detected!", slack=True)
+```
+
+## 👥 People Tracking
+
+### Count People
+```bash
+# CLI
+sq tracking count --url "rtsp://camera/live" --objects person --duration 300
+
+# Python
+from streamware.helpers import count_people
+result = count_people("rtsp://camera/live", duration=300)
+stats = result['statistics']['person']
+print(f"Average: {stats['avg']:.1f}, Max: {stats['max']}")
+```
+
+### Track Person Movement
+```python
+from streamware.helpers import track_person
+result = track_person("rtsp://camera/live", name="Visitor", duration=120)
+print(f"Trajectory: {len(result['trajectory'])} points")
+```
+
+### Monitor Zone Entry/Exit
+```python
+from streamware.helpers import monitor_zone
+result = monitor_zone("rtsp://camera/live", "entrance", 0, 0, 200, 300, duration=600)
+for event in result['events']:
+    print(f"{event['type']}: {event['object_type']} at {event['timestamp']}")
+```
+
+## 🔍 Motion Detection (Smart)
+
+### Sensitive Detection (recommended)
+```bash
+# Low threshold (5-10) for better sensitivity
+sq motion --url "rtsp://camera/live" \
+    --threshold 5 \
+    --min-region 50 \
+    --duration 30 \
+    --file motion_report.html
+
+# Two-stage detection: pixel diff first, then AI on changed regions
+sq smart watch --url "rtsp://camera/live" --min-interval 2 --duration 60 --no-ai
+```
+
+### Key Parameters
+| Parameter | Default | Recommended | Description |
+|-----------|---------|-------------|-------------|
+| `--threshold` | 25 | **5-10** | Pixel diff threshold (lower = more sensitive) |
+| `--min-region` | 100 | **50** | Minimum changed region size in pixels |
+| `--interval` | 5 | **3-5** | Seconds between checks |
+
+## 🎙️ Live Narrator (TTS)
+
+### Three Modes
+| Mode | Description | Best For |
+|------|-------------|----------|
+| `full` | Describe entire scene | General monitoring |
+| `diff` | Only describe changes | Surveillance |
+| `track` | Track specific object | Person tracking |
+
+### Describe What's Happening
+```bash
+# Single description
+sq live describe --url "rtsp://camera/live"
+
+# FULL mode - describe everything
+sq live narrator --url "rtsp://camera/live" --mode full --tts
+
+# DIFF mode - describe only changes (recommended)
+sq live narrator --url "rtsp://camera/live" --mode diff --tts --duration 60
+
+# TRACK mode - track person movement
+sq live narrator --url "rtsp://camera/live" \
+    --mode track --focus person --tts --duration 120
+
+# Watch for specific triggers
+sq live watch --url "rtsp://camera/live" \
+    --trigger "person appears,door opens" \
+    --tts --duration 300
+```
+
+### Python API
+```python
+from streamware.components import describe_now, watch_for
+
+# Get description of current frame
+description = describe_now("rtsp://camera/live", tts=True)
+print(description)
+
+# Watch for triggers
+result = watch_for(
+    "rtsp://camera/live",
+    conditions=["person appears", "package delivered"],
+    duration=600,
+    tts=True
+)
+for alert in result.get("alerts", []):
+    print(f"Alert: {alert['description']}")
+```
+
+## 🎯 Qualitative Watch (Simple)
+
+### Intuitive Parameters
+```bash
+# Instead of --threshold 10 --min-region 50, use:
+sq watch --url "rtsp://camera/live" \
+    --detect person \
+    --sensitivity high \
+    --speed fast \
+    --alert speak
+
+# More examples:
+sq watch --url "$URL" --detect vehicle --sensitivity medium
+sq watch --url "$URL" --detect motion --sensitivity ultra --speed realtime
+sq watch --url "$URL" --detect package --alert slack
+```
+
+### Sensitivity Levels
+| Level | Threshold | Use Case |
+|-------|-----------|----------|
+| `ultra` | 3 | Detect tiny changes (noisy) |
+| `high` | 8 | Security monitoring |
+| `medium` | 15 | General use (default) |
+| `low` | 25 | Stable scenes |
+| `minimal` | 40 | Major changes only |
+
+## 🔔 Alerts
+
+### Send Alert
+```python
+from streamware.helpers import send_alert
+
+# Slack (requires SQ_SLACK_WEBHOOK in .env)
+send_alert("Motion detected!", slack=True)
+
+# Telegram (requires SQ_TELEGRAM_BOT_TOKEN and SQ_TELEGRAM_CHAT_ID)
+send_alert("Motion detected!", telegram=True)
+
+# Custom webhook
+send_alert("Motion detected!", webhook="https://your-webhook.com/alert")
+```
+
+## 📊 Full Monitoring Pipeline
+
+```python
+from streamware.helpers import (
+    find_cameras, security_check, send_alert, 
+    generate_report, log_event
+)
+
+# 1. Find all cameras
+cameras = find_cameras()
+print(f"Found {len(cameras)} cameras")
+
+# 2. Check each camera
+for cam in cameras:
+    ip = cam['ip']
+    url = cam.get('connection', {}).get('rtsp', [])[0]
+    
+    if not url:
+        continue
+    
+    print(f"Checking {ip}...")
+    result = security_check(url, duration=30)
+    
+    if result['activity']:
+        print(f"🔴 Activity on {ip}!")
+        
+        # Log event
+        log_event("motion_detected", {"camera": ip, "changes": result['changes']})
+        
+        # Send alert
+        send_alert(f"Motion on camera {ip}: {result['changes']} changes", slack=True)
+        
+        # Generate report
+        generate_report(result, f"alert_{ip}.html")
+```
+
+## ⚙️ Configuration
+
+### Setup .env
+```bash
+# Create .env file
+sq config --init
+
+# Or use web panel
+sq config --web
+```
+
+### Key Settings (.env)
+```bash
+# AI Model (llava:13b recommended)
+SQ_MODEL=llava:13b
+
+# Default focus for detection
+SQ_STREAM_FOCUS=person
+
+# Detection sensitivity (low = fewer false alarms)
+SQ_STREAM_SENSITIVITY=low
+
+# Slack webhook for alerts
+SQ_SLACK_WEBHOOK=https://hooks.slack.com/services/xxx
+
+# Telegram for alerts
+SQ_TELEGRAM_BOT_TOKEN=xxx
+SQ_TELEGRAM_CHAT_ID=xxx
+```
+
+### Change Settings
+```bash
+sq config --set SQ_MODEL llava:13b --save
+sq config --set SQ_STREAM_FOCUS person --save
+sq config --show
+```
+
+## 📁 Output Formats
+
+```bash
+# YAML (default)
+sq network scan --yaml
+
+# JSON
+sq network scan --json
+
+# ASCII Table
+sq network scan --table
+
+# HTML Report with images
+sq stream rtsp --url "..." --file report.html
+```
+
+## 🔗 CLI Reference
+
+```bash
+# Network
+sq network scan                     # Scan network
+sq network find "cameras"           # Find cameras
+sq network find "printers"          # Find printers
+sq network identify --ip 192.168.1.1  # Identify device
+
+# Stream Analysis
+sq stream rtsp --url URL --mode diff --focus person
+sq stream screen --mode diff        # Screen capture
+sq stream webcam --mode stream      # Webcam
+
+# Tracking
+sq tracking detect --url URL --objects person,vehicle
+sq tracking count --url URL --objects person
+sq tracking zones --url URL --zones "entrance:0,0,100,200"
+
+# Configuration
+sq config --show                    # Show config
+sq config --web                     # Web panel
+sq config --set KEY VALUE --save    # Set value
+```
+
+## 📚 More Examples
+
+- `examples/network/smart_camera_monitor.py` - Auto-discover and monitor
+- `examples/network/security_pipeline.py` - Full security system
+- `examples/media-processing/object_tracking.py` - Object tracking demos
+- `examples/media-processing/stream_analysis.py` - Stream analysis examples

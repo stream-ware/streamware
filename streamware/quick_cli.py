@@ -364,18 +364,47 @@ Shortcuts:
     smart_parser.add_argument('--quality', '-q', type=int, default=90, help='Capture quality 1-100')
     smart_parser.add_argument('--file', '-o', help='Save HTML report')
     
+    # Watch command - qualitative parameters (NEW!)
+    watch_parser = subparsers.add_parser('watch', help='Watch stream with intuitive settings', parents=[format_parser])
+    watch_parser.add_argument('--url', '-u', required=True, help='Video source')
+    watch_parser.add_argument('--sensitivity', '-s',
+                              choices=['ultra', 'high', 'medium', 'low', 'minimal'],
+                              default='medium', help='Detection sensitivity')
+    watch_parser.add_argument('--detect', '-d',
+                              choices=['person', 'people', 'face', 'vehicle', 'car', 
+                                       'animal', 'pet', 'package', 'motion', 'intrusion', 'any'],
+                              default='any', help='What to detect')
+    watch_parser.add_argument('--speed',
+                              choices=['realtime', 'fast', 'normal', 'slow', 'thorough'],
+                              default='normal', help='Analysis speed')
+    watch_parser.add_argument('--when', '-w',
+                              choices=['appears', 'disappears', 'enters', 'leaves', 
+                                       'moves', 'stops', 'changes'],
+                              default='changes', help='When to trigger')
+    watch_parser.add_argument('--alert', '-a',
+                              choices=['none', 'log', 'sound', 'speak', 'slack', 'telegram'],
+                              default='none', help='How to alert')
+    watch_parser.add_argument('--duration', type=int, default=60, help='Duration in seconds')
+    watch_parser.add_argument('--file', '-o', help='Save report to file')
+    
     # Live narrator command (TTS, triggers)
     live_parser = subparsers.add_parser('live', help='Live narration with TTS and triggers', parents=[format_parser])
     live_parser.add_argument('operation', choices=['narrator', 'watch', 'describe'],
                              nargs='?', default='narrator', help='Operation')
     live_parser.add_argument('--url', '-u', required=True, help='Video source')
+    live_parser.add_argument('--mode', '-m', choices=['full', 'diff', 'track'],
+                             default='full', help='Mode: full (describe all), diff (only changes), track (follow object)')
+    live_parser.add_argument('--sensitivity', '-s', choices=['ultra', 'high', 'medium', 'low', 'minimal'],
+                             help='Detection sensitivity (overrides threshold/interval)')
     live_parser.add_argument('--tts', action='store_true', help='Enable text-to-speech')
     live_parser.add_argument('--trigger', '-t', help='Triggers: "person appears,door opens"')
-    live_parser.add_argument('--focus', '-f', help='Focus on specific objects')
-    live_parser.add_argument('--interval', '-i', type=float, default=3.0, help='Seconds between checks')
+    live_parser.add_argument('--focus', '-f', help='Focus on specific objects (e.g., person)')
+    live_parser.add_argument('--interval', '-i', type=float, help='Seconds between checks (or use sensitivity)')
     live_parser.add_argument('--duration', '-d', type=int, default=60, help='Duration (seconds)')
-    live_parser.add_argument('--threshold', type=int, default=15, help='Change threshold')
+    live_parser.add_argument('--threshold', type=int, help='Change threshold 0-100 (or use sensitivity)')
+    live_parser.add_argument('--model', default='llava:7b', help='AI model (default: llava:7b)')
     live_parser.add_argument('--webhook', help='Webhook URL for alerts')
+    live_parser.add_argument('--file', '-o', help='Save HTML report to file')
     
     # Global options
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
@@ -451,6 +480,8 @@ Shortcuts:
             return handle_smart(args)
         elif args.command == 'live':
             return handle_live(args)
+        elif args.command == 'watch':
+            return handle_watch(args)
         else:
             print(f"Unknown command: {args.command}", file=sys.stderr)
             return 1
@@ -2497,6 +2528,218 @@ def _save_smart_html_report(result: dict, output_file: str):
         f.write(html)
 
 
+def handle_watch(args) -> int:
+    """Handle watch command with qualitative parameters"""
+    from .core import flow
+    from .presets import get_preset, describe_settings
+    import json
+    
+    # Get optimized settings from qualitative params
+    settings = get_preset(
+        sensitivity=args.sensitivity,
+        detect=args.detect,
+        speed=args.speed
+    )
+    
+    # Show what settings are being used
+    desc = describe_settings(args.sensitivity, args.detect, args.speed)
+    print(f"\n🎯 Watch Mode: {desc}")
+    print(f"   Source: {args.url[:50]}...")
+    print(f"   Duration: {args.duration}s")
+    if args.alert != "none":
+        print(f"   Alert: {args.alert}")
+    print()
+    
+    # Build URI with optimized numeric parameters
+    uri = f"motion://analyze?source={args.url}"
+    uri += f"&threshold={settings['threshold']}"
+    uri += f"&min_region={settings['min_region']}"
+    uri += f"&grid={settings['grid_size']}"
+    uri += f"&interval={settings['interval']}"
+    uri += f"&duration={args.duration}"
+    uri += f"&save_frames=true"
+    
+    if settings['focus']:
+        uri += f"&focus={settings['focus']}"
+    
+    if not settings['ai_enabled']:
+        uri += "&no_ai=true"
+    
+    try:
+        result = flow(uri).run()
+        
+        # Process alerts
+        if args.alert != "none":
+            changes = result.get("significant_changes", 0)
+            if changes > 0:
+                _trigger_alert(args.alert, args.detect, changes, args.url)
+        
+        # Output
+        fmt = _get_output_format(args)
+        
+        if fmt == "json":
+            print(json.dumps(result, indent=2, default=str))
+        else:
+            _print_watch_yaml(result, args)
+        
+        # Save report
+        if getattr(args, 'file', None):
+            _save_watch_report(result, args)
+        
+        return 0
+        
+    except Exception as e:
+        print(f"Watch failed: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
+def _trigger_alert(alert_type: str, detect: str, changes: int, url: str):
+    """Trigger the specified alert"""
+    message = f"Detected {detect}: {changes} changes"
+    
+    if alert_type == "speak":
+        try:
+            import subprocess
+            subprocess.Popen(["espeak", message], 
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            print(f"🔔 {message}")
+    
+    elif alert_type == "sound":
+        try:
+            import subprocess
+            subprocess.Popen(["paplay", "/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            print("\a")  # Terminal bell
+    
+    elif alert_type == "slack":
+        from .helpers import send_alert
+        send_alert(message, slack=True)
+    
+    elif alert_type == "telegram":
+        from .helpers import send_alert
+        send_alert(message, telegram=True)
+    
+    elif alert_type == "log":
+        print(f"🔔 ALERT: {message}")
+
+
+def _print_watch_yaml(result: dict, args):
+    """Print watch result as YAML"""
+    changes = result.get("significant_changes", 0)
+    frames = result.get("frames_analyzed", 0)
+    
+    status = "🔴 DETECTED" if changes > 0 else "✅ CLEAR"
+    
+    print(f"# Watch ({args.detect})")
+    print(f"# Sensitivity: {args.sensitivity}, Speed: {args.speed}")
+    print("---")
+    print()
+    print(f"status: {status}")
+    print(f"detected: {args.detect}")
+    print(f"changes: {changes}")
+    print(f"frames: {frames}")
+    print()
+    
+    timeline = result.get("timeline", [])
+    if timeline:
+        print("events:")
+        for entry in timeline:
+            if entry.get("type") == "change":
+                ts = entry.get("timestamp", "")
+                change_pct = entry.get("change_percent", 0)
+                regions = len(entry.get("regions", []))
+                print(f"  - time: \"{ts}\"")
+                print(f"    change: {change_pct:.1f}%")
+                print(f"    regions: {regions}")
+                
+                # Show AI analysis if available
+                analyses = entry.get("region_analyses", [])
+                if analyses:
+                    desc = analyses[0].get("description", "")[:100]
+                    print(f"    description: \"{desc}...\"")
+
+
+def _save_watch_report(result: dict, args):
+    """Save watch report as HTML"""
+    import os
+    from pathlib import Path
+    from datetime import datetime
+    
+    output_path = Path(args.file).expanduser()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    changes = result.get("significant_changes", 0)
+    status = "DETECTED" if changes > 0 else "CLEAR"
+    
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Watch Report - {args.detect}</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+               max-width: 1200px; margin: 0 auto; padding: 20px; background: #f5f5f5; }}
+        .header {{ background: {'#e74c3c' if changes > 0 else '#27ae60'}; color: white; 
+                  padding: 20px; border-radius: 8px; margin-bottom: 20px; }}
+        .config {{ background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; }}
+        .event {{ background: white; padding: 15px; margin: 10px 0; border-radius: 8px; 
+                 border-left: 4px solid {'#e74c3c' if changes > 0 else '#3498db'}; }}
+        .frame {{ max-width: 100%; border-radius: 4px; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🎯 Watch Report: {args.detect.upper()}</h1>
+        <p>Status: <strong>{status}</strong> | Changes: {changes} | 
+           Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+    </div>
+    
+    <div class="config">
+        <h3>Configuration</h3>
+        <p><strong>Sensitivity:</strong> {args.sensitivity} | 
+           <strong>Speed:</strong> {args.speed} | 
+           <strong>Duration:</strong> {args.duration}s</p>
+        <p><strong>Source:</strong> {args.url[:80]}...</p>
+    </div>
+"""
+    
+    timeline = result.get("timeline", [])
+    for entry in timeline:
+        if entry.get("type") == "change":
+            ts = entry.get("timestamp", "")
+            change_pct = entry.get("change_percent", 0)
+            
+            html += f"""
+    <div class="event">
+        <h4>📍 {ts} - {change_pct:.1f}% change</h4>
+"""
+            
+            # Add image if available
+            img = entry.get("image_base64", "")
+            if img:
+                html += f'<img class="frame" src="data:image/jpeg;base64,{img}">'
+            
+            # Add descriptions
+            analyses = entry.get("region_analyses", [])
+            for a in analyses[:3]:
+                desc = a.get("description", "")
+                html += f"<p>{desc}</p>"
+            
+            html += "</div>"
+    
+    html += """
+</body>
+</html>"""
+    
+    with open(output_path, "w") as f:
+        f.write(html)
+    
+    print(f"📄 Report saved: {output_path}")
+
+
 def handle_live(args) -> int:
     """Handle live narration command"""
     from .core import flow
@@ -2504,13 +2747,24 @@ def handle_live(args) -> int:
     
     op = getattr(args, 'operation', 'narrator') or 'narrator'
     url = args.url
+    mode = getattr(args, 'mode', 'full') or 'full'
+    quiet = getattr(args, 'quiet', False)
     
     # Build URI
     uri = f"live://{op}?source={url}"
     uri += f"&tts={'true' if args.tts else 'false'}"
-    uri += f"&interval={args.interval}"
+    uri += f"&mode={mode}"
     uri += f"&duration={args.duration}"
-    uri += f"&threshold={args.threshold}"
+    
+    # Sensitivity preset (descriptive parameter)
+    if getattr(args, 'sensitivity', None):
+        uri += f"&sensitivity={args.sensitivity}"
+    
+    # Explicit numeric params (override sensitivity preset)
+    if getattr(args, 'interval', None):
+        uri += f"&interval={args.interval}"
+    if getattr(args, 'threshold', None):
+        uri += f"&threshold={args.threshold}"
     
     if getattr(args, 'trigger', None):
         uri += f"&trigger={args.trigger}"
@@ -2518,17 +2772,35 @@ def handle_live(args) -> int:
         uri += f"&focus={args.focus}"
     if getattr(args, 'webhook', None):
         uri += f"&webhook_url={args.webhook}"
+    if getattr(args, 'model', None):
+        uri += f"&model={args.model}"
+    
+    # Show header only if not quiet and not structured format
+    fmt = _get_output_format(args)
+    # For structured output (json/yaml), suppress live prints
+    if fmt in ("json", "yaml"):
+        uri += "&quiet=true"
+    
+    show_header = not quiet and fmt not in ("json", "yaml")
+    if show_header:
+        print(f"\n🎙️ Live Narrator ({mode} mode)")
+        print(f"   Source: {url[:50]}...")
+        print(f"   TTS: {'ON' if args.tts else 'OFF'}")
+        if getattr(args, 'focus', None):
+            print(f"   Focus: {args.focus}")
+        print()
     
     try:
         result = flow(uri).run()
         
-        # Output format
-        fmt = _get_output_format(args)
-        
         if fmt == "json":
             print(json.dumps(result, indent=2, default=str))
         else:
-            _print_live_yaml(result)
+            _print_live_yaml(result, mode)
+        
+        # Save report if requested
+        if getattr(args, 'file', None):
+            _save_live_report(result, args.file, mode, url)
         
         return 0
         
@@ -2539,12 +2811,156 @@ def handle_live(args) -> int:
         return 1
 
 
-def _print_live_yaml(result: dict):
+def _save_live_report(result: dict, output_file: str, mode: str, source: str):
+    """Save live narrator report as HTML with images"""
+    from pathlib import Path
+    from datetime import datetime
+    
+    output_path = Path(output_file).expanduser()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    history = result.get("history", [])
+    triggers = result.get("triggers_fired", 0)
+    config = result.get("config", {})
+    
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Narrator Report - {mode} mode</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+               max-width: 1200px; margin: 0 auto; padding: 20px; background: #1a1a2e; color: #eee; }}
+        .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+                  padding: 25px; border-radius: 12px; margin-bottom: 20px; }}
+        h1 {{ margin: 0; }}
+        .stats {{ display: flex; gap: 15px; margin-top: 15px; flex-wrap: wrap; }}
+        .stat {{ background: rgba(255,255,255,0.1); padding: 10px 20px; border-radius: 8px; }}
+        .config {{ background: #16213e; padding: 15px; border-radius: 8px; margin-bottom: 20px; }}
+        .config-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }}
+        .config-item {{ background: rgba(255,255,255,0.05); padding: 8px 12px; border-radius: 4px; }}
+        .config-label {{ color: #888; font-size: 0.8em; }}
+        .entry {{ background: #16213e; padding: 20px; margin: 15px 0; border-radius: 12px; 
+                 border-left: 4px solid #667eea; display: grid; grid-template-columns: 300px 1fr; gap: 20px; }}
+        .entry.triggered {{ border-left-color: #e74c3c; background: #1e1e3f; }}
+        .entry-img {{ width: 100%; border-radius: 8px; }}
+        .entry-content {{ }}
+        .time {{ color: #888; font-size: 0.9em; margin-bottom: 10px; }}
+        .desc {{ line-height: 1.6; font-size: 1.1em; }}
+        .no-image {{ background: #0f0f23; padding: 50px; text-align: center; border-radius: 8px; color: #666; }}
+        @media (max-width: 768px) {{
+            .entry {{ grid-template-columns: 1fr; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🎙️ Live Narrator Report</h1>
+        <p>Mode: <strong>{mode}</strong> | Focus: <strong>{config.get('focus', 'general')}</strong></p>
+        <div class="stats">
+            <div class="stat">📝 {len(history)} descriptions</div>
+            <div class="stat">🔔 {triggers} triggers</div>
+            <div class="stat">🎞️ {result.get('frames_analyzed', 0)} frames</div>
+            <div class="stat">⏱️ {config.get('duration', 0)}s</div>
+        </div>
+    </div>
+    
+    <div class="config">
+        <h3 style="margin-top: 0;">📋 Analysis Configuration</h3>
+        <div class="config-grid">
+            <div class="config-item">
+                <div class="config-label">Model</div>
+                <div>{config.get('model', 'unknown')}</div>
+            </div>
+            <div class="config-item">
+                <div class="config-label">Mode</div>
+                <div>{config.get('mode', mode)}</div>
+            </div>
+            <div class="config-item">
+                <div class="config-label">Focus</div>
+                <div>{config.get('focus', 'general')}</div>
+            </div>
+            <div class="config-item">
+                <div class="config-label">Interval</div>
+                <div>{config.get('interval', 3)}s</div>
+            </div>
+            <div class="config-item">
+                <div class="config-label">Diff Threshold</div>
+                <div>{config.get('diff_threshold', 15)}</div>
+            </div>
+            <div class="config-item">
+                <div class="config-label">Min Change</div>
+                <div>{config.get('min_change', 0.5)}%</div>
+            </div>
+            <div class="config-item">
+                <div class="config-label">TTS</div>
+                <div>{'✅ Enabled' if config.get('tts_enabled') else '❌ Disabled'}</div>
+            </div>
+            <div class="config-item">
+                <div class="config-label">Source</div>
+                <div style="font-size: 0.8em; word-break: break-all;">{source[:80]}...</div>
+            </div>
+        </div>
+    </div>
+    
+    <h2>📸 Frame Analysis</h2>
+"""
+    
+    for i, entry in enumerate(history):
+        triggered_class = "triggered" if entry.get("triggered") else ""
+        ts = entry.get("timestamp", "")[:19]
+        desc = entry.get("description", "")
+        img_b64 = entry.get("image_base64", "")
+        frame_num = entry.get("frame", i+1)
+        
+        img_html = f'<img class="entry-img" src="data:image/jpeg;base64,{img_b64}" alt="Frame {frame_num}">' if img_b64 else '<div class="no-image">No image captured</div>'
+        
+        html += f"""
+    <div class="entry {triggered_class}">
+        <div class="entry-image">
+            {img_html}
+        </div>
+        <div class="entry-content">
+            <div class="time">
+                {'🔴 TRIGGER - ' if entry.get('triggered') else '📷 '}
+                Frame #{frame_num} | {ts}
+            </div>
+            <div class="desc">{desc}</div>
+        </div>
+    </div>
+"""
+    
+    html += f"""
+    <footer style="text-align: center; margin-top: 30px; padding: 20px; color: #666; border-top: 1px solid #333;">
+        Generated by Streamware at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}<br>
+        <a href="https://github.com/streamware" style="color: #667eea;">github.com/streamware</a>
+    </footer>
+</body>
+</html>"""
+    
+    with open(output_path, "w") as f:
+        f.write(html)
+    
+    print(f"📄 Report saved: {output_path}")
+
+
+def _print_live_yaml(result: dict, mode: str = "full"):
     """Print live narrator result as YAML"""
     op = result.get("operation", "narrator")
+    config = result.get("config", {})
     
-    print(f"# Live Narrator ({op})")
+    print(f"# Live Narrator - {op} ({mode} mode)")
     print("---")
+    print()
+    
+    # Show config
+    print("config:")
+    print(f"  model: {config.get('model', 'unknown')}")
+    print(f"  mode: {config.get('mode', mode)}")
+    print(f"  focus: {config.get('focus', 'general')}")
+    print(f"  interval: {config.get('interval', 3)}s")
+    print(f"  diff_threshold: {config.get('diff_threshold', 15)}")
     print()
     
     if op == "describe":

@@ -283,6 +283,47 @@ def send_alert(message: str, slack: bool = False, email: bool = False,
             except Exception as e:
                 results["telegram_error"] = str(e)
     
+    if email:
+        smtp_server = config.get("SQ_SMTP_SERVER", "smtp.gmail.com")
+        smtp_port = int(config.get("SQ_SMTP_PORT", "587"))
+        smtp_user = config.get("SQ_SMTP_USER", config.get("SQ_EMAIL_FROM"))
+        smtp_pass = config.get("SQ_SMTP_PASSWORD")
+        email_to = config.get("SQ_EMAIL_TO")
+        email_from = config.get("SQ_EMAIL_FROM", smtp_user)
+        
+        if smtp_user and smtp_pass and email_to:
+            try:
+                import smtplib
+                from email.mime.text import MIMEText
+                from email.mime.multipart import MIMEMultipart
+                
+                msg = MIMEMultipart()
+                msg['From'] = email_from
+                msg['To'] = email_to
+                msg['Subject'] = f"🚨 Streamware Alert: {message[:50]}"
+                
+                body = f"""
+Streamware Alert
+================
+
+{message}
+
+---
+Sent by Streamware monitoring system
+"""
+                msg.attach(MIMEText(body, 'plain'))
+                
+                with smtplib.SMTP(smtp_server, smtp_port) as server:
+                    server.starttls()
+                    server.login(smtp_user, smtp_pass)
+                    server.send_message(msg)
+                
+                results["sent_to"].append("email")
+            except Exception as e:
+                results["email_error"] = str(e)
+        else:
+            results["email_error"] = "Missing SQ_SMTP_* or SQ_EMAIL_* config"
+    
     if webhook:
         try:
             import requests

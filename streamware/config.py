@@ -22,19 +22,27 @@ from typing import Any, Dict, Optional
 # Default configuration values
 DEFAULTS = {
     # AI / LLM
-    "SQ_MODEL": "llava:13b",
+    "SQ_MODEL": "llava:7b",
     "SQ_OLLAMA_URL": "http://localhost:11434",
     "SQ_OPENAI_API_KEY": "",
     "SQ_ANTHROPIC_API_KEY": "",
     "SQ_LLM_PROVIDER": "ollama",
+    "SQ_LLM_TIMEOUT": "30",
     
     # Stream Analysis
     "SQ_STREAM_MODE": "diff",
     "SQ_STREAM_INTERVAL": "5",
     "SQ_STREAM_DURATION": "30",
     "SQ_STREAM_FOCUS": "",
-    "SQ_STREAM_SENSITIVITY": "medium",
     "SQ_STREAM_FRAMES_DIR": "",
+    
+    # Detection Settings (descriptive)
+    "SQ_SENSITIVITY": "medium",      # ultra, high, medium, low, minimal
+    "SQ_DETECT": "any",              # person, vehicle, motion, package, any
+    "SQ_SPEED": "normal",            # realtime, fast, normal, slow, thorough
+    "SQ_MOTION_THRESHOLD": "15",     # 0-100 (or use sensitivity preset)
+    "SQ_MIN_REGION": "100",          # minimum region size
+    "SQ_MIN_CHANGE": "0.5",          # minimum change percent
     
     # Network
     "SQ_NETWORK_SUBNET": "",

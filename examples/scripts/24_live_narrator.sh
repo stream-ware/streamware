@@ -9,15 +9,15 @@ source "$(dirname "$0")/common.sh"
 print_header "🎙️ Live Narrator (TTS)"
 
 CAMERA_URL="${1:-$CAMERA_URL}"
+MODE="${2:-full}"  # full, diff, track
 ensure_camera_url
 
-print_step "Starting live narration..."
+print_step "Available modes:"
+echo "  full  - Describe entire scene each time"
+echo "  diff  - Describe only what changed"
+echo "  track - Track specific object (e.g., person)"
 echo ""
-echo "The system will:"
-echo "  1. Capture frames every 3 seconds"
-echo "  2. Detect if there are changes (skip if stable)"
-echo "  3. Describe what it sees using AI"
-echo "  4. Speak the description aloud (if --tts)"
+echo "Selected: $MODE"
 echo ""
 
 # Check for espeak
@@ -31,28 +31,32 @@ else
 fi
 echo ""
 
-print_step "🎬 Live narration starting..."
+print_step "🎬 Live narration ($MODE mode)..."
 echo ""
 
 sq live narrator \
     --url "$CAMERA_URL" \
+    --mode "$MODE" \
     $TTS_FLAG \
     --interval 3 \
     --duration 30 \
-    --focus "$FOCUS" \
+    --focus "${FOCUS:-person}" \
     --yaml
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "💡 Examples:"
+echo "💡 Mode Examples:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "# Describe once:"
-echo "sq live describe --url \"\$CAMERA_URL\" --tts"
+echo "# FULL mode - describe everything:"
+echo "sq live narrator --url \"\$URL\" --mode full --tts"
 echo ""
-echo "# Watch for 5 minutes with TTS:"
-echo "sq live narrator --url \"\$CAMERA_URL\" --tts --duration 300"
+echo "# DIFF mode - only describe changes:"
+echo "sq live narrator --url \"\$URL\" --mode diff --tts"
 echo ""
-echo "# Focus on people:"
-echo "sq live narrator --url \"\$CAMERA_URL\" --tts --focus person"
+echo "# TRACK mode - track person:"
+echo "sq live narrator --url \"\$URL\" --mode track --focus person --tts"
+echo ""
+echo "# Track with JSON output:"
+echo "sq live narrator --url \"\$URL\" --mode track --focus person --json"
 echo ""
