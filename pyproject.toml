@@ -61,10 +61,10 @@ dev = [
 all = ["streamware[curllm,kafka,rabbitmq,postgres,multimedia,communication,dev]"]
 
 [project.urls]
-Homepage = "https://github.com/softreck/streamware"
+Homepage = "https://github.com/stream-ware/streamware"
 Documentation = "https://streamware.readthedocs.io"
-Repository = "https://github.com/softreck/streamware"
-"Bug Tracker" = "https://github.com/softreck/streamware/issues"
+Repository = "https://github.com/stream-ware/streamware"
+"Bug Tracker" = "https://github.com/stream-ware/streamware/issues"
 
 [project.scripts]
 streamware = "streamware.cli:main"
