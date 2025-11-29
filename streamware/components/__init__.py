@@ -209,6 +209,36 @@ from .network_scan import (
     find_printers,
 )
 
+from .tracking import (
+    TrackingComponent,
+    detect_objects as tracking_detect,
+    track_person,
+    count_people,
+    monitor_zone,
+    detect_vehicles,
+)
+
+from .motion_diff import (
+    MotionDiffComponent,
+    detect_motion,
+    analyze_motion,
+    get_motion_regions,
+)
+
+from .smart_monitor import (
+    SmartMonitorComponent,
+    smart_monitor,
+    quick_watch,
+    monitor_zones,
+)
+
+from .live_narrator import (
+    LiveNarratorComponent,
+    live_narrator,
+    watch_for,
+    describe_now,
+)
+
 __all__ = [
     # CurLLM
     "CurLLMComponent",
@@ -383,4 +413,30 @@ __all__ = [
     "find_cameras",
     "find_raspberry_pi",
     "find_printers",
+    
+    # Tracking
+    "TrackingComponent",
+    "tracking_detect",
+    "track_person",
+    "count_people",
+    "monitor_zone",
+    "detect_vehicles",
+    
+    # Motion (smart region-based)
+    "MotionDiffComponent",
+    "detect_motion",
+    "analyze_motion",
+    "get_motion_regions",
+    
+    # Smart Monitor (buffered, adaptive)
+    "SmartMonitorComponent",
+    "smart_monitor",
+    "quick_watch",
+    "monitor_zones",
+    
+    # Live Narrator (TTS, triggers)
+    "LiveNarratorComponent",
+    "live_narrator",
+    "watch_for",
+    "describe_now",
 ]
