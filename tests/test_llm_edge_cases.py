@@ -290,13 +290,16 @@ class TestRateLimiting:
     @patch('requests.post')
     def test_api_rate_limit(self, mock_post):
         """Test handling of API rate limits"""
+        import requests as req
         mock_response = Mock()
         mock_response.ok = False
         mock_response.status_code = 429  # Too Many Requests
+        mock_response.raise_for_status.side_effect = req.exceptions.HTTPError("429 Too Many Requests")
         mock_post.return_value = mock_response
         
+        # Use ollama provider explicitly to ensure requests.post is used
         with pytest.raises(Exception):
-            flow("llm://generate?prompt=test").run()
+            flow("llm://generate?prompt=test&provider=ollama/llama3.2").run()
 
 
 if __name__ == "__main__":
