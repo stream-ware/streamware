@@ -17,7 +17,7 @@ try:
     TWILIO_AVAILABLE = True
 except ImportError:
     TWILIO_AVAILABLE = False
-    logger.warning("Twilio not installed. SMS via Twilio will not be available.")
+    logger.debug("Twilio not installed. SMS via Twilio will not be available.")
 
 
 @register("sms")

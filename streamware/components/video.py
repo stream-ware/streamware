@@ -23,7 +23,7 @@ try:
     OPENCV_AVAILABLE = True
 except ImportError:
     OPENCV_AVAILABLE = False
-    logger.warning("OpenCV not installed. Video features limited.")
+    logger.debug("OpenCV not installed. Video features limited.")
 
 try:
     import numpy as np
@@ -37,7 +37,7 @@ try:
     from ultralytics import YOLO
     YOLO_AVAILABLE = True
 except ImportError:
-    logger.warning("ultralytics not installed. YOLO detection unavailable.")
+    logger.debug("ultralytics not installed. YOLO detection unavailable.")
 
 
 @register("video")

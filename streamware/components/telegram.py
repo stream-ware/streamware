@@ -20,7 +20,7 @@ try:
     TELEGRAM_AVAILABLE = True
 except ImportError:
     TELEGRAM_AVAILABLE = False
-    logger.warning("python-telegram-bot not installed. Using HTTP API fallback.")
+    logger.debug("python-telegram-bot not installed. Using HTTP API fallback.")
 
 
 @register("telegram")

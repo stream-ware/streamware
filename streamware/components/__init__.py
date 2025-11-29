@@ -192,6 +192,23 @@ from .voice_keyboard import (
     dictate,
 )
 
+from .stream import (
+    StreamComponent,
+    analyze_stream,
+    analyze_screen,
+    analyze_youtube,
+    watch_screen,
+)
+
+from .network_scan import (
+    NetworkScanComponent,
+    scan_network,
+    find_devices,
+    find_cameras,
+    find_raspberry_pi,
+    find_printers,
+)
+
 __all__ = [
     # CurLLM
     "CurLLMComponent",
@@ -351,4 +368,19 @@ __all__ = [
     "voice_type",
     "voice_press",
     "dictate",
+    
+    # Stream (real-time)
+    "StreamComponent",
+    "analyze_stream",
+    "analyze_screen",
+    "analyze_youtube",
+    "watch_screen",
+    
+    # Network scan
+    "NetworkScanComponent",
+    "scan_network",
+    "find_devices",
+    "find_cameras",
+    "find_raspberry_pi",
+    "find_printers",
 ]

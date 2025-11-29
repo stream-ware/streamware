@@ -93,6 +93,9 @@ class MediaComponent(Component):
         self.language = uri.get_param("language", "en")
         self.output_file = uri.get_param("output")
         
+        # Video analysis mode: full, stream, diff
+        self.mode = uri.get_param("mode", "full")
+        
         # Auto-install
         self.auto_install = uri.get_param("auto_install", True)
     
@@ -138,7 +141,13 @@ class MediaComponent(Component):
                 logger.warning(f"Could not check Ollama models: {e}")
     
     def _describe_video(self, data: Any) -> Dict:
-        """Generate video description using vision-language model"""
+        """Generate video description with multiple analysis modes.
+        
+        Modes:
+            - full: Coherent narrative with scene tracking (default)
+            - stream: Frame-by-frame detailed descriptions
+            - diff: Differences between consecutive frames
+        """
         if not self.file:
             raise ComponentError("Video file required")
         
@@ -146,25 +155,256 @@ class MediaComponent(Component):
         if not video_path.exists():
             raise ComponentError(f"Video file not found: {self.file}")
         
-        # Extract key frames
-        frames = self._extract_frames(video_path)
+        # Get video info
+        video_info = self._get_video_info(video_path)
         
-        # Analyze frames with LLaVA
-        descriptions = []
-        for frame_path in frames:
-            desc = self._analyze_image_with_llava(frame_path, self.prompt)
-            descriptions.append(desc)
+        # Extract frames based on mode
+        if self.mode == "stream":
+            # More frames for detailed analysis
+            frames = self._extract_frames_smart(video_path, video_info, max_frames=20)
+        else:
+            frames = self._extract_frames_smart(video_path, video_info)
         
-        # Combine descriptions
-        combined = self._combine_descriptions(descriptions)
+        # Route to appropriate analysis mode
+        if self.mode == "stream":
+            return self._analyze_stream_mode(frames, video_info, video_path)
+        elif self.mode == "diff":
+            return self._analyze_diff_mode(frames, video_info, video_path)
+        else:  # full (default)
+            return self._analyze_full_mode(frames, video_info, video_path)
+    
+    def _analyze_full_mode(self, frames: list, video_info: Dict, video_path: Path) -> Dict:
+        """Full mode: Coherent narrative with scene tracking"""
+        frame_analyses = []
+        for i, frame_path in enumerate(frames):
+            context_prompt = self._build_context_prompt(i, len(frames), frame_analyses)
+            desc = self._analyze_image_with_llava(frame_path, context_prompt)
+            frame_analyses.append({
+                "frame": i + 1,
+                "timestamp": self._get_frame_timestamp(i, len(frames), video_info),
+                "description": desc
+            })
+        
+        narrative = self._build_video_narrative(frame_analyses, video_info)
         
         return {
             "success": True,
             "file": str(video_path),
             "model": self.model,
-            "description": combined,
-            "num_frames": len(frames)
+            "mode": "full",
+            "description": narrative,
+            "num_frames": len(frames),
+            "duration": video_info.get("duration", "unknown"),
+            "scenes": len(frame_analyses)
         }
+    
+    def _analyze_stream_mode(self, frames: list, video_info: Dict, video_path: Path) -> Dict:
+        """Stream mode: Detailed frame-by-frame analysis"""
+        frame_details = []
+        
+        for i, frame_path in enumerate(frames):
+            timestamp = self._get_frame_timestamp(i, len(frames), video_info)
+            
+            # Detailed prompt for each frame
+            prompt = f"""Analyze this video frame in detail:
+1. SUBJECTS: Who/what is visible? Describe appearance, position, actions.
+2. SETTING: Where is this? Describe environment, lighting, colors.
+3. OBJECTS: List all visible objects and their positions.
+4. ACTION: What is happening in this exact moment?
+5. TEXT: Any visible text, labels, or UI elements?
+
+{self.prompt}"""
+            
+            desc = self._analyze_image_with_llava(frame_path, prompt)
+            
+            frame_details.append({
+                "frame": i + 1,
+                "timestamp": timestamp,
+                "description": desc,
+                "file": str(frame_path)
+            })
+        
+        return {
+            "success": True,
+            "file": str(video_path),
+            "model": self.model,
+            "mode": "stream",
+            "frames": frame_details,
+            "num_frames": len(frames),
+            "duration": video_info.get("duration", "unknown")
+        }
+    
+    def _analyze_diff_mode(self, frames: list, video_info: Dict, video_path: Path) -> Dict:
+        """Diff mode: Analyze changes between consecutive frames"""
+        changes = []
+        prev_description = None
+        
+        for i, frame_path in enumerate(frames):
+            timestamp = self._get_frame_timestamp(i, len(frames), video_info)
+            
+            if i == 0:
+                # First frame - full description
+                prompt = f"Describe this opening frame: subjects, setting, objects, action. {self.prompt}"
+                desc = self._analyze_image_with_llava(frame_path, prompt)
+                changes.append({
+                    "frame": 1,
+                    "timestamp": timestamp,
+                    "type": "start",
+                    "description": desc
+                })
+                prev_description = desc
+            else:
+                # Compare with previous
+                prompt = f"""Compare this frame with the previous description and identify CHANGES:
+
+PREVIOUS: {prev_description[:500]}...
+
+For THIS frame, describe ONLY what has changed:
+1. NEW: What appeared that wasn't there before?
+2. REMOVED: What disappeared?
+3. MOVED: What changed position?
+4. CHANGED: What looks different (lighting, color, expression)?
+5. ACTION: What new action is happening?
+
+If nothing significant changed, say "No significant changes."
+{self.prompt}"""
+                
+                desc = self._analyze_image_with_llava(frame_path, prompt)
+                
+                change_type = "no_change" if "no significant" in desc.lower() else "change"
+                
+                changes.append({
+                    "frame": i + 1,
+                    "timestamp": timestamp,
+                    "type": change_type,
+                    "changes": desc
+                })
+                
+                # Update context for next comparison
+                if change_type == "change":
+                    prev_description = desc
+        
+        # Summarize all changes
+        summary = self._summarize_changes(changes, video_info)
+        
+        return {
+            "success": True,
+            "file": str(video_path),
+            "model": self.model,
+            "mode": "diff",
+            "timeline": changes,
+            "summary": summary,
+            "num_frames": len(frames),
+            "significant_changes": sum(1 for c in changes if c.get("type") == "change"),
+            "duration": video_info.get("duration", "unknown")
+        }
+    
+    def _summarize_changes(self, changes: list, video_info: Dict) -> str:
+        """Summarize all detected changes in video"""
+        significant = [c for c in changes if c.get("type") == "change"]
+        
+        if not significant:
+            return "No significant changes detected throughout the video."
+        
+        try:
+            import requests
+            
+            changes_text = "\n".join([
+                f"[{c['timestamp']}] {c.get('changes', c.get('description', ''))[:200]}"
+                for c in significant[:10]
+            ])
+            
+            prompt = f"""Based on these detected changes in a video, write a brief summary of what happens:
+
+{changes_text}
+
+Summary (2-3 sentences):"""
+            
+            response = requests.post(
+                "http://localhost:11434/api/generate",
+                json={"model": "qwen2.5:14b", "prompt": prompt, "stream": False},
+                timeout=30
+            )
+            
+            if response.ok:
+                return response.json().get("response", f"{len(significant)} significant changes detected.")
+        except Exception:
+            pass
+        
+        return f"{len(significant)} significant changes detected across {len(changes)} frames."
+    
+    def _get_video_info(self, video_path: Path) -> Dict:
+        """Get video metadata using ffprobe"""
+        try:
+            result = subprocess.run([
+                "ffprobe", "-v", "quiet", "-print_format", "json",
+                "-show_format", "-show_streams", str(video_path)
+            ], capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                import json
+                data = json.loads(result.stdout)
+                duration = float(data.get("format", {}).get("duration", 0))
+                return {
+                    "duration": duration,
+                    "duration_str": f"{int(duration//60)}:{int(duration%60):02d}",
+                    "fps": 30  # default
+                }
+        except Exception:
+            pass
+        return {"duration": 0, "duration_str": "unknown", "fps": 30}
+    
+    def _extract_frames_smart(self, video_path: Path, video_info: Dict, max_frames: int = 15) -> list:
+        """Extract frames at scene changes and key moments"""
+        import tempfile
+        frames_dir = Path(tempfile.mkdtemp())
+        
+        duration = video_info.get("duration", 60)
+        # More frames for longer videos, min 5, max based on mode
+        num_frames = min(max_frames, max(5, int(duration / 10)))
+        
+        try:
+            # Use scene detection if available
+            subprocess.run([
+                "ffmpeg", "-i", str(video_path),
+                "-vf", f"select='gt(scene,0.3)',scale=640:-1",  # Scene change detection
+                "-vsync", "vfr",
+                "-frames:v", str(num_frames),
+                str(frames_dir / "scene_%03d.jpg")
+            ], check=True, capture_output=True, timeout=60)
+            
+            frames = sorted(frames_dir.glob("scene_*.jpg"))
+            if frames:
+                return frames
+        except Exception:
+            pass
+        
+        # Fallback: uniform sampling
+        return self._extract_frames(video_path, num_frames)
+    
+    def _build_context_prompt(self, frame_idx: int, total_frames: int, prev_analyses: list) -> str:
+        """Build context-aware prompt for frame analysis"""
+        base_prompt = self.prompt or "Describe what you see in this video frame."
+        
+        if frame_idx == 0:
+            return f"{base_prompt} This is the opening scene. Identify key subjects, setting, and initial action."
+        
+        # Include context from previous frames
+        context = ""
+        if prev_analyses:
+            last = prev_analyses[-1]["description"][:200]
+            context = f"Previous scene showed: {last}... "
+        
+        position = "middle" if frame_idx < total_frames - 1 else "final"
+        return f"{context}Now describe this {position} scene. {base_prompt} Note any changes from before, track recurring subjects."
+    
+    def _get_frame_timestamp(self, frame_idx: int, total_frames: int, video_info: Dict) -> str:
+        """Calculate approximate timestamp for frame"""
+        duration = video_info.get("duration", 0)
+        if duration and total_frames > 1:
+            time_sec = (frame_idx / (total_frames - 1)) * duration
+            return f"{int(time_sec//60)}:{int(time_sec%60):02d}"
+        return f"frame {frame_idx + 1}"
     
     def _describe_image(self, data: Any) -> Dict:
         """Generate image description"""
@@ -374,37 +614,64 @@ class MediaComponent(Component):
         except Exception as e:
             return f"Could not analyze image: {e}"
     
-    def _combine_descriptions(self, descriptions: list) -> str:
-        """Combine multiple descriptions into coherent narrative"""
-        if not descriptions:
+    def _build_video_narrative(self, frame_analyses: list, video_info: Dict) -> str:
+        """Build coherent video narrative with scene tracking"""
+        if not frame_analyses:
             return "No description available"
         
-        if len(descriptions) == 1:
-            return descriptions[0]
+        if len(frame_analyses) == 1:
+            return frame_analyses[0]["description"]
         
-        # Use LLM to combine descriptions
+        # Build structured scene breakdown
+        scenes_text = []
+        for analysis in frame_analyses:
+            ts = analysis.get("timestamp", "")
+            desc = analysis["description"][:300]  # Limit length
+            scenes_text.append(f"[{ts}] {desc}")
+        
+        duration_str = video_info.get("duration_str", "unknown length")
+        
+        # Use LLM to create narrative
         try:
             import requests
             
-            combined_text = "\n\n".join([f"Frame {i+1}: {desc}" for i, desc in enumerate(descriptions)])
-            prompt = f"Based on these frame descriptions, write a single coherent video description:\n\n{combined_text}"
+            prompt = f"""Analyze this video ({duration_str}) based on scene descriptions. 
+Create a coherent narrative that:
+1. Identifies main subjects/characters and tracks them through the video
+2. Describes the setting and how it changes
+3. Explains the story/action flow from start to end
+4. Notes any recurring themes or objects
+
+Scene breakdown:
+{chr(10).join(scenes_text)}
+
+Write a professional video description (2-3 paragraphs) that tells what happens in this video:"""
             
             response = requests.post(
                 "http://localhost:11434/api/generate",
                 json={
-                    "model": "llama3.2",
+                    "model": "qwen2.5:14b",  # Better for narrative
                     "prompt": prompt,
                     "stream": False
-                }
+                },
+                timeout=60
             )
             
             if response.ok:
-                return response.json().get("response", combined_text)
-            else:
-                return combined_text
-                
+                return response.json().get("response", "\n".join(scenes_text))
+            
         except Exception:
-            return " ".join(descriptions)
+            pass
+        
+        # Fallback: structured scene list
+        return f"Video ({duration_str}):\n" + "\n".join(scenes_text)
+    
+    def _combine_descriptions(self, descriptions: list) -> str:
+        """Legacy: Combine multiple descriptions (deprecated, use _build_video_narrative)"""
+        return self._build_video_narrative(
+            [{"description": d, "timestamp": f"scene {i+1}"} for i, d in enumerate(descriptions)],
+            {"duration_str": "unknown"}
+        )
 
 
 # Quick helpers

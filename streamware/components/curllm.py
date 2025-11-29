@@ -19,14 +19,14 @@ try:
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
-    logger.warning("Playwright not installed. Some CurLLM features will be limited.")
+    logger.debug("Playwright not installed. Some CurLLM features will be limited.")
 
 try:
     import ollama
     OLLAMA_AVAILABLE = True
 except ImportError:
     OLLAMA_AVAILABLE = False
-    logger.warning("Ollama not installed. CurLLM will use HTTP API.")
+    logger.debug("Ollama not installed. CurLLM will use HTTP API.")
 
 
 @register("curllm")

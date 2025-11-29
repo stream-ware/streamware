@@ -19,7 +19,7 @@ try:
     SLACK_SDK_AVAILABLE = True
 except ImportError:
     SLACK_SDK_AVAILABLE = False
-    logger.warning("slack-sdk not installed. Using HTTP API fallback.")
+    logger.debug("slack-sdk not installed. Using HTTP API fallback.")
 
 
 @register("slack")

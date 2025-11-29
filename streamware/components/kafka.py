@@ -18,7 +18,7 @@ try:
     KAFKA_AVAILABLE = True
 except ImportError:
     KAFKA_AVAILABLE = False
-    logger.warning("kafka-python not installed. Kafka components will not be available.")
+    logger.debug("kafka-python not installed. Kafka components will not be available.")
 
 
 @register("kafka")

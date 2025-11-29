@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "streamware"
-version = "0.2.1"
+version = "0.2.3"
 description = "Modern Python stream processing framework inspired by Apache Camel"
 readme = "README.md"
 requires-python = ">=3.8"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
 authors = [
     {name = "Softreck", email = "info@softreck.com"},
 ]

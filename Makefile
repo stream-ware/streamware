@@ -40,13 +40,20 @@ clean:
 	find . -type d -name __pycache__ -exec rm -rf {} +
 	find . -type f -name "*.pyc" -delete
 
+version-bump:
+	@echo "Bumping patch version in pyproject.toml..."
+	@python3 -c "import re,sys; p='pyproject.toml'; s=open(p,'r',encoding='utf-8').read(); m=re.search(r'(?m)^version\\s*=\\s*\"(\\d+)\\.(\\d+)\\.(\\d+)\"', s);\
+	import sys as _s;\
+	[(_s.stderr.write('Could not find version in pyproject.toml\n'), _s.exit(1)) for _ in []] if m else (_s.stderr.write('Could not find version in pyproject.toml\n') or _s.exit(1));\
+	a,b,c=map(int,m.groups()); new=f'{a}.{b}.{c+1}'; s=re.sub(r'(?m)^version\\s*=\\s*\".*?\"', f'version = \"{new}\"', s, 1); open(p,'w',encoding='utf-8').write(s); print(new)"
+
 build: clean
 	python3 -m build
 
-publish-test: build
+publish-test: version-bump build
 	python3 -m twine upload --repository testpypi dist/*
 
-publish: build
+publish: version-bump build
 	python3 -m twine upload dist/*
 
 docs:

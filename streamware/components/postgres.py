@@ -18,7 +18,7 @@ try:
     POSTGRES_AVAILABLE = True
 except ImportError:
     POSTGRES_AVAILABLE = False
-    logger.warning("psycopg2-binary not installed. PostgreSQL components will not be available.")
+    logger.debug("psycopg2-binary not installed. PostgreSQL components will not be available.")
 
 try:
     from sqlalchemy import create_engine, text, MetaData, Table
@@ -26,7 +26,7 @@ try:
     SQLALCHEMY_AVAILABLE = True
 except ImportError:
     SQLALCHEMY_AVAILABLE = False
-    logger.warning("SQLAlchemy not installed. Some PostgreSQL features will be limited.")
+    logger.debug("SQLAlchemy not installed. Some PostgreSQL features will be limited.")
 
 
 @register("postgres")

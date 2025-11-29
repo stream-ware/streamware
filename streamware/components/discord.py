@@ -19,7 +19,7 @@ try:
     DISCORD_AVAILABLE = True
 except ImportError:
     DISCORD_AVAILABLE = False
-    logger.warning("discord.py not installed. Discord features will be limited.")
+    logger.debug("discord.py not installed. Discord features will be limited.")
 
 
 @register("discord")

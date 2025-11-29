@@ -19,14 +19,14 @@ try:
     JSONPATH_AVAILABLE = True
 except ImportError:
     JSONPATH_AVAILABLE = False
-    logger.warning("jsonpath-ng not installed. JSONPath transformations will be limited.")
+    logger.debug("jsonpath-ng not installed. JSONPath transformations will be limited.")
 
 try:
     from jinja2 import Template, Environment, FileSystemLoader
     JINJA2_AVAILABLE = True
 except ImportError:
     JINJA2_AVAILABLE = False
-    logger.warning("Jinja2 not installed. Template transformations will not be available.")
+    logger.debug("Jinja2 not installed. Template transformations will not be available.")
 
 
 @register("transform")

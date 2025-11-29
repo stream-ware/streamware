@@ -1,69 +1,191 @@
-# Streamware
+# 🚀 Streamware
 
 <p align="center">
-  <img src="https://img.shields.io/pypi/v/streamware.svg" alt="PyPI version">
-  <img src="https://img.shields.io/badge/python-3.8+-blue.svg" alt="Python">
-  <img src="https://img.shields.io/badge/license-Apache%202.0-green.svg" alt="License">
+  <a href="https://pypi.org/project/streamware/"><img src="https://img.shields.io/pypi/v/streamware.svg?style=for-the-badge&logo=pypi&logoColor=white" alt="PyPI"></a>
+  <a href="https://pypi.org/project/streamware/"><img src="https://img.shields.io/pypi/dm/streamware?style=for-the-badge&logo=pypi&logoColor=white" alt="Downloads"></a>
+  <a href="https://github.com/softreck/streamware"><img src="https://img.shields.io/github/stars/softreck/streamware?style=for-the-badge&logo=github" alt="Stars"></a>
+  <a href="https://github.com/softreck/streamware/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-green?style=for-the-badge" alt="License"></a>
+  <img src="https://img.shields.io/badge/python-3.8+-blue?style=for-the-badge&logo=python&logoColor=white" alt="Python">
 </p>
 
-**Modern Python stream processing framework inspired by Apache Camel**
+<p align="center">
+  <b>🎯 One-line automation • 🤖 AI-powered • 🎤 Voice control • 🖥️ Desktop automation</b>
+</p>
 
-Streamware is a lightweight, Pythonic stream processing framework that brings the power of Apache Camel-style workflows to Python. It features native support for streaming data, protocol handlers, and integrations with popular message brokers and databases.
+---
+
+## ⚡ What Can You Do?
+
+```bash
+# 🤖 AI: Convert natural language to SQL
+sq llm "Get all users older than 30" --to-sql
+
+# 🎤 Voice: Type with your voice  
+sq voice-keyboard "wpisz hello world"
+
+# 🖱️ AI Vision: Click anywhere by description
+sq voice-click "click on the Submit button"
+
+# 📧 Send notifications everywhere
+sq slack general "Deploy complete! ✅"
+sq telegram @channel "Server status: OK"
+
+# 🎬 Analyze video with AI
+sq media describe_video --file presentation.mp4
+
+# 🔄 Data pipelines
+sq get api.example.com/users | sq transform --json | sq file save users.json
+```
+
+---
+
+**Streamware** is a modern Python framework that combines:
+- **Apache Camel-style** data pipelines
+- **AI/LLM integration** (OpenAI, Ollama, Groq, Anthropic...)
+- **Voice control** and desktop automation
+- **Multi-channel communication** (Email, Slack, Telegram, Discord...)
+
+## 🎯 Why Streamware?
+
+| Problem | Streamware Solution |
+|---------|---------------------|
+| "I need to automate repetitive tasks" | `sq auto type "Hello"` - one command |
+| "I want AI without complex setup" | `sq llm "explain this code"` - works out of the box |
+| "Voice control is complicated" | `sq voice-keyboard` - just speak |
+| "Sending notifications is tedious" | `sq slack #channel "message"` - done |
+| "ETL pipelines need too much code" | `sq get api | sq transform | sq save` |
 
 ## ✨ Features
 
-- 🚀 **Camel-style URI routing** with native Python operators
-- 🔄 **Streaming data pipelines** with generator-based processing
-- 🎯 **Component registry** with automatic MIME type validation
-- 🌊 **Advanced workflow patterns**: split/join, multicast, switch
-- 🔌 **Rich integrations**: Kafka, RabbitMQ, PostgreSQL, CurLLM
-- 📊 **Built-in diagnostics** and structured logging
-- 🎬 **Multimedia support**: RTSP, MP4, audio transcription
-- 🌐 **Protocol handlers**: `stream://`, `chat://` system protocols
+| Category | Features |
+|----------|----------|
+| 🤖 **AI/LLM** | OpenAI, Ollama, Groq, Anthropic, Gemini, DeepSeek, Mistral |
+| 🎤 **Voice** | Speech-to-text, text-to-speech, voice commands |
+| 🖥️ **Automation** | Mouse, keyboard, screenshots, AI-powered clicking |
+| 📡 **Communication** | Email, Slack, Telegram, Discord, WhatsApp, SMS |
+| 🔄 **Pipelines** | HTTP, files, transforms, Kafka, RabbitMQ, PostgreSQL |
+| 🎬 **Media** | Video analysis, image description, audio transcription |
 
 ## 📦 Installation
 
-### Option 1: pip install (Basic)
 ```bash
+# Basic install
 pip install streamware
-```
 
-### Option 2: pip install (Full)
-```bash
-# For CurLLM integration (web automation with LLM)
-pip install streamware[curllm]
-
-# For message brokers
-pip install streamware[kafka,rabbitmq]
-
-# For database support
-pip install streamware[postgres]
-
-# For multimedia processing
-pip install streamware[multimedia]
-
-# Everything
+# With all features
 pip install streamware[all]
+
+# Or specific features
+pip install streamware[llm,voice,automation]
 ```
 
-### Option 3: Docker (Recommended for Testing) 🐳
+### System Dependencies (optional but recommended)
 
 ```bash
-# Clone and start
-git clone https://github.com/softreck/streamware.git
-cd streamware
-docker-compose up -d
+# Linux/Ubuntu - for voice and automation
+sudo apt-get install xdotool espeak scrot ffmpeg
 
-# Enter container
-docker-compose exec streamware bash
-
-# Start using!
-sq get mock-api:8080/users --json
+# macOS
+brew install xdotool espeak ffmpeg
 ```
 
-See [DOCKER_QUICKSTART.md](DOCKER_QUICKSTART.md) for complete Docker guide.
+## 🚀 Quick Start CLI (`sq`)
 
-## 🚀 Quick Start
+### 🤖 AI/LLM Commands
+
+```bash
+# Generate text
+sq llm "Write a haiku about coding"
+
+# Convert to SQL
+sq llm "Get users who signed up last week" --to-sql
+# Output: SELECT * FROM users WHERE created_at >= DATE_SUB(NOW(), INTERVAL 1 WEEK)
+
+# Analyze code
+sq llm --analyze --input main.py
+
+# Use different providers (auto-detects API keys)
+sq llm "Hello" --provider openai/gpt-4o
+sq llm "Hello" --provider groq/llama3-70b-8192
+sq llm "Hello" --provider ollama/qwen2.5:14b
+```
+
+### 🎤 Voice Control
+
+```bash
+# Type with voice (Polish/English)
+sq voice-keyboard "wpisz hello world"
+sq voice-keyboard --interactive  # Continuous mode
+
+# AI-powered clicking (finds elements visually!)
+sq voice-click "click on the blue Submit button"
+sq voice-click "kliknij w menu File"
+
+# Text to speech
+sq voice speak "Hello, I am Streamware"
+```
+
+### 🖥️ Desktop Automation
+
+```bash
+# Mouse
+sq auto click --x 100 --y 200
+sq auto move --x 500 --y 300
+
+# Keyboard
+sq auto type --text "Hello World"
+sq auto press --key enter
+sq auto hotkey --keys ctrl+s
+
+# Screenshot
+sq auto screenshot /tmp/screen.png
+```
+
+### 📡 Communication
+
+```bash
+# Slack
+sq slack general "Deploy complete! 🚀"
+
+# Telegram
+sq telegram @mychannel "Server status: OK"
+
+# Email
+sq email user@example.com --subject "Report" --body "See attached"
+
+# Discord
+sq discord --webhook URL --message "Alert!"
+```
+
+### 🎬 Media Analysis
+
+```bash
+# Describe image with AI
+sq media describe_image --file photo.jpg
+
+# Analyze video (scene tracking!)
+sq media describe_video --file video.mp4
+
+# Transcribe audio
+sq media transcribe --file audio.mp3
+```
+
+### 🔄 Data Pipelines
+
+```bash
+# API to file
+sq get api.example.com/users | sq file save users.json
+
+# Transform data
+sq file read data.csv | sq transform --csv --json | sq file save data.json
+
+# PostgreSQL
+sq postgres "SELECT * FROM users" --json
+```
+
+---
+
+## 📖 Python API
 
 ### Simple Pipeline
 ```python

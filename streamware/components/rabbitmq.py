@@ -18,7 +18,7 @@ try:
     RABBITMQ_AVAILABLE = True
 except ImportError:
     RABBITMQ_AVAILABLE = False
-    logger.warning("pika not installed. RabbitMQ components will not be available.")
+    logger.debug("pika not installed. RabbitMQ components will not be available.")
 
 
 @register("rabbitmq")

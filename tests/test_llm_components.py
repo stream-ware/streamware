@@ -205,42 +205,37 @@ class TestAutomationComponent:
     
     @patch('subprocess.run')
     def test_click_mock(self, mock_run):
-        """Test mouse click without real pyautogui dependency"""
+        """Test mouse click using xdotool (primary) or pyautogui fallback"""
         mock_run.return_value = Mock(returncode=0)
-        fake_pyautogui = MagicMock()
         
-        with patch.dict(sys.modules, {'pyautogui': fake_pyautogui}):
-            result = flow("automation://click?x=100&y=200").run()
+        result = flow("automation://click?x=100&y=200").run()
         
         assert result["success"] is True
         assert result["x"] == 100
         assert result["y"] == 200
-        fake_pyautogui.click.assert_called_once()
+        assert result.get("method") == "xdotool"
     
     @patch('subprocess.run')
     def test_type_text_mock(self, mock_run):
-        """Test typing text without real pyautogui dependency"""
+        """Test typing text using xdotool (primary) or pyautogui fallback"""
         mock_run.return_value = Mock(returncode=0)
-        fake_pyautogui = MagicMock()
         
-        with patch.dict(sys.modules, {'pyautogui': fake_pyautogui}):
-            result = flow("automation://type?text=Hello").run()
+        result = flow("automation://type?text=Hello").run()
         
         assert result["success"] is True
         assert result["text"] == "Hello"
-        fake_pyautogui.typewrite.assert_called_once()
+        assert result.get("method") == "xdotool"
     
     @patch('subprocess.run')
     def test_hotkey_mock(self, mock_run):
-        """Test hotkey press without real pyautogui dependency"""
+        """Test hotkey press using xdotool (primary) or pyautogui fallback"""
         mock_run.return_value = Mock(returncode=0)
-        fake_pyautogui = MagicMock()
         
-        with patch.dict(sys.modules, {'pyautogui': fake_pyautogui}):
-            result = flow("automation://hotkey?keys=ctrl+c").run()
+        result = flow("automation://hotkey?keys=ctrl+c").run()
         
         assert result["success"] is True
-        fake_pyautogui.hotkey.assert_called_once_with('ctrl', 'c')
+        assert result["keys"] == ['ctrl', 'c']
+        assert result.get("method") == "xdotool"
 
 
 class TestLLMIntegration:

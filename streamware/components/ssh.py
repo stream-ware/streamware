@@ -23,7 +23,7 @@ try:
     PARAMIKO_AVAILABLE = True
 except ImportError:
     PARAMIKO_AVAILABLE = False
-    logger.warning("paramiko not installed. SSH features will use system SSH")
+    logger.debug("paramiko not installed. SSH features will use system SSH")
 
 
 @register("ssh")

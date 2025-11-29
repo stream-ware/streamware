@@ -127,125 +127,141 @@ class AutomationComponent(Component):
                 logger.warning(f"pyautogui import issue: {e}")
     
     def _click(self, data: Any) -> Dict:
-        """Click mouse at position"""
+        """Click mouse at position using xdotool (preferred) or pyautogui"""
+        if self.x is None or self.y is None:
+            raise ComponentError("x and y coordinates required")
+        
+        x, y = int(self.x), int(self.y)
+        logger.info(f"Clicking at ({x}, {y})")
+        
+        # Try xdotool first (more reliable, no display auth issues)
+        try:
+            import subprocess
+            # Move mouse and click
+            subprocess.run(['xdotool', 'mousemove', str(x), str(y)], timeout=5, check=True)
+            click_cmd = ['xdotool', 'click', '1' if self.button == 'left' else '3']
+            for _ in range(self.clicks):
+                subprocess.run(click_cmd, timeout=5, check=True)
+            return {"success": True, "action": "click", "x": x, "y": y, "button": self.button, "clicks": self.clicks, "method": "xdotool"}
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
+        
+        # Fallback to pyautogui
         try:
             import pyautogui
-            
-            if self.x is None or self.y is None:
-                raise ComponentError("x and y coordinates required")
-            
-            x, y = int(self.x), int(self.y)
-            
-            logger.info(f"Clicking at ({x}, {y})")
             pyautogui.click(x, y, clicks=self.clicks, button=self.button, duration=self.duration)
-            
-            return {
-                "success": True,
-                "action": "click",
-                "x": x,
-                "y": y,
-                "button": self.button,
-                "clicks": self.clicks
-            }
+            return {"success": True, "action": "click", "x": x, "y": y, "button": self.button, "clicks": self.clicks, "method": "pyautogui"}
         except ImportError:
-            raise ComponentError("pyautogui not installed. Install: pip install pyautogui")
+            raise ComponentError("No click tool available. Install: sudo apt-get install xdotool OR pip install pyautogui")
         except Exception as e:
-            error_msg = str(e)
-            if "display" in error_msg.lower() or "authorization" in error_msg.lower():
-                raise ComponentError(
-                    "Cannot connect to display. This may happen when:\n"
-                    "1. Running in SSH without X11 forwarding (use: ssh -X)\n"
-                    "2. Running as different user (try: xhost +local:)\n"
-                    "3. Running in Docker/headless (install xvfb: apt-get install xvfb)\n"
-                    "4. DISPLAY variable not set correctly\n\n"
-                    f"Original error: {error_msg}"
-                )
-            raise
+            raise ComponentError(f"Click failed: {e}. Try: sudo apt-get install xdotool")
     
     def _move(self, data: Any) -> Dict:
-        """Move mouse to position"""
+        """Move mouse to position using xdotool (preferred) or pyautogui"""
+        if self.x is None or self.y is None:
+            raise ComponentError("x and y coordinates required")
+        
+        x, y = int(self.x), int(self.y)
+        logger.info(f"Moving to ({x}, {y})")
+        
+        # Try xdotool first
+        try:
+            import subprocess
+            subprocess.run(['xdotool', 'mousemove', str(x), str(y)], timeout=5, check=True)
+            return {"success": True, "action": "move", "x": x, "y": y, "method": "xdotool"}
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
+        
+        # Fallback to pyautogui
         try:
             import pyautogui
-            
-            if self.x is None or self.y is None:
-                raise ComponentError("x and y coordinates required")
-            
-            x, y = int(self.x), int(self.y)
-            
-            logger.info(f"Moving to ({x}, {y})")
             pyautogui.moveTo(x, y, duration=self.duration)
-            
-            return {
-                "success": True,
-                "action": "move",
-                "x": x,
-                "y": y
-            }
+            return {"success": True, "action": "move", "x": x, "y": y, "method": "pyautogui"}
         except ImportError:
-            raise ComponentError("pyautogui not installed. Install: pip install pyautogui")
+            raise ComponentError("No mouse tool available. Install: sudo apt-get install xdotool OR pip install pyautogui")
+        except Exception as e:
+            raise ComponentError(f"Move failed: {e}")
     
     def _type_text(self, data: Any) -> Dict:
-        """Type text"""
+        """Type text using xdotool (preferred) or pyautogui"""
+        text = self.text or str(data)
+        if not text:
+            raise ComponentError("Text required")
+        
+        logger.info(f"Typing: {text}")
+        
+        # Try xdotool first (more reliable, no display issues)
+        try:
+            import subprocess
+            subprocess.run(['xdotool', 'type', '--', text], timeout=10, check=True)
+            return {"success": True, "action": "type", "text": text, "method": "xdotool"}
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
+        
+        # Fallback to pyautogui
         try:
             import pyautogui
-            
-            text = self.text or str(data)
-            if not text:
-                raise ComponentError("Text required")
-            
-            logger.info(f"Typing: {text}")
             pyautogui.typewrite(text, interval=self.interval)
-            
-            return {
-                "success": True,
-                "action": "type",
-                "text": text
-            }
+            return {"success": True, "action": "type", "text": text, "method": "pyautogui"}
         except ImportError:
-            raise ComponentError("pyautogui not installed. Install: pip install pyautogui")
+            raise ComponentError("No typing tool available. Install: sudo apt-get install xdotool OR pip install pyautogui")
+        except Exception as e:
+            raise ComponentError(f"Typing failed: {e}. Try: sudo apt-get install xdotool")
     
     def _press_key(self, data: Any) -> Dict:
-        """Press a key"""
+        """Press a key using xdotool (preferred) or pyautogui"""
+        if not self.key:
+            raise ComponentError("Key required")
+        
+        logger.info(f"Pressing key: {self.key}")
+        
+        # Try xdotool first
+        try:
+            import subprocess
+            subprocess.run(['xdotool', 'key', self.key], timeout=5, check=True)
+            return {"success": True, "action": "press", "key": self.key, "method": "xdotool"}
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
+        
+        # Fallback to pyautogui
         try:
             import pyautogui
-            
-            if not self.key:
-                raise ComponentError("Key required")
-            
-            logger.info(f"Pressing key: {self.key}")
             pyautogui.press(self.key)
-            
-            return {
-                "success": True,
-                "action": "press",
-                "key": self.key
-            }
+            return {"success": True, "action": "press", "key": self.key, "method": "pyautogui"}
         except ImportError:
-            raise ComponentError("pyautogui not installed. Install: pip install pyautogui")
+            raise ComponentError("No key press tool available. Install: sudo apt-get install xdotool OR pip install pyautogui")
+        except Exception as e:
+            raise ComponentError(f"Key press failed: {e}")
     
     def _hotkey(self, data: Any) -> Dict:
-        """Press key combination"""
+        """Press key combination using xdotool (preferred) or pyautogui"""
+        if not self.keys:
+            raise ComponentError("Keys required")
+        
+        # URLs often decode "+" as space, so support both separators
+        raw = self.keys.replace(" ", "+")
+        keys_list = [k for k in raw.split("+") if k]
+        
+        logger.info(f"Pressing hotkey: {self.keys}")
+        
+        # Try xdotool first
+        try:
+            import subprocess
+            xdotool_keys = "+".join(keys_list)
+            subprocess.run(['xdotool', 'key', xdotool_keys], timeout=5, check=True)
+            return {"success": True, "action": "hotkey", "keys": keys_list, "method": "xdotool"}
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
+        
+        # Fallback to pyautogui
         try:
             import pyautogui
-            
-            if not self.keys:
-                raise ComponentError("Keys required")
-            
-            # URLs often decode "+" as space, so support both separators
-            # e.g. "ctrl+c" or "ctrl c" -> ["ctrl", "c"]
-            raw = self.keys.replace(" ", "+")
-            keys_list = [k for k in raw.split("+") if k]
-            
-            logger.info(f"Pressing hotkey: {self.keys}")
             pyautogui.hotkey(*keys_list)
-            
-            return {
-                "success": True,
-                "action": "hotkey",
-                "keys": keys_list
-            }
+            return {"success": True, "action": "hotkey", "keys": keys_list, "method": "pyautogui"}
         except ImportError:
-            raise ComponentError("pyautogui not installed. Install: pip install pyautogui")
+            raise ComponentError("No hotkey tool available. Install: sudo apt-get install xdotool OR pip install pyautogui")
+        except Exception as e:
+            raise ComponentError(f"Hotkey failed: {e}")
     
     def _screenshot(self, data: Any) -> Dict:
         """Take screenshot using scrot or pyautogui"""
