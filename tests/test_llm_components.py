@@ -4,6 +4,7 @@ Tests for LLM-based components
 
 import pytest
 from unittest.mock import Mock, patch, MagicMock
+import sys
 import json
 
 from streamware import flow
@@ -161,17 +162,19 @@ class TestVoiceComponent:
         assert hasattr(f, 'run')
     
     @patch('subprocess.run')
-    @patch('pyttsx3.init')
-    def test_speak_text_mock(self, mock_init, mock_run):
-        """Test text-to-speech"""
+    def test_speak_text_mock(self, mock_run):
+        """Test text-to-speech without real pyttsx3 dependency"""
         mock_run.return_value = Mock(returncode=0)
-        mock_engine = Mock()
-        mock_init.return_value = mock_engine
+        fake_pyttsx3 = MagicMock()
+        fake_engine = MagicMock()
+        fake_pyttsx3.init.return_value = fake_engine
         
-        result = flow("voice://speak?text=Hello World").run()
+        with patch.dict(sys.modules, {'pyttsx3': fake_pyttsx3}):
+            result = flow("voice://speak?text=Hello World").run()
         
-        assert result["success"] == True
+        assert result["success"] is True
         assert result["text"] == "Hello World"
+        fake_pyttsx3.init.assert_called_once()
     
     @patch('subprocess.run')
     def test_voice_listen_no_mic(self, mock_run):
@@ -201,40 +204,43 @@ class TestAutomationComponent:
         assert hasattr(f, 'run')
     
     @patch('subprocess.run')
-    @patch('pyautogui.click')
-    def test_click_mock(self, mock_click, mock_run):
-        """Test mouse click"""
+    def test_click_mock(self, mock_run):
+        """Test mouse click without real pyautogui dependency"""
         mock_run.return_value = Mock(returncode=0)
+        fake_pyautogui = MagicMock()
         
-        result = flow("automation://click?x=100&y=200").run()
+        with patch.dict(sys.modules, {'pyautogui': fake_pyautogui}):
+            result = flow("automation://click?x=100&y=200").run()
         
-        assert result["success"] == True
+        assert result["success"] is True
         assert result["x"] == 100
         assert result["y"] == 200
-        mock_click.assert_called_once()
+        fake_pyautogui.click.assert_called_once()
     
     @patch('subprocess.run')
-    @patch('pyautogui.typewrite')
-    def test_type_text_mock(self, mock_type, mock_run):
-        """Test typing text"""
+    def test_type_text_mock(self, mock_run):
+        """Test typing text without real pyautogui dependency"""
         mock_run.return_value = Mock(returncode=0)
+        fake_pyautogui = MagicMock()
         
-        result = flow("automation://type?text=Hello").run()
+        with patch.dict(sys.modules, {'pyautogui': fake_pyautogui}):
+            result = flow("automation://type?text=Hello").run()
         
-        assert result["success"] == True
+        assert result["success"] is True
         assert result["text"] == "Hello"
-        mock_type.assert_called_once()
+        fake_pyautogui.typewrite.assert_called_once()
     
     @patch('subprocess.run')
-    @patch('pyautogui.hotkey')
-    def test_hotkey_mock(self, mock_hotkey, mock_run):
-        """Test hotkey press"""
+    def test_hotkey_mock(self, mock_run):
+        """Test hotkey press without real pyautogui dependency"""
         mock_run.return_value = Mock(returncode=0)
+        fake_pyautogui = MagicMock()
         
-        result = flow("automation://hotkey?keys=ctrl+c").run()
+        with patch.dict(sys.modules, {'pyautogui': fake_pyautogui}):
+            result = flow("automation://hotkey?keys=ctrl+c").run()
         
-        assert result["success"] == True
-        mock_hotkey.assert_called_once_with('ctrl', 'c')
+        assert result["success"] is True
+        fake_pyautogui.hotkey.assert_called_once_with('ctrl', 'c')
 
 
 class TestLLMIntegration:

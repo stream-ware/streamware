@@ -40,7 +40,7 @@ class TransformComponent(Component):
         transform://jsonpath?query=$.items[*].name
         transform://template?file=template.j2
         transform://base64?decode=true
-        transform://regex?pattern=\d+&replace=X
+        transform://regex?pattern=\\d+&replace=X
     """
     
     def __init__(self, uri: StreamwareURI):

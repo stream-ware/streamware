@@ -3,6 +3,13 @@
 LLM Component Examples - AI-powered DSL Conversion
 
 Demonstrates natural language to DSL conversion using LLM.
+
+Provider format (LiteLLM compatible):
+    provider="openai/gpt-4o"
+    provider="ollama/qwen2.5:14b"
+    provider="anthropic/claude-3-5-sonnet-20240620"
+    provider="gemini/gemini-2.0-flash"
+    provider="groq/llama3-70b-8192"
 """
 
 import sys
@@ -28,8 +35,8 @@ def example_1_text_to_sql():
     for nl in examples:
         print(f"\nNatural Language: {nl}")
         
-        # Convert to SQL
-        sql = llm_to_sql(nl, provider="ollama")  # Use free local Ollama
+        # Convert to SQL using LiteLLM-style provider format
+        sql = llm_to_sql(nl, provider="ollama/qwen2.5:14b")  # Use free local Ollama
         print(f"Generated SQL: {sql}")
 
 
@@ -49,7 +56,7 @@ def example_2_text_to_streamware():
         print(f"\nRequest: {nl}")
         
         # Convert to Streamware command
-        cmd = llm_to_streamware(nl, provider="ollama")
+        cmd = llm_to_streamware(nl, provider="ollama/llama3.2")
         print(f"Command: {cmd}")
 
 
@@ -67,7 +74,7 @@ def example_3_analyze_text():
     print(f"Text: {text}")
     
     # Analyze
-    analysis = llm_analyze(text, provider="ollama")
+    analysis = llm_analyze(text, provider="ollama/llama3.2")
     print(f"\nAnalysis:")
     import json
     print(json.dumps(analysis, indent=2))
@@ -93,8 +100,10 @@ def example_4_quick_cli():
     # Summarize
     echo "long text..." | sq llm --summarize
     
-    # Use different provider
-    sq llm "generate SQL" --to-sql --provider ollama
+    # Use different providers (LiteLLM format)
+    sq llm "generate SQL" --to-sql --provider ollama/qwen2.5:14b
+    sq llm "generate SQL" --to-sql --provider openai/gpt-4o
+    sq llm "generate SQL" --to-sql --provider groq/llama3-70b-8192
     """)
 
 
@@ -112,8 +121,8 @@ def example_5_pipeline_generation():
     
     print(f"Request:\n{request}")
     
-    # Generate pipeline
-    pipeline = flow("llm://generate?prompt=" + request + "&provider=ollama").run()
+    # Generate pipeline with LiteLLM-style provider
+    pipeline = flow("llm://generate?prompt=" + request + "&provider=ollama/qwen2.5:14b").run()
     print(f"\nGenerated Pipeline:\n{pipeline}")
 
 
@@ -197,7 +206,7 @@ def example_9_monitoring_setup():
     print(f"Request: {monitoring_request}")
     
     # Generate monitoring script
-    script = flow("llm://convert?to=bash&prompt=" + monitoring_request + "&provider=ollama").run()
+    script = flow("llm://convert?to=bash&prompt=" + monitoring_request + "&provider=ollama/llama3.2").run()
     print(f"\nGenerated Script:\n{script}")
 
 
@@ -280,8 +289,12 @@ def main():
     print("  sq llm 'text' --analyze")
     print("  sq llm 'text' --summarize")
     print("\n🔑 Setup:")
+    print("  # Provider format: provider/model")
+    print("  export LLM_PROVIDER=openai/gpt-4o")
     print("  export OPENAI_API_KEY=your_key")
-    print("  Or install Ollama (free, local): ollama.ai")
+    print("  # Or use local Ollama (free):")
+    print("  export LLM_PROVIDER=ollama/qwen2.5:14b")
+    print("  ollama pull qwen2.5:14b")
 
 
 if __name__ == "__main__":

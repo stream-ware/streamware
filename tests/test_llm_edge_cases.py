@@ -4,7 +4,8 @@ Tests error handling, edge cases, and unusual inputs
 """
 
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
+import sys
 
 from streamware import flow
 from streamware.exceptions import ComponentError
@@ -147,7 +148,10 @@ class TestVoiceEdgeCases:
         
         # Should handle or truncate
         try:
-            with patch('pyttsx3.init'):
+            fake_pyttsx3 = MagicMock()
+            fake_engine = MagicMock()
+            fake_pyttsx3.init.return_value = fake_engine
+            with patch.dict(sys.modules, {'pyttsx3': fake_pyttsx3}):
                 result = flow(f"voice://speak?text={long_text[:500]}").run()
                 assert result is not None
         except Exception:
@@ -167,7 +171,10 @@ class TestVoiceEdgeCases:
         """Test voice with invalid language"""
         # Should use default or fail gracefully
         try:
-            with patch('pyttsx3.init'):
+            fake_pyttsx3 = MagicMock()
+            fake_engine = MagicMock()
+            fake_pyttsx3.init.return_value = fake_engine
+            with patch.dict(sys.modules, {'pyttsx3': fake_pyttsx3}):
                 result = flow("voice://speak?text=test&language=invalid").run()
         except Exception:
             pass
@@ -185,7 +192,8 @@ class TestAutomationEdgeCases:
         """Test automation with coordinates outside screen"""
         # Should fail or clip to screen bounds
         try:
-            with patch('pyautogui.click'):
+            fake_pyautogui = MagicMock()
+            with patch.dict(sys.modules, {'pyautogui': fake_pyautogui}):
                 result = flow("automation://click?x=999999&y=999999").run()
         except Exception:
             pass

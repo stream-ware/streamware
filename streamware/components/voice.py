@@ -147,8 +147,9 @@ class VoiceComponent(Component):
     
     def _speak(self, data: Any) -> Dict:
         """Speak text (TTS)"""
-        text = self.text or str(data)
-        if not text:
+        # Prefer explicit text param; fallback to data only if text not provided
+        text = self.text if self.text else (str(data) if data else None)
+        if not text or not text.strip():
             raise ComponentError("Text required for TTS")
         
         logger.info(f"Speaking: {text}")

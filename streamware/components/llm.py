@@ -3,12 +3,21 @@ LLM Component for Streamware
 
 AI-powered text processing with Natural Language to DSL conversion.
 Supports: SQL, Streamware Quick commands, Flow DSL, and custom conversions.
+
+Provider format (LiteLLM compatible):
+    provider="openai/gpt-4o"
+    provider="ollama/qwen2.5:14b"
+    provider="anthropic/claude-3-5-sonnet-20240620"
+    provider="gemini/gemini-2.0-flash"
+    provider="groq/llama3-70b-8192"
+    provider="deepseek/deepseek-chat"
 """
 
 from __future__ import annotations
 import os
 import json
 import re
+import subprocess
 from typing import Any, Optional, Dict, List
 from ..core import Component, register
 from ..uri import StreamwareURI
@@ -30,9 +39,43 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
 
+# Try LiteLLM for unified provider access
+try:
+    import litellm
+    LITELLM_AVAILABLE = True
+except ImportError:
+    LITELLM_AVAILABLE = False
+
 # Ollama uses requests (usually available)
 import requests
 OLLAMA_AVAILABLE = True
+
+# Provider -> API key environment variable mapping
+PROVIDER_API_KEYS = {
+    "openai": ["OPENAI_API_KEY"],
+    "anthropic": ["ANTHROPIC_API_KEY"],
+    "gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    "groq": ["GROQ_API_KEY"],
+    "deepseek": ["DEEPSEEK_API_KEY"],
+    "mistral": ["MISTRAL_API_KEY"],
+    "cohere": ["COHERE_API_KEY"],
+    "together": ["TOGETHER_API_KEY", "TOGETHERAI_API_KEY"],
+    "fireworks": ["FIREWORKS_API_KEY"],
+    "anyscale": ["ANYSCALE_API_KEY"],
+    "perplexity": ["PERPLEXITY_API_KEY"],
+    "ollama": [],  # No key needed
+}
+
+# Default models per provider
+DEFAULT_MODELS = {
+    "openai": "gpt-4o-mini",
+    "anthropic": "claude-3-5-sonnet-20241022",
+    "ollama": "llama3.2:latest",
+    "gemini": "gemini-2.0-flash",
+    "groq": "llama3-70b-8192",
+    "deepseek": "deepseek-chat",
+    "mistral": "mistral-large-latest",
+}
 
 
 @register("llm")
@@ -50,16 +93,21 @@ class LLMComponent(Component):
     - translate: Translate between languages
     
     URI Examples:
-        llm://generate?prompt=Write a poem about coding
-        llm://convert?to=sql&prompt=Get all users older than 30
-        llm://sql?prompt=Find active orders from last week
-        llm://streamware?prompt=Upload file to SSH server
-        llm://analyze?prompt=Extract key points from this text
+        llm://generate?prompt=Write a poem&provider=openai/gpt-4o
+        llm://generate?prompt=Hello&provider=ollama/qwen2.5:14b
+        llm://sql?prompt=Get all users&provider=gemini/gemini-2.0-flash
+        llm://analyze?prompt=Extract points&provider=groq/llama3-70b-8192
     
-    Providers:
-        - openai (default, requires OPENAI_API_KEY)
-        - anthropic (requires ANTHROPIC_API_KEY)
-        - ollama (local, free)
+    Provider format (LiteLLM compatible):
+        openai/gpt-4o, openai/gpt-4o-mini, openai/o1-mini
+        anthropic/claude-3-5-sonnet-20240620, anthropic/claude-3-haiku-20240307
+        ollama/llama3.2, ollama/qwen2.5:14b, ollama/llava
+        gemini/gemini-2.0-flash, gemini/gemini-1.5-pro
+        groq/llama3-70b-8192, groq/llama3-8b-8192
+        deepseek/deepseek-chat
+        
+    API keys are auto-detected from environment:
+        OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, GROQ_API_KEY, etc.
     """
     
     input_mime = "text/plain"
@@ -69,13 +117,20 @@ class LLMComponent(Component):
         super().__init__(uri)
         self.operation = uri.operation or "generate"
         
-        # Provider configuration
-        self.provider = uri.get_param("provider", os.environ.get("LLM_PROVIDER", "openai"))
-        self.model = uri.get_param("model", self._get_default_model())
+        # Parse provider in LiteLLM format: "provider/model" or just "provider"
+        provider_param = uri.get_param("provider", os.environ.get("LLM_PROVIDER", "openai/gpt-4o-mini"))
+        self.provider, self.model = self._parse_provider(provider_param)
         
-        # API keys
-        self.openai_key = uri.get_param("openai_key", os.environ.get("OPENAI_API_KEY"))
-        self.anthropic_key = uri.get_param("anthropic_key", os.environ.get("ANTHROPIC_API_KEY"))
+        # Override model if explicitly specified
+        explicit_model = uri.get_param("model")
+        if explicit_model:
+            self.model = explicit_model
+        
+        # Auto-detect API key from environment
+        self.api_key = uri.get_param("api_key") or uri.get_param("api_token") or self._get_api_key()
+        
+        # Custom base URL (for proxies, local deployments)
+        self.base_url = uri.get_param("base_url", os.environ.get(f"{self.provider.upper()}_BASE_URL"))
         self.ollama_url = uri.get_param("ollama_url", os.environ.get("OLLAMA_URL", "http://localhost:11434"))
         
         # Parameters
@@ -87,26 +142,77 @@ class LLMComponent(Component):
         # DSL conversion target
         self.to_dsl = uri.get_param("to", "sql")
         
-        # Validate provider
-        if self.provider == "openai" and not OPENAI_AVAILABLE and not self.openai_key:
-            logger.warning("OpenAI not available, falling back to Ollama")
-            self.provider = "ollama"
-        elif self.provider == "anthropic" and not ANTHROPIC_AVAILABLE and not self.anthropic_key:
-            logger.warning("Anthropic not available, falling back to Ollama")
-            self.provider = "ollama"
+        # Auto-install litellm if using non-standard provider
+        if self.provider not in ["openai", "anthropic", "ollama"] and not LITELLM_AVAILABLE:
+            self._ensure_litellm()
+        
+        # Validate provider availability
+        self._validate_provider()
+        
+        logger.info(f"LLM initialized: {self.provider}/{self.model}")
     
-    def _get_default_model(self) -> str:
-        """Get default model for provider"""
-        models = {
-            "openai": "gpt-4o-mini",
-            "anthropic": "claude-3-5-sonnet-20241022",
-            "ollama": "llama3.2:latest"
-        }
-        return models.get(self.provider, "gpt-4o-mini")
+    def _parse_provider(self, provider_str: str) -> tuple:
+        """Parse provider string in format 'provider/model' or 'provider'"""
+        if "/" in provider_str:
+            parts = provider_str.split("/", 1)
+            provider = parts[0].lower()
+            model = parts[1]
+            return provider, model
+        else:
+            provider = provider_str.lower()
+            model = DEFAULT_MODELS.get(provider, "gpt-4o-mini")
+            return provider, model
+    
+    def _get_api_key(self) -> Optional[str]:
+        """Auto-detect API key from environment variables"""
+        env_vars = PROVIDER_API_KEYS.get(self.provider, [])
+        for var in env_vars:
+            key = os.environ.get(var)
+            if key:
+                return key
+        return None
+    
+    def _ensure_litellm(self):
+        """Install litellm if needed for non-standard providers"""
+        global LITELLM_AVAILABLE, litellm
+        try:
+            import litellm
+            LITELLM_AVAILABLE = True
+        except ImportError:
+            logger.info("Installing litellm for extended provider support...")
+            try:
+                subprocess.run(["pip", "install", "litellm"], check=True, capture_output=True)
+                import litellm
+                LITELLM_AVAILABLE = True
+            except Exception as e:
+                logger.warning(f"Could not install litellm: {e}")
+    
+    def _validate_provider(self):
+        """Validate provider is available"""
+        if self.provider == "ollama":
+            return  # Ollama doesn't need API key
+        
+        if self.provider in ["openai", "anthropic", "gemini", "groq", "deepseek", "mistral"]:
+            if not self.api_key and self.provider != "ollama":
+                env_vars = PROVIDER_API_KEYS.get(self.provider, [])
+                logger.warning(
+                    f"No API key found for {self.provider}. "
+                    f"Set one of: {', '.join(env_vars)}"
+                )
+                # Try falling back to Ollama
+                if OLLAMA_AVAILABLE:
+                    logger.info("Falling back to Ollama")
+                    self.provider = "ollama"
+                    self.model = DEFAULT_MODELS["ollama"]
     
     def process(self, data: Any) -> Any:
         """Process LLM operation"""
-        logger.info(f"LLM operation: {self.operation} with {self.provider}")
+        # Normalize legacy / alias operation names
+        op = self.operation
+        if op == "to_sql":
+            op = "sql"
+        
+        logger.info(f"LLM operation: {op} with {self.provider}")
         
         operations = {
             "generate": self._generate,
@@ -119,7 +225,7 @@ class LLMComponent(Component):
             "chat": self._chat,
         }
         
-        operation_func = operations.get(self.operation)
+        operation_func = operations.get(op)
         if not operation_func:
             raise ComponentError(f"Unknown LLM operation: {self.operation}")
         
@@ -127,9 +233,9 @@ class LLMComponent(Component):
     
     def _generate(self, data: Any) -> str:
         """Generate text from prompt"""
-        prompt = self.prompt or str(data)
+        prompt = self.prompt if self.prompt else (str(data) if data else None)
         
-        if not prompt:
+        if not prompt or not prompt.strip():
             raise ComponentError("No prompt provided")
         
         return self._call_llm(prompt)
@@ -230,24 +336,109 @@ Return ONLY valid JSON."""
     
     def _call_llm(self, prompt: str, system: str = None) -> str:
         """Call LLM provider"""
+        # Use LiteLLM for unified access if available and not using native providers
+        if LITELLM_AVAILABLE and self.provider not in ["ollama"]:
+            return self._call_litellm(prompt, system)
+        
+        # Native provider implementations
         if self.provider == "openai":
             return self._call_openai(prompt, system)
         elif self.provider == "anthropic":
             return self._call_anthropic(prompt, system)
         elif self.provider == "ollama":
             return self._call_ollama(prompt, system)
+        elif self.provider in ["gemini", "groq", "deepseek", "mistral", "cohere", "together"]:
+            # Try LiteLLM, or fall back to direct API
+            if LITELLM_AVAILABLE:
+                return self._call_litellm(prompt, system)
+            else:
+                return self._call_generic_openai_compatible(prompt, system)
         else:
             raise ComponentError(f"Unknown LLM provider: {self.provider}")
+    
+    def _call_litellm(self, prompt: str, system: str = None) -> str:
+        """Call LLM via LiteLLM (unified interface for all providers)"""
+        try:
+            import litellm
+            
+            messages = []
+            if system:
+                messages.append({"role": "system", "content": system})
+            messages.append({"role": "user", "content": prompt})
+            
+            # Format model name for LiteLLM
+            model_name = f"{self.provider}/{self.model}"
+            
+            response = litellm.completion(
+                model=model_name,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                api_key=self.api_key,
+                base_url=self.base_url,
+            )
+            
+            return response.choices[0].message.content
+            
+        except Exception as e:
+            raise ComponentError(f"LiteLLM error ({self.provider}): {e}")
+    
+    def _call_generic_openai_compatible(self, prompt: str, system: str = None) -> str:
+        """Call OpenAI-compatible API (Groq, Together, etc.)"""
+        # Many providers use OpenAI-compatible APIs
+        base_urls = {
+            "groq": "https://api.groq.com/openai/v1",
+            "together": "https://api.together.xyz/v1",
+            "deepseek": "https://api.deepseek.com/v1",
+            "mistral": "https://api.mistral.ai/v1",
+            "fireworks": "https://api.fireworks.ai/inference/v1",
+            "anyscale": "https://api.endpoints.anyscale.com/v1",
+            "perplexity": "https://api.perplexity.ai",
+        }
+        
+        base_url = self.base_url or base_urls.get(self.provider)
+        if not base_url:
+            raise ComponentError(f"No base URL for provider: {self.provider}")
+        
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+        
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+        
+        try:
+            response = requests.post(
+                f"{base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=60
+            )
+            response.raise_for_status()
+            result = response.json()
+            return result["choices"][0]["message"]["content"]
+        except Exception as e:
+            raise ComponentError(f"{self.provider} API error: {e}")
     
     def _call_openai(self, prompt: str, system: str = None) -> str:
         """Call OpenAI API"""
         if not OPENAI_AVAILABLE:
             raise ComponentError("openai package not installed")
         
-        if not self.openai_key:
+        if not self.api_key:
             raise ComponentError("OPENAI_API_KEY not set")
         
-        client = openai.OpenAI(api_key=self.openai_key)
+        client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url)
         
         messages = []
         if system:
@@ -268,10 +459,10 @@ Return ONLY valid JSON."""
         if not ANTHROPIC_AVAILABLE:
             raise ComponentError("anthropic package not installed")
         
-        if not self.anthropic_key:
+        if not self.api_key:
             raise ComponentError("ANTHROPIC_API_KEY not set")
         
-        client = anthropic.Anthropic(api_key=self.anthropic_key)
+        client = anthropic.Anthropic(api_key=self.api_key)
         
         kwargs = {
             "model": self.model,

@@ -231,7 +231,10 @@ class AutomationComponent(Component):
             if not self.keys:
                 raise ComponentError("Keys required")
             
-            keys_list = self.keys.split("+")
+            # URLs often decode "+" as space, so support both separators
+            # e.g. "ctrl+c" or "ctrl c" -> ["ctrl", "c"]
+            raw = self.keys.replace(" ", "+")
+            keys_list = [k for k in raw.split("+") if k]
             
             logger.info(f"Pressing hotkey: {self.keys}")
             pyautogui.hotkey(*keys_list)
