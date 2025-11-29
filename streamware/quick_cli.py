@@ -234,6 +234,16 @@ Shortcuts:
     bot_parser.add_argument('--task', default='continue development', help='Task description')
     bot_parser.add_argument('--workspace', default='.', help='Workspace directory')
     
+    # Voice Mouse command
+    voice_mouse_parser = subparsers.add_parser('voice-click', help='Voice-controlled mouse')
+    voice_mouse_parser.add_argument('operation', nargs='?', default='listen_and_click',
+                                   choices=['click', 'move', 'listen_and_click'],
+                                   help='Voice mouse operation')
+    voice_mouse_parser.add_argument('--command', help='Voice command (e.g., "kliknij w button zatwierdź")')
+    voice_mouse_parser.add_argument('--language', default='pl', choices=['pl', 'en'], help='Language')
+    voice_mouse_parser.add_argument('--iterations', type=int, default=10, help='Number of iterations for listen mode')
+    voice_mouse_parser.add_argument('--confirm', action='store_true', default=True, help='Speak before clicking')
+    
     # Deploy command
     deploy_parser = subparsers.add_parser('deploy', help='Deploy to K8s, Compose, Swarm')
     deploy_parser.add_argument('platform', choices=['k8s', 'kubernetes', 'compose', 'swarm', 'docker'],
@@ -310,6 +320,8 @@ Shortcuts:
             return handle_auto(args)
         elif args.command == 'bot':
             return handle_bot(args)
+        elif args.command == 'voice-click':
+            return handle_voice_mouse(args)
         elif args.command == 'deploy':
             return handle_deploy(args)
         else:
@@ -882,6 +894,32 @@ def handle_bot(args) -> int:
         return 0
     except Exception as e:
         print(f"Bot operation failed: {e}", file=sys.stderr)
+        return 1
+
+
+def handle_voice_mouse(args) -> int:
+    """Handle voice-click command"""
+    uri = f"voice_mouse://{args.operation}?"
+    
+    if hasattr(args, 'command') and args.command:
+        uri += f"command={args.command}&"
+    if args.language:
+        uri += f"language={args.language}&"
+    if args.iterations:
+        uri += f"iterations={args.iterations}&"
+    if args.confirm:
+        uri += f"confirm={args.confirm}&"
+    
+    try:
+        result = flow(uri).run()
+        
+        if not args.quiet:
+            import json
+            print(json.dumps(result, indent=2))
+        
+        return 0
+    except Exception as e:
+        print(f"Voice mouse operation failed: {e}", file=sys.stderr)
         return 1
 
 

@@ -176,7 +176,9 @@ class Flow:
                     
             except Exception as e:
                 logger.error(f"Error in component {component.__class__.__name__}: {e}")
-                raise ComponentError(f"Pipeline failed at step {i+1}") from e
+                # Chain error message to preserve original error info
+                error_msg = f"Pipeline failed at step {i+1}: {str(e)}"
+                raise ComponentError(error_msg) from e
                 
         return data
         

@@ -341,6 +341,10 @@ def llm_generate(prompt: str, provider: str = "openai", model: str = None) -> st
     return flow(uri).run()
 
 
+# Alias for compatibility
+generate_text = llm_generate
+
+
 def llm_to_sql(natural_language: str, provider: str = "openai") -> str:
     """Quick natural language to SQL conversion"""
     from ..core import flow

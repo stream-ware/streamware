@@ -179,6 +179,19 @@ from .vscode_bot import (
     continue_bot,
 )
 
+from .voice_mouse import (
+    VoiceMouseComponent,
+    voice_click,
+    listen_and_click,
+)
+
+from .voice_keyboard import (
+    VoiceKeyboardComponent,
+    voice_type,
+    voice_press,
+    dictate,
+)
+
 __all__ = [
     # CurLLM
     "CurLLMComponent",
@@ -327,4 +340,15 @@ __all__ = [
     "click_accept",
     "click_reject",
     "continue_bot",
+    
+    # Voice Mouse
+    "VoiceMouseComponent",
+    "voice_click",
+    "listen_and_click",
+    
+    # Voice Keyboard
+    "VoiceKeyboardComponent",
+    "voice_type",
+    "voice_press",
+    "dictate",
 ]

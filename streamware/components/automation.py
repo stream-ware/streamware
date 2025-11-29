@@ -95,20 +95,36 @@ class AutomationComponent(Component):
         return operation_func(data)
     
     def _ensure_dependencies(self):
-        """Ensure pyautogui is installed"""
+        """Ensure dependencies are available (pyautogui or scrot)"""
+        # Check if scrot is available (preferred for screenshots)
+        try:
+            result = subprocess.run(['which', 'scrot'], capture_output=True, timeout=2)
+            if result.returncode == 0:
+                logger.info("scrot available for screenshots")
+                return  # scrot works, no need for pyautogui
+        except:
+            pass
+        
+        # Try to import pyautogui if scrot not available
         try:
             import pyautogui
             # Set failsafe to False to avoid issues
             pyautogui.FAILSAFE = False
+            logger.info("pyautogui available")
         except ImportError:
-            logger.info("Installing pyautogui...")
-            subprocess.run(["pip", "install", "pyautogui"], check=True, capture_output=True)
+            # Neither scrot nor pyautogui available
+            logger.warning(
+                "No automation tools found. For best results, install:\n"
+                "  sudo apt-get install scrot  (recommended)\n"
+                "  OR pip install pyautogui Pillow"
+            )
+            # Don't fail here - let specific operations fail if needed
         except Exception as e:
-            # Catch display connection errors
+            # Catch display connection errors but don't fail
             if "display" in str(e).lower() or "authorization" in str(e).lower():
-                logger.warning(f"Display connection issue: {e}. Running in headless mode may require xvfb.")
+                logger.warning(f"Display connection issue: {e}")
             else:
-                raise
+                logger.warning(f"pyautogui import issue: {e}")
     
     def _click(self, data: Any) -> Dict:
         """Click mouse at position"""
@@ -229,21 +245,47 @@ class AutomationComponent(Component):
             raise ComponentError("pyautogui not installed. Install: pip install pyautogui")
     
     def _screenshot(self, data: Any) -> Dict:
-        """Take screenshot"""
+        """Take screenshot using scrot or pyautogui"""
+        output = self.text or "screenshot.png"
+        
+        # Method 1: Try scrot (most reliable)
+        try:
+            logger.info(f"Taking screenshot with scrot: {output}")
+            result = subprocess.run(['scrot', output], capture_output=True, timeout=10)
+            if result.returncode == 0:
+                from pathlib import Path
+                if Path(output).exists():
+                    return {
+                        "success": True,
+                        "action": "screenshot",
+                        "file": output,
+                        "method": "scrot"
+                    }
+        except FileNotFoundError:
+            logger.debug("scrot not found")
+        except Exception as e:
+            logger.debug(f"scrot failed: {e}")
+        
+        # Method 2: Fallback to pyautogui
         try:
             import pyautogui
-            
-            output = self.text or "screenshot.png"
+            logger.info(f"Taking screenshot with pyautogui: {output}")
             screenshot = pyautogui.screenshot()
             screenshot.save(output)
-            
             return {
                 "success": True,
                 "action": "screenshot",
-                "file": output
+                "file": output,
+                "method": "pyautogui"
             }
         except ImportError:
-            raise ComponentError("pyautogui not installed. Install: pip install pyautogui")
+            raise ComponentError(
+                "No screenshot tool available. Install:\n"
+                "  sudo apt-get install scrot  (recommended)\n"
+                "  OR pip install pyautogui Pillow"
+            )
+        except Exception as e:
+            raise ComponentError(f"Screenshot failed: {e}")
     
     def _automate_task(self, data: Any) -> Dict:
         """AI-powered automation from natural language"""

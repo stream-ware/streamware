@@ -2,7 +2,7 @@
 Streamware - Modern Python stream processing framework inspired by Apache Camel
 """
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 __author__ = "Softreck"
 __license__ = "Apache-2.0"
 
