@@ -58,6 +58,21 @@ chmod +x *.sh
 | `04_full_security_pipeline.sh` | Complete pipeline: discover → analyze → alert |
 | `09_complete_workflow.sh` | Interactive end-to-end demo |
 | `14_daily_report.sh` | Generate daily activity summary |
+| `23_full_pipeline.sh` | **NEW** Discovery → Quick scan → AI analysis → Alert |
+
+### Smart Detection (NEW!)
+| Script | Description |
+|--------|-------------|
+| `20_smart_monitor.sh` | 🎯 **Buffered monitoring** - frames captured even when AI busy |
+| `21_quick_diff_then_ai.sh` | ⚡ **Two-stage** - fast pixel check, then AI if needed |
+| `22_zone_security.sh` | 🔲 **Zone monitoring** - watch specific areas only |
+
+### Live Narrator (NEW!)
+| Script | Description |
+|--------|-------------|
+| `24_live_narrator.sh` | 🎙️ **Real-time TTS** - AI describes what's happening |
+| `25_trigger_alerts.sh` | 🎯 **Trigger alerts** - "alert when person appears" |
+| `26_person_watcher.sh` | 👤 **Person detection** - describe how people look |
 
 ## 🚀 Quick Start
 
