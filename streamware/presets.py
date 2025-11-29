@@ -1,15 +1,36 @@
 """
-Presets - Qualitative parameters for intuitive configuration
+Presets - Descriptive parameters for intuitive configuration
 
 Instead of numeric values like --threshold 10 --min-region 50,
-use descriptive parameters like --sensitivity high --detect person
+use descriptive parameters that explain WHAT they do:
 
-This makes the system more accessible and reduces configuration errors.
+ANALYSIS DEPTH (how thoroughly to analyze):
+    --analysis quick    # Fast, may miss details (good for overview)
+    --analysis normal   # Balanced (default)
+    --analysis deep     # Thorough, catches subtle changes
+    --analysis forensic # Maximum detail, slow
+
+MOTION DETECTION (how to detect movement):
+    --motion any        # Detect all movement (noisy)
+    --motion significant # Only notable movement (default)
+    --motion objects    # Only when objects move
+    --motion people     # Only human movement
+
+FRAME PROCESSING (which frames to analyze):
+    --frames all        # Analyze every frame
+    --frames changed    # Only frames with changes (default)
+    --frames keyframes  # Only significant keyframes
+    --frames periodic   # Every Nth frame
+
+AI FOCUS (what to look for):
+    --focus general     # Describe everything
+    --focus person      # Track people
+    --focus activity    # Focus on actions/movement
+    --focus security    # Look for threats/intrusions
 
 Examples:
-    sq watch --detect person --sensitivity high
-    sq watch --detect vehicle --when enters
-    sq watch --detect any --alert slack
+    sq live narrator --url $URL --analysis deep --motion people --focus person
+    sq watch --url $URL --motion significant --frames changed --alert speak
 """
 
 from dataclasses import dataclass
@@ -82,6 +103,111 @@ class AlertType(Enum):
     WEBHOOK = "webhook"
     EMAIL = "email"
     RECORD = "record"       # Save video clip
+
+
+# ============================================================================
+# DESCRIPTIVE PARAMETERS (better than sensitivity levels)
+# ============================================================================
+
+class AnalysisDepth(Enum):
+    """How thoroughly to analyze frames"""
+    QUICK = "quick"        # Fast scan, may miss subtle details
+    NORMAL = "normal"      # Balanced analysis (default)
+    DEEP = "deep"          # Thorough, catches subtle changes
+    FORENSIC = "forensic"  # Maximum detail, very slow
+
+
+class MotionMode(Enum):
+    """What kind of motion to detect"""
+    ANY = "any"            # All movement (most sensitive, noisy)
+    SIGNIFICANT = "significant"  # Only notable movement (default)
+    OBJECTS = "objects"    # Only when distinct objects move
+    PEOPLE = "people"      # Only human movement
+
+
+class FrameMode(Enum):
+    """Which frames to process"""
+    ALL = "all"            # Every frame (resource intensive)
+    CHANGED = "changed"    # Only when changes detected (default)
+    KEYFRAMES = "keyframes"  # Only significant keyframes
+    PERIODIC = "periodic"  # Every Nth frame
+
+
+class FocusMode(Enum):
+    """What the AI should focus on"""
+    GENERAL = "general"    # Describe everything visible
+    PERSON = "person"      # Track and describe people
+    ACTIVITY = "activity"  # Focus on actions and movement
+    SECURITY = "security"  # Look for threats/intrusions
+    CHANGES = "changes"    # Only describe what changed
+
+
+# Mapping descriptive params to numeric values
+ANALYSIS_PRESETS = {
+    "quick":    {"threshold": 30, "min_region": 300, "interval": 5, "ai_detail": "brief"},
+    "normal":   {"threshold": 15, "min_region": 100, "interval": 3, "ai_detail": "normal"},
+    "deep":     {"threshold": 8,  "min_region": 50,  "interval": 2, "ai_detail": "detailed"},
+    "forensic": {"threshold": 3,  "min_region": 25,  "interval": 1, "ai_detail": "exhaustive"},
+}
+
+MOTION_PRESETS = {
+    "any":         {"min_change": 0.1, "skip_stable": False, "edge_detect": False},
+    "significant": {"min_change": 0.5, "skip_stable": True,  "edge_detect": False},
+    "objects":     {"min_change": 1.0, "skip_stable": True,  "edge_detect": True},
+    "people":      {"min_change": 0.3, "skip_stable": True,  "edge_detect": True, "focus": "person"},
+}
+
+FRAME_PRESETS = {
+    "all":       {"interval": 0.5, "skip_unchanged": False},
+    "changed":   {"interval": 2.0, "skip_unchanged": True},
+    "keyframes": {"interval": 5.0, "skip_unchanged": True, "keyframe_only": True},
+    "periodic":  {"interval": 10.0, "skip_unchanged": False},
+}
+
+
+def get_descriptive_preset(
+    analysis: str = "normal",
+    motion: str = "significant",
+    frames: str = "changed",
+    focus: str = "general"
+) -> Dict[str, Any]:
+    """
+    Get optimized settings from descriptive parameters.
+    
+    Args:
+        analysis: quick, normal, deep, forensic
+        motion: any, significant, objects, people
+        frames: all, changed, keyframes, periodic
+        focus: general, person, activity, security, changes
+    
+    Returns:
+        Dict with all numeric parameters optimized
+    
+    Example:
+        settings = get_descriptive_preset(analysis="deep", motion="people", focus="person")
+    """
+    a = ANALYSIS_PRESETS.get(analysis, ANALYSIS_PRESETS["normal"])
+    m = MOTION_PRESETS.get(motion, MOTION_PRESETS["significant"])
+    f = FRAME_PRESETS.get(frames, FRAME_PRESETS["changed"])
+    
+    return {
+        # Combined settings
+        "threshold": a["threshold"],
+        "min_region": a["min_region"],
+        "interval": max(a["interval"], f["interval"]),
+        "min_change": m["min_change"],
+        "skip_stable": m.get("skip_stable", True),
+        "edge_detect": m.get("edge_detect", False),
+        "skip_unchanged": f.get("skip_unchanged", True),
+        "ai_detail": a.get("ai_detail", "normal"),
+        "focus": m.get("focus", focus),
+        
+        # Original descriptive params
+        "_analysis": analysis,
+        "_motion": motion,
+        "_frames": frames,
+        "_focus": focus,
+    }
 
 
 @dataclass

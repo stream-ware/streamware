@@ -14,6 +14,7 @@ from ..core import Component, register
 from ..uri import StreamwareURI
 from ..exceptions import ComponentError
 from ..diagnostics import get_logger
+from ..config import config
 
 logger = get_logger(__name__)
 
@@ -102,9 +103,9 @@ Now convert the user's request:"""
         super().__init__(uri)
         self.operation = uri.operation or "convert"
         
-        # LLM configuration
-        self.model = uri.get_param("model", os.environ.get("QWEN_MODEL", "qwen2.5:14b"))
-        self.ollama_url = uri.get_param("ollama_url", os.environ.get("OLLAMA_URL", "http://localhost:11434"))
+        # LLM configuration (use config with env fallback)
+        self.model = uri.get_param("model", config.get("SQ_MODEL", "qwen2.5:14b"))
+        self.ollama_url = uri.get_param("ollama_url", config.get("SQ_OLLAMA_URL", "http://localhost:11434"))
         self.temperature = float(uri.get_param("temperature", 0.1))  # Low for precise commands
         self.max_tokens = int(uri.get_param("max_tokens", 500))
         

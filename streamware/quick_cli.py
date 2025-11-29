@@ -394,8 +394,13 @@ Shortcuts:
     live_parser.add_argument('--url', '-u', required=True, help='Video source')
     live_parser.add_argument('--mode', '-m', choices=['full', 'diff', 'track'],
                              default='full', help='Mode: full (describe all), diff (only changes), track (follow object)')
-    live_parser.add_argument('--sensitivity', '-s', choices=['ultra', 'high', 'medium', 'low', 'minimal'],
-                             help='Detection sensitivity (overrides threshold/interval)')
+    # Descriptive parameters (instead of numeric values)
+    live_parser.add_argument('--analysis', choices=['quick', 'normal', 'deep', 'forensic'],
+                             default='normal', help='Analysis depth: quick (fast), normal, deep (thorough), forensic')
+    live_parser.add_argument('--motion', choices=['any', 'significant', 'objects', 'people'],
+                             default='significant', help='Motion mode: any (sensitive), significant, objects, people')
+    live_parser.add_argument('--frames', choices=['all', 'changed', 'keyframes', 'periodic'],
+                             default='changed', help='Frame processing: all, changed (default), keyframes, periodic')
     live_parser.add_argument('--tts', action='store_true', help='Enable text-to-speech')
     live_parser.add_argument('--trigger', '-t', help='Triggers: "person appears,door opens"')
     live_parser.add_argument('--focus', '-f', help='Focus on specific objects (e.g., person)')
@@ -2756,11 +2761,16 @@ def handle_live(args) -> int:
     uri += f"&mode={mode}"
     uri += f"&duration={args.duration}"
     
-    # Sensitivity preset (descriptive parameter)
-    if getattr(args, 'sensitivity', None):
-        uri += f"&sensitivity={args.sensitivity}"
+    # Descriptive parameters
+    analysis = getattr(args, 'analysis', 'normal') or 'normal'
+    motion = getattr(args, 'motion', 'significant') or 'significant'
+    frames = getattr(args, 'frames', 'changed') or 'changed'
     
-    # Explicit numeric params (override sensitivity preset)
+    uri += f"&analysis={analysis}"
+    uri += f"&motion={motion}"
+    uri += f"&frames_mode={frames}"
+    
+    # Explicit numeric params (override descriptive presets)
     if getattr(args, 'interval', None):
         uri += f"&interval={args.interval}"
     if getattr(args, 'threshold', None):
@@ -2842,13 +2852,17 @@ def _save_live_report(result: dict, output_file: str, mode: str, source: str):
         .config-item {{ background: rgba(255,255,255,0.05); padding: 8px 12px; border-radius: 4px; }}
         .config-label {{ color: #888; font-size: 0.8em; }}
         .entry {{ background: #16213e; padding: 20px; margin: 15px 0; border-radius: 12px; 
-                 border-left: 4px solid #667eea; display: grid; grid-template-columns: 300px 1fr; gap: 20px; }}
+                 border-left: 4px solid #667eea; }}
         .entry.triggered {{ border-left-color: #e74c3c; background: #1e1e3f; }}
-        .entry-img {{ width: 100%; border-radius: 8px; }}
-        .entry-content {{ }}
+        .images-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px; }}
+        .image-box {{ text-align: center; }}
+        .image-box img {{ width: 100%; border-radius: 8px; }}
+        .image-label {{ color: #888; font-size: 0.8em; margin-top: 5px; }}
         .time {{ color: #888; font-size: 0.9em; margin-bottom: 10px; }}
         .desc {{ line-height: 1.6; font-size: 1.1em; }}
-        .no-image {{ background: #0f0f23; padding: 50px; text-align: center; border-radius: 8px; color: #666; }}
+        .analysis-box {{ background: #0f0f23; padding: 12px; border-radius: 6px; margin-top: 10px; font-size: 0.85em; }}
+        .analysis-box span {{ display: inline-block; margin-right: 20px; }}
+        .no-image {{ background: #0f0f23; padding: 30px; text-align: center; border-radius: 8px; color: #666; }}
         @media (max-width: 768px) {{
             .entry {{ grid-template-columns: 1fr; }}
         }}
@@ -2911,23 +2925,55 @@ def _save_live_report(result: dict, output_file: str, mode: str, source: str):
         triggered_class = "triggered" if entry.get("triggered") else ""
         ts = entry.get("timestamp", "")[:19]
         desc = entry.get("description", "")
-        img_b64 = entry.get("image_base64", "")
+        original_b64 = entry.get("image_base64", "")
+        annotated_b64 = entry.get("annotated_base64", "")
+        analysis = entry.get("analysis", {})
         frame_num = entry.get("frame", i+1)
         
-        img_html = f'<img class="entry-img" src="data:image/jpeg;base64,{img_b64}" alt="Frame {frame_num}">' if img_b64 else '<div class="no-image">No image captured</div>'
+        # Original image
+        orig_html = f'<img src="data:image/jpeg;base64,{original_b64}" alt="Original">' if original_b64 else '<div class="no-image">No image</div>'
+        
+        # Annotated image (what LLM saw)
+        if annotated_b64:
+            annot_html = f'<img src="data:image/jpeg;base64,{annotated_b64}" alt="LLM View">'
+        elif original_b64:
+            annot_html = f'<img src="data:image/jpeg;base64,{original_b64}" alt="LLM View">'
+        else:
+            annot_html = '<div class="no-image">No annotation</div>'
+        
+        # Analysis info
+        motion_pct = analysis.get("motion_percent", 0)
+        has_motion = analysis.get("has_motion", False)
+        likely_person = analysis.get("likely_person", False)
+        person_conf = analysis.get("person_confidence", 0)
+        
+        analysis_html = ""
+        if analysis:
+            analysis_html = f'''
+            <div class="analysis-box">
+                <span>🎯 Motion: {motion_pct:.1f}%</span>
+                <span>👤 Person likely: {"Yes" if likely_person else "No"} ({person_conf:.0%})</span>
+                <span>🔍 Regions: {len(analysis.get("motion_regions", []))}</span>
+            </div>'''
         
         html += f"""
     <div class="entry {triggered_class}">
-        <div class="entry-image">
-            {img_html}
+        <div class="time">
+            {'🔴 TRIGGER - ' if entry.get('triggered') else '📷 '}
+            Frame #{frame_num} | {ts}
         </div>
-        <div class="entry-content">
-            <div class="time">
-                {'🔴 TRIGGER - ' if entry.get('triggered') else '📷 '}
-                Frame #{frame_num} | {ts}
+        <div class="images-row">
+            <div class="image-box">
+                {orig_html}
+                <div class="image-label">📷 Original Frame</div>
             </div>
-            <div class="desc">{desc}</div>
+            <div class="image-box">
+                {annot_html}
+                <div class="image-label">🔍 What LLM Analyzed (with motion boxes)</div>
+            </div>
         </div>
+        <div class="desc">{desc}</div>
+        {analysis_html}
     </div>
 """
     

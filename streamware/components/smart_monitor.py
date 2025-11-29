@@ -35,6 +35,7 @@ from datetime import datetime
 import base64
 from ..core import Component, StreamwareURI, register
 from ..exceptions import ComponentError
+from ..config import config
 
 logger = logging.getLogger(__name__)
 
@@ -582,8 +583,10 @@ Describe SPECIFICALLY:
 
 Be precise about body positions. This is for motion change detection."""
 
+            ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+            
             response = requests.post(
-                "http://localhost:11434/api/generate",
+                f"{ollama_url}/api/generate",
                 json={
                     "model": self.model,
                     "prompt": prompt,

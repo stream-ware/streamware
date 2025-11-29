@@ -33,6 +33,7 @@ from dataclasses import dataclass
 import base64
 from ..core import Component, StreamwareURI, register
 from ..exceptions import ComponentError
+from ..config import config
 
 logger = logging.getLogger(__name__)
 
@@ -534,15 +535,18 @@ If it's a person, describe: head position, arm position, body orientation."""
             with open(image_path, "rb") as f:
                 image_data = base64.b64encode(f.read()).decode()
             
+            ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+            timeout = int(config.get("SQ_LLM_TIMEOUT", "60"))
+            
             response = requests.post(
-                "http://localhost:11434/api/generate",
+                f"{ollama_url}/api/generate",
                 json={
                     "model": self.model,
                     "prompt": prompt,
                     "images": [image_data],
                     "stream": False
                 },
-                timeout=60
+                timeout=timeout
             )
             
             if response.ok:

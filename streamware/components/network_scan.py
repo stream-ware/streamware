@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from ..core import Component, StreamwareURI, register
 from ..exceptions import ComponentError
+from ..config import config
 
 logger = logging.getLogger(__name__)
 
@@ -715,10 +716,14 @@ Example: ["192.168.1.10", "192.168.1.20"]
 If no devices match, return: []
 """
             
+            ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+            model = config.get("SQ_MODEL", "qwen2.5:14b")
+            timeout = int(config.get("SQ_LLM_TIMEOUT", "30"))
+            
             response = requests.post(
-                "http://localhost:11434/api/generate",
-                json={"model": "qwen2.5:14b", "prompt": prompt, "stream": False},
-                timeout=30
+                f"{ollama_url}/api/generate",
+                json={"model": model, "prompt": prompt, "stream": False},
+                timeout=timeout
             )
             
             if response.ok:

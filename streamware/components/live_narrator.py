@@ -305,7 +305,9 @@ class NarrationEntry:
     timestamp: datetime
     frame_num: int
     description: str
-    image_base64: str = ""  # Frame image in base64
+    image_base64: str = ""  # Original frame in base64
+    annotated_base64: str = ""  # Frame with motion annotations (what LLM sees)
+    analysis_data: Dict = field(default_factory=dict)  # Motion/edge analysis data
     triggered: bool = False
     trigger_matches: List[str] = field(default_factory=list)
 
@@ -360,29 +362,34 @@ class LiveNarratorComponent(Component):
         
         # Get defaults from config
         default_model = config.get("SQ_MODEL", "llava:7b")
-        default_interval = config.get("SQ_STREAM_INTERVAL", "3")
         default_duration = config.get("SQ_STREAM_DURATION", "60")
-        default_threshold = config.get("SQ_MOTION_THRESHOLD", "15")
-        default_min_change = config.get("SQ_MIN_CHANGE", "0.5")
-        default_sensitivity = config.get("SQ_SENSITIVITY", "medium")
         
-        # Sensitivity preset (descriptive parameter)
-        sensitivity = uri.get_param("sensitivity", default_sensitivity)
-        sensitivity_presets = {
-            "ultra":   {"threshold": 3,  "min_change": 0.1, "interval": 1},
-            "high":    {"threshold": 8,  "min_change": 0.3, "interval": 2},
-            "medium":  {"threshold": 15, "min_change": 0.5, "interval": 3},
-            "low":     {"threshold": 25, "min_change": 1.0, "interval": 5},
-            "minimal": {"threshold": 40, "min_change": 2.0, "interval": 10},
-        }
-        preset = sensitivity_presets.get(sensitivity, sensitivity_presets["medium"])
+        # Descriptive parameters (analysis, motion, frames)
+        from ..presets import get_descriptive_preset, ANALYSIS_PRESETS, MOTION_PRESETS, FRAME_PRESETS
+        
+        analysis = uri.get_param("analysis", "normal")
+        motion = uri.get_param("motion", "significant")
+        frames_mode = uri.get_param("frames_mode", "changed")
+        focus_param = uri.get_param("focus", config.get("SQ_STREAM_FOCUS", ""))
+        
+        # Get combined preset from descriptive params
+        preset = get_descriptive_preset(
+            analysis=analysis,
+            motion=motion,
+            frames=frames_mode,
+            focus=focus_param or "general"
+        )
+        
+        # Store descriptive params for output
+        self.analysis_mode = analysis
+        self.motion_mode = motion
+        self.frames_mode = frames_mode
         
         # Analysis settings (use preset or explicit values)
         self.interval = float(uri.get_param("interval", str(preset["interval"])))
         self.duration = int(uri.get_param("duration", default_duration))
         self.model = uri.get_param("model", default_model)
-        self.focus = uri.get_param("focus", config.get("SQ_STREAM_FOCUS", ""))
-        self.sensitivity = sensitivity
+        self.focus = preset["focus"] if preset["focus"] != "general" else focus_param
         
         # Mode: full (describe everything), diff (only changes), track (track focus object)
         self.mode = uri.get_param("mode", config.get("SQ_STREAM_MODE", "full"))
@@ -391,6 +398,8 @@ class LiveNarratorComponent(Component):
         self.use_diff = str_to_bool(uri.get_param("diff", "true"), True)
         self.diff_threshold = int(uri.get_param("threshold", str(preset["threshold"])))
         self.min_change = float(uri.get_param("min_change", str(preset["min_change"])))
+        self.edge_detect = preset.get("edge_detect", False)
+        self.ai_detail = preset.get("ai_detail", "normal")
         
         # LLM settings from config
         self.ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
@@ -507,12 +516,15 @@ class LiveNarratorComponent(Component):
                 # Check triggers
                 triggered, matches = self._check_triggers(description)
                 
-                # Encode annotated frame to base64 for report
-                img_base64 = ""
+                # Encode BOTH original and annotated frames for report
+                original_base64 = ""
+                annotated_base64 = ""
                 try:
-                    img_to_encode = annotated_frame or frame_path
-                    with open(img_to_encode, "rb") as f:
-                        img_base64 = base64.b64encode(f.read()).decode()
+                    with open(frame_path, "rb") as f:
+                        original_base64 = base64.b64encode(f.read()).decode()
+                    if annotated_frame and annotated_frame != frame_path:
+                        with open(annotated_frame, "rb") as f:
+                            annotated_base64 = base64.b64encode(f.read()).decode()
                 except Exception:
                     pass
                 
@@ -521,7 +533,9 @@ class LiveNarratorComponent(Component):
                     timestamp=datetime.now(),
                     frame_num=frame_num,
                     description=description,
-                    image_base64=img_base64,
+                    image_base64=original_base64,
+                    annotated_base64=annotated_base64,
+                    analysis_data=frame_analysis,
                     triggered=triggered,
                     trigger_matches=matches
                 )
@@ -568,12 +582,19 @@ class LiveNarratorComponent(Component):
                 "model": self.model,
                 "mode": self.mode,
                 "focus": self.focus or "general",
-                "tts_enabled": self.tts_enabled,
-                "tts_engine": self.tts_engine if self.tts_enabled else None,
+                # Descriptive parameters
+                "analysis": self.analysis_mode,
+                "motion": self.motion_mode,
+                "frames": self.frames_mode,
+                "ai_detail": self.ai_detail,
+                # Derived numeric values
                 "interval": self.interval,
                 "duration": self.duration,
-                "diff_threshold": self.diff_threshold,
+                "threshold": self.diff_threshold,
                 "min_change": self.min_change,
+                "edge_detect": self.edge_detect,
+                # Other
+                "tts_enabled": self.tts_enabled,
                 "advanced_analysis": self.use_advanced,
             },
             # Last frame analysis
@@ -589,7 +610,9 @@ class LiveNarratorComponent(Component):
                     "timestamp": e.timestamp.isoformat(),
                     "frame": e.frame_num,
                     "description": e.description,
-                    "image_base64": e.image_base64,
+                    "image_base64": e.image_base64,  # Original frame
+                    "annotated_base64": e.annotated_base64,  # What LLM saw (with motion boxes)
+                    "analysis": e.analysis_data,  # Motion/edge detection results
                     "triggered": e.triggered,
                     "matches": e.trigger_matches
                 }

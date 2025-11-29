@@ -1,4 +1,4 @@
-![img.png](img.png)
+![img.png](docs/v2/report.png)
 
 # 🚀 Streamware
 

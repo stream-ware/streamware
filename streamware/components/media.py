@@ -25,6 +25,7 @@ from ..core import Component, register
 from ..uri import StreamwareURI
 from ..exceptions import ComponentError
 from ..diagnostics import get_logger
+from ..config import config
 
 logger = get_logger(__name__)
 
@@ -131,7 +132,8 @@ class MediaComponent(Component):
         if model_info["provider"] == "ollama":
             try:
                 import requests
-                response = requests.get("http://localhost:11434/api/tags")
+                ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+                response = requests.get(f"{ollama_url}/api/tags")
                 if response.ok:
                     models = response.json().get("models", [])
                     if not any(self.model in m.get("name", "") for m in models):
@@ -320,10 +322,14 @@ If nothing significant changed, say "No significant changes."
 
 Summary (2-3 sentences):"""
             
+            ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+            default_model = config.get("SQ_MODEL", "qwen2.5:14b")
+            timeout = int(config.get("SQ_LLM_TIMEOUT", "30"))
+            
             response = requests.post(
-                "http://localhost:11434/api/generate",
-                json={"model": "qwen2.5:14b", "prompt": prompt, "stream": False},
-                timeout=30
+                f"{ollama_url}/api/generate",
+                json={"model": default_model, "prompt": prompt, "stream": False},
+                timeout=timeout
             )
             
             if response.ok:
@@ -596,14 +602,19 @@ Summary (2-3 sentences):"""
                 image_data = base64.b64encode(f.read()).decode()
             
             # Call LLaVA via Ollama
+            ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+            model = config.get("SQ_MODEL", "llava")
+            timeout = int(config.get("SQ_LLM_TIMEOUT", "60"))
+            
             response = requests.post(
-                "http://localhost:11434/api/generate",
+                f"{ollama_url}/api/generate",
                 json={
-                    "model": "llava",
+                    "model": model,
                     "prompt": prompt,
                     "images": [image_data],
                     "stream": False
-                }
+                },
+                timeout=timeout
             )
             
             if response.ok:
@@ -647,14 +658,18 @@ Scene breakdown:
 
 Write a professional video description (2-3 paragraphs) that tells what happens in this video:"""
             
+            ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+            narrative_model = config.get("SQ_NARRATIVE_MODEL", "qwen2.5:14b")
+            timeout = int(config.get("SQ_LLM_TIMEOUT", "60"))
+            
             response = requests.post(
-                "http://localhost:11434/api/generate",
+                f"{ollama_url}/api/generate",
                 json={
-                    "model": "qwen2.5:14b",  # Better for narrative
+                    "model": narrative_model,
                     "prompt": prompt,
                     "stream": False
                 },
-                timeout=60
+                timeout=timeout
             )
             
             if response.ok:
