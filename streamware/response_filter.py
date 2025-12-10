@@ -832,15 +832,21 @@ def is_significant_smart(
     
     # FAST PATH: Skip LLM for clear yes/no responses (saves 2-3 seconds!)
     # These patterns are unambiguous and don't need LLM summarization
-    clear_positive = [
-        "yes, person visible", "yes, there is a person", "person visible",
-        "person detected", "person is", "there is a person", "yes person",
-        "a person is", "someone is", "man is", "woman is",
-    ]
     clear_negative = [
         "no person visible", "no person detected", "no one visible",
         "no person", "no people", "empty room", "nobody visible",
+        "not visible", "no human", "no individual",
     ]
+    clear_positive = [
+        "yes, person visible", "yes, there is a person",
+        "person detected", "person is", "there is a person", "yes person",
+        "a person is", "someone is", "man is", "woman is",
+    ]
+    
+    # Check clear NEGATIVE FIRST (to avoid "no person visible" matching "person visible")
+    for pattern in clear_negative:
+        if pattern in response_lower:
+            return True, "No person visible"  # Still significant - scene info
     
     # Check clear positive
     for pattern in clear_positive:
@@ -856,11 +862,6 @@ def is_significant_smart(
                 return True, "Person working"
             else:
                 return True, "Person visible"
-    
-    # Check clear negative
-    for pattern in clear_negative:
-        if response_lower.startswith(pattern) or f". {pattern}" in response_lower:
-            return True, "No person visible"  # Still significant - scene changed
     
     # Get guarder model from config if not specified
     if guarder_model is None:

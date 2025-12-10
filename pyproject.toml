@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "streamware"
-version = "0.2.71"
+version = "0.2.73"
 description = "Modern Python stream processing framework inspired by Apache Camel"
 readme = "README.md"
 requires-python = ">=3.8"

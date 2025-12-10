@@ -158,7 +158,7 @@ class SmartDetector:
                 self._yolo_detector = YOLODetector(
                     model=self.yolo_model,
                     classes=classes,
-                    confidence_threshold=0.25,
+                    confidence_threshold=0.5,  # Higher threshold to reduce false positives
                 )
                 self._yolo_available = True
                 logger.info(f"🎯 YOLO detector initialized: {self.yolo_model}, classes={classes}")

@@ -167,6 +167,8 @@ class TimingLogger:
     
     def _init_file(self):
         """Initialize log file with header."""
+        if not self.log_file:
+            return
         with self._file_lock:
             with open(self.log_file, "w") as f:
                 f.write("# Streamware Timing Log\n\n")
@@ -369,7 +371,7 @@ class TimingLogger:
     
     def log(self, message: str):
         """Log a simple message."""
-        if not self.enabled:
+        if not self.enabled or not self.log_file:
             return
         
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
@@ -419,6 +421,8 @@ class TimingLogger:
     
     def _write_event(self, event: TimingEvent):
         """Write standalone event to file."""
+        if not self.log_file:
+            return
         ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
         with self._file_lock:
             with open(self.log_file, "a") as f:

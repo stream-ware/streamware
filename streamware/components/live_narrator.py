@@ -1687,8 +1687,8 @@ class LiveNarratorComponent(Component):
                     except KeyError:
                         pass  # Fall through to default
                 
-                # Clear prompt for person detection (moondream-compatible)
-                return "Describe this image in one sentence. Focus on people - what they are doing and where."
+                # Clear prompt for person detection - verify presence first
+                return "Look at this image carefully. Is there a person clearly visible? If YES, describe what they are doing in one sentence. If NO person is visible, say 'No person visible' and briefly describe what you see instead."
             
             elif focus_obj in ("bird", "birds"):
                 # Load from file
@@ -1701,64 +1701,48 @@ class LiveNarratorComponent(Component):
                 return "Describe any birds in this image - count, activity, and location."
             
             elif focus_obj in ("animal", "cat", "dog", "pet", "wildlife"):
-                # Try loading from file
+                # Load from file
                 file_prompt = get_prompt("track_animal")
                 if file_prompt:
                     try:
                         return file_prompt.format(**prompt_vars)
                     except KeyError:
                         pass
-                
-                return f"""CONTEXT: {context}{movement_hint}
-{prev_info}
-
-Camera monitoring for animals.
-
-TASK: Describe any {focus_obj}s visible.
-
-Focus on:
-1. What animal? (species if identifiable)
-2. What is it doing? (walking, sitting, eating, sleeping, playing)
-3. Where? (position in frame)
-
-Response format: "[Animal] [activity] in [location]."
-Example: "Cat sitting on the left side of frame, appears alert."
-Example: "Dog walking across the yard toward the right."
-
-Be specific about the animal and its activity.\""""
+                return f"Describe any {focus_obj} in this image - what it is doing and where."
             
             else:
-                return f"""ANALYSIS: {context}{movement_hint}{prev_info}
-
-Tracking: {self.focus}
-Describe {self.focus}'s position, movement direction, and state.
-Format: "[State]. [Movement direction]." """
+                # Generic tracking - load from file
+                file_prompt = get_prompt("track_generic")
+                if file_prompt:
+                    try:
+                        return file_prompt.format(**prompt_vars)
+                    except KeyError:
+                        pass
+                return f"Describe {self.focus}'s position and movement in this image."
 
         elif self.mode == "diff":
-            return f"""ANALYSIS CONTEXT:
-{context}
-
-Previous description: "{self._prev_description[:150]}"
-
-Based on the motion analysis (red rectangles show changed areas):
-- Describe ONLY what changed
-- Focus on: {self.focus if self.focus else 'any changes'}
-- If person moved, describe the movement
-- Be very brief"""
+            # Diff mode - load from file
+            file_prompt = get_prompt("diff_describe")
+            if file_prompt:
+                try:
+                    return file_prompt.format(
+                        context=context,
+                        prev_description=self._prev_description[:150],
+                        focus=self.focus or "any changes"
+                    )
+                except KeyError:
+                    pass
+            return f"Describe only what changed from previous frame. Focus on: {self.focus or 'any changes'}"
 
         else:  # full mode
-            return f"""ANALYSIS CONTEXT:
-{context}
-
-Describe what you see in this security camera image.
-Red rectangles mark areas where motion was detected.
-
-Include:
-- Any people and what they're doing
-- The location/room type  
-- Any notable activity
-
-Be concise (2-3 sentences)."""
+            # Full mode - load from file
+            file_prompt = get_prompt("full_describe")
+            if file_prompt:
+                try:
+                    return file_prompt.format(context=context)
+                except KeyError:
+                    pass
+            return "Describe what you see in this security camera image. Be concise."
     
     def _build_full_prompt(self) -> str:
         """Build prompt for full description mode"""

@@ -1,1 +1,1 @@
-Describe this image in one sentence. Focus on people - what they are doing and where.
+Look at this image carefully. Is there a person clearly visible? If YES, describe what they are doing in one sentence. If NO person is visible, say "No person visible" and briefly describe what you see instead.

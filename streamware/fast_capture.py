@@ -350,11 +350,11 @@ class FastCapture:
             self._cv_capture.release()
     
     def _cleanup_old_frames(self):
-        """Remove old frame files, keep last 10 (enough for slow processing)."""
+        """Remove old frame files, keep last 30 (enough for slow LLM processing)."""
         try:
             old_frames = sorted(self.ramdisk_path.glob("frame_*.jpg"))
-            if len(old_frames) > 10:
-                for old_frame in old_frames[:-10]:
+            if len(old_frames) > 30:
+                for old_frame in old_frames[:-30]:
                     try:
                         old_frame.unlink()
                     except:
