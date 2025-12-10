@@ -139,6 +139,69 @@ class TestLiveNarratorValidation:
         assert component.source == "rtsp://test/stream"
 
 
+class TestLiveNarratorFramesDir:
+    """Tests for live narrator frame persistence to directory"""
+    
+    def test_frames_dir_initialized_and_directory_created(self, tmp_path, monkeypatch):
+        """Test that frames_dir from URI is prepared in process()"""
+        from streamware.uri import StreamwareURI
+        from streamware.components.live_narrator import LiveNarratorComponent
+
+        frames_dir = tmp_path / "frames_out"
+        uri = StreamwareURI.parse(f"live://narrator?source=rtsp://test/stream&duration=1&frames_dir={frames_dir}")
+
+        # Avoid running real narrator loop and ffmpeg
+        def fake_run_narrator(self):
+            return {"success": True}
+
+        monkeypatch.setattr(LiveNarratorComponent, "_run_narrator", fake_run_narrator)
+        monkeypatch.setattr(
+            "streamware.components.live_narrator.tempfile.mkdtemp",
+            lambda: str(tmp_path / "tmp_frames"),
+        )
+
+        component = LiveNarratorComponent(uri)
+        result = component.process(None)
+
+        assert result["success"] is True
+        assert component._frames_output_dir is not None
+        assert component._frames_output_dir.exists()
+        assert str(component._frames_output_dir) == str(frames_dir)
+
+    def test_capture_frame_saves_copy_to_frames_dir(self, tmp_path, monkeypatch):
+        """Test that _capture_frame writes a copy into frames_dir when configured"""
+        from streamware.uri import StreamwareURI
+        from streamware.components.live_narrator import LiveNarratorComponent
+
+        frames_dir = tmp_path / "frames_out"
+        temp_dir = tmp_path / "tmp"
+        temp_dir.mkdir()
+        frames_dir.mkdir()
+
+        uri = StreamwareURI.parse("live://narrator?source=rtsp://test/stream&duration=1")
+        component = LiveNarratorComponent(uri)
+
+        # Inject directories used by _capture_frame
+        component._temp_dir = temp_dir
+        component._frames_output_dir = frames_dir
+
+        expected_output = temp_dir / "frame_00001.jpg"
+
+        def fake_run(cmd, check, capture_output, timeout):  # noqa: ARG001
+            expected_output.write_bytes(b"testframe")
+
+        monkeypatch.setattr("streamware.components.live_narrator.subprocess.run", fake_run)
+
+        frame_path = component._capture_frame(1)
+
+        assert frame_path == expected_output
+        assert expected_output.exists()
+
+        copied_path = frames_dir / expected_output.name
+        assert copied_path.exists()
+        assert copied_path.read_bytes() == expected_output.read_bytes()
+
+
 class TestQuickCLILLM:
     """Tests for quick CLI LLM command configuration"""
     
@@ -192,4 +255,39 @@ class TestQuickCLILLM:
         
         call_args = mock_flow.call_args[0][0]
         assert "&provider=anthropic" in call_args
+
+
+class TestLiveCLIValidation:
+    """Tests for quick CLI live narrator validation"""
+
+    @patch("streamware.quick_cli.flow")
+    def test_live_empty_url_returns_error_and_skips_flow(self, mock_flow, capsys):
+        """Test that sq live narrator with empty --url returns error before running flow"""
+        from streamware.quick_cli import handle_live
+
+        args = MagicMock()
+        args.operation = "narrator"
+        args.url = ""  # Simulate: --url "" (empty)
+
+        # Other args are not used when URL is empty but define them defensively
+        args.mode = "full"
+        args.tts = False
+        args.duration = 1
+        args.analysis = "normal"
+        args.motion = "significant"
+        args.frames = "changed"
+        args.interval = None
+        args.threshold = None
+        args.trigger = None
+        args.focus = None
+        args.webhook = None
+        args.model = None
+        args.quiet = False
+
+        rc = handle_live(args)
+        captured = capsys.readouterr()
+
+        assert rc == 1
+        assert "Error: --url parameter is required" in captured.err
+        mock_flow.assert_not_called()
 

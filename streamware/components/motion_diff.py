@@ -96,6 +96,14 @@ class MotionDiffComponent(Component):
         # Grid size for region detection
         self.grid_size = int(uri.get_param("grid", "8"))  # 8x8 grid
         
+        # Optional downscaling factor for diff analysis (0 < scale <= 1)
+        try:
+            self.scale = float(uri.get_param("scale", "0.3"))
+        except ValueError:
+            self.scale = 0.3
+        if self.scale <= 0 or self.scale > 1:
+            self.scale = 1.0
+        
         # Analysis settings
         self.interval = int(uri.get_param("interval", "5"))
         self.duration = int(uri.get_param("duration", "30"))
@@ -333,15 +341,27 @@ class MotionDiffComponent(Component):
             return self._simple_diff(current_frame, frame_num)
         
         try:
-            # Load images
-            img1 = Image.open(self._prev_frame).convert('L')  # Grayscale
-            img2 = Image.open(current_frame).convert('L')
+            # Load images (grayscale)
+            img1_full = Image.open(self._prev_frame).convert('L')
+            img2_full = Image.open(current_frame).convert('L')
+
+            # Resize second image to match first if needed
+            if img1_full.size != img2_full.size:
+                img2_full = img2_full.resize(img1_full.size)
+
+            # Downscale for faster diff computation
+            if self.scale < 1.0:
+                small_size = (
+                    max(1, int(img1_full.width * self.scale)),
+                    max(1, int(img1_full.height * self.scale)),
+                )
+                img1 = img1_full.resize(small_size, Image.BILINEAR)
+                img2 = img2_full.resize(small_size, Image.BILINEAR)
+            else:
+                img1 = img1_full
+                img2 = img2_full
             
-            # Resize to same size if needed
-            if img1.size != img2.size:
-                img2 = img2.resize(img1.size)
-            
-            # Compute absolute difference
+            # Compute absolute difference on downscaled frames
             diff = ImageChops.difference(img1, img2)
             
             # Apply threshold
@@ -353,7 +373,7 @@ class MotionDiffComponent(Component):
             changed_pixels = np.sum(diff_binary > 0)
             change_percent = (changed_pixels / total_pixels) * 100
             
-            # Find changed regions using grid
+            # Find changed regions using grid (in downscaled coordinate space)
             regions = self._find_regions(diff_binary, img1.size)
             
             # Filter small regions
@@ -362,6 +382,23 @@ class MotionDiffComponent(Component):
             # Sort by change intensity
             regions.sort(key=lambda r: r.change_percent, reverse=True)
             
+            # Rescale regions back to original image coordinates if downscaled
+            if self.scale < 1.0 and regions:
+                scale_x = img1_full.width / float(img1.width)
+                scale_y = img1_full.height / float(img1.height)
+                scaled_regions = []
+                for r in regions:
+                    scaled_regions.append(
+                        Region(
+                            x=int(r.x * scale_x),
+                            y=int(r.y * scale_y),
+                            width=int(r.width * scale_x),
+                            height=int(r.height * scale_y),
+                            change_percent=r.change_percent,
+                        )
+                    )
+                regions = scaled_regions
+
             # More sensitive detection - any visible change counts
             has_change = change_percent > 0.1 or len(regions) > 0
             

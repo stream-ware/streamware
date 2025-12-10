@@ -32,6 +32,9 @@ DEFAULTS = {
     # Audio / Voice
     "SQ_STT_PROVIDER": "google",
     "SQ_WHISPER_MODEL": "base",
+    "SQ_TTS_ENGINE": "auto",      # auto, pyttsx3, espeak, say, powershell
+    "SQ_TTS_VOICE": "",          # Preferred TTS voice name (engine-specific)
+    "SQ_TTS_RATE": "150",        # TTS speech rate (approx. words per minute)
     
     # Stream Analysis
     "SQ_STREAM_MODE": "diff",
@@ -117,6 +120,9 @@ CONFIG_CATEGORIES = {
     "Voice / Audio": [
         ("SQ_STT_PROVIDER", "STT Provider", "Speech-to-text provider (google, whisper_local, whisper_api)"),
         ("SQ_WHISPER_MODEL", "Whisper Model", "Model size for local Whisper (tiny, base, small, medium, large)"),
+        ("SQ_TTS_ENGINE", "TTS Engine", "Text-to-speech engine: auto, pyttsx3, espeak, say, powershell"),
+        ("SQ_TTS_VOICE", "TTS Voice", "Preferred TTS voice name (depends on engine)"),
+        ("SQ_TTS_RATE", "TTS Rate", "Speech rate (words per minute, e.g. 150)"),
     ],
     "Stream Analysis": [
         ("SQ_STREAM_MODE", "Default Mode", "Analysis mode: full, stream, diff"),

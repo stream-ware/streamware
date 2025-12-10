@@ -52,8 +52,11 @@ class FrameAnalyzer:
         self._motion_history = []
     
     def analyze(self, frame_path: Path) -> Tuple[Dict, Optional[Path]]:
-        """
-        Analyze frame for motion and objects.
+        """Analyze frame for motion and objects.
+
+        Performance optimisation:
+        - Motion / edge detection works on a downscaled (~30%) frame
+        - Annotations are drawn on the original resolution image
         Returns analysis dict and path to annotated frame.
         """
         try:
@@ -62,7 +65,21 @@ class FrameAnalyzer:
             return {"error": "PIL not installed"}, None
         
         img = Image.open(frame_path)
-        gray = img.convert('L')
+
+        # Downscale for faster numerical analysis
+        scale_factor = 0.3
+        try:
+            if img.width > 0 and img.height > 0:
+                small_size = (
+                    max(1, int(img.width * scale_factor)),
+                    max(1, int(img.height * scale_factor)),
+                )
+                gray_small = img.resize(small_size, Image.BILINEAR).convert('L')
+            else:
+                gray_small = img.convert('L')
+        except Exception:
+            # Fallback: no downscaling
+            gray_small = img.convert('L')
         
         analysis = {
             "has_motion": False,
@@ -73,13 +90,13 @@ class FrameAnalyzer:
             "person_confidence": 0.0,
         }
         
-        # Motion detection
+        # Motion detection (on downscaled frames)
         if self._prev_gray is not None:
-            motion_data = self._detect_motion(gray, self._prev_gray)
+            motion_data = self._detect_motion(gray_small, self._prev_gray)
             analysis.update(motion_data)
         
-        # Edge detection for object boundaries
-        edge_data = self._detect_edges(gray)
+        # Edge detection for object boundaries (also on downscaled frame)
+        edge_data = self._detect_edges(gray_small)
         analysis["edge_objects"] = edge_data.get("objects", [])
         
         # Analyze if motion pattern suggests person
@@ -87,11 +104,24 @@ class FrameAnalyzer:
             person_analysis = self._analyze_for_person(analysis, img.size)
             analysis.update(person_analysis)
         
-        # Create annotated frame
+        # Rescale motion regions back to original coordinates for annotation
+        try:
+            if analysis.get("motion_regions"):
+                scale_x = img.width / float(gray_small.width)
+                scale_y = img.height / float(gray_small.height)
+                for region in analysis["motion_regions"]:
+                    region["x"] = int(region["x"] * scale_x)
+                    region["y"] = int(region["y"] * scale_y)
+                    region["w"] = int(region["w"] * scale_x)
+                    region["h"] = int(region["h"] * scale_y)
+        except Exception as e:
+            logger.debug(f"Failed to rescale motion regions: {e}")
+
+        # Create annotated frame on original-resolution image
         annotated_path = self._create_annotated_frame(frame_path, img, analysis)
         
-        # Store for next iteration
-        self._prev_gray = gray
+        # Store downscaled grayscale for next iteration
+        self._prev_gray = gray_small
         self._prev_frame = frame_path
         
         return analysis, annotated_path
@@ -423,6 +453,10 @@ class LiveNarratorComponent(Component):
         self.use_advanced = str_to_bool(uri.get_param("advanced", "true"), True)
         self._frame_analyzer = FrameAnalyzer(threshold=self.diff_threshold)
         
+        # Optional directory to persist captured frames
+        self.frames_dir = uri.get_param("frames_dir", "")
+        self._frames_output_dir: Optional[Path] = None
+        
         # State
         self._temp_dir = None
         self._prev_frame = None
@@ -451,6 +485,18 @@ class LiveNarratorComponent(Component):
             
         self._temp_dir = Path(tempfile.mkdtemp())
         self._running = True
+
+        # Prepare output directory for persisted frames (if configured)
+        if self.frames_dir:
+            try:
+                out_dir = Path(self.frames_dir).expanduser()
+                out_dir.mkdir(parents=True, exist_ok=True)
+                self._frames_output_dir = out_dir
+            except Exception as e:
+                logger.warning(f"Failed to create frames_dir '{self.frames_dir}': {e}")
+                self._frames_output_dir = None
+        else:
+            self._frames_output_dir = None
         
         try:
             if self.operation == "narrator":
@@ -737,6 +783,17 @@ class LiveNarratorComponent(Component):
                 ]
             
             subprocess.run(cmd, check=True, capture_output=True, timeout=10)
+
+            # Optionally persist a copy of the frame to user-specified directory
+            if self._frames_output_dir:
+                try:
+                    dest_path = self._frames_output_dir / output_path.name
+                    # Simple copy without introducing new imports
+                    with open(output_path, "rb") as src, open(dest_path, "wb") as dst:
+                        dst.write(src.read())
+                except Exception as copy_err:
+                    logger.debug(f"Failed to save frame copy to {self._frames_output_dir}: {copy_err}")
+
             return output_path
         except Exception as e:
             logger.warning(f"Frame capture failed: {e}")

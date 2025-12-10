@@ -84,12 +84,19 @@ pip install streamware[llm,voice,automation]
 
 ### 🛠️ Auto-Configuration
 
-After installation, run the setup wizard to automatically detect your environment (Ollama, API keys, etc.):
+After installation, run the setup wizard to automatically detect your environment (Ollama, API keys, voice settings, etc.):
 
 ```bash
-streamware --setup
+# Full setup (LLM + voice) with mode presets
+streamware --setup --mode balance      # default
+streamware --setup --mode eco          # light models
+streamware --setup --mode performance  # maximum quality
+
+# TTS-only setup (does not touch LLM/STT)
+streamware --setup tts
 ```
-This will detect available LLM providers (Ollama, OpenAI, Anthropic) and configure the best available models for you.
+
+The setup will detect available LLM providers (Ollama, OpenAI, Anthropic), configure models, and write configuration to your `.env` file.
 
 ### System Dependencies (optional but recommended)
 
@@ -133,8 +140,38 @@ sq voice-keyboard --interactive  # Continuous mode
 sq voice-click "click on the blue Submit button"
 sq voice-click "kliknij w menu File"
 
-# Text to speech
+# Text to speech (uses TTS config from .env)
 sq voice speak "Hello, I am Streamware"
+```
+
+#### 🔧 Voice / TTS Configuration (.env)
+
+The setup wizard saves audio configuration into `.env` so all tools (`sq voice`, `sq live narrator`, etc.) use the same settings.
+
+Key variables:
+
+- `SQ_STT_PROVIDER` – `google`, `whisper_local`, `whisper_api`
+- `SQ_WHISPER_MODEL` – `tiny`, `base`, `small`, `medium`, `large`
+- `SQ_TTS_ENGINE` – `auto`, `pyttsx3`, `espeak`, `say`, `powershell`
+- `SQ_TTS_VOICE` – fragment nazwy głosu (np. `polski`, `English`)
+- `SQ_TTS_RATE` – szybkość mowy (słowa na minutę, np. `150`)
+
+Example: lokalne STT Whisper + polski TTS przez pyttsx3:
+
+```ini
+SQ_STT_PROVIDER=whisper_local
+SQ_WHISPER_MODEL=small
+SQ_TTS_ENGINE=pyttsx3
+SQ_TTS_VOICE=polski
+SQ_TTS_RATE=160
+```
+
+Example: lekkie STT Google + systemowy TTS na Linux (espeak):
+
+```ini
+SQ_STT_PROVIDER=google
+SQ_TTS_ENGINE=espeak
+SQ_TTS_RATE=150
 ```
 
 ### 🖥️ Desktop Automation

@@ -357,6 +357,53 @@ def run_setup(interactive: bool = True, mode: str = "balance"):
             if model_choice not in model_sizes:
                 model_choice = "base"
             changes["SQ_WHISPER_MODEL"] = model_choice
+
+        # TTS configuration (engine, voice, rate)
+        print("\n🔉 Text-to-Speech (TTS) Configuration")
+        print("   Choose default TTS engine:")
+
+        tts_options = [
+            {"id": "pyttsx3", "name": "pyttsx3 (cross-platform, recommended)"},
+            {"id": "espeak", "name": "espeak (Linux CLI)"},
+            {"id": "say", "name": "say (macOS built-in)"},
+            {"id": "powershell", "name": "PowerShell (Windows built-in)"},
+            {"id": "auto", "name": "auto (let Streamware choose based on OS)"},
+        ]
+
+        for idx, opt in enumerate(tts_options):
+            print(f"   {idx + 1}. {opt['name']}")
+
+        while True:
+            try:
+                choice = input(f"\nChoose TTS engine [1-{len(tts_options)}] (default 1): ").strip()
+                if not choice:
+                    tts_choice = tts_options[0]
+                    break
+                idx = int(choice) - 1
+                if 0 <= idx < len(tts_options):
+                    tts_choice = tts_options[idx]
+                    break
+            except ValueError:
+                pass
+            print("Invalid selection.")
+
+        changes["SQ_TTS_ENGINE"] = tts_choice["id"]
+
+        # TTS rate
+        default_rate = "150"
+        rate_input = input(f"   TTS speech rate (words per minute, default {default_rate}): ").strip()
+        if not rate_input:
+            rate_input = default_rate
+        try:
+            int(rate_input)
+        except ValueError:
+            rate_input = default_rate
+        changes["SQ_TTS_RATE"] = rate_input
+
+        # Optional voice hint
+        voice_hint = input("   Preferred voice name (substring, e.g. 'polski', leave empty for default): ").strip()
+        changes["SQ_TTS_VOICE"] = voice_hint
+
     else:
         # Auto-configure voice based on mode
         # If GPU available or high perf mode, prefer Whisper Local, otherwise Google
@@ -366,6 +413,11 @@ def run_setup(interactive: bool = True, mode: str = "balance"):
             changes["SQ_WHISPER_MODEL"] = selected_config["whisper"]
         else:
             changes["SQ_STT_PROVIDER"] = "google"
+
+        # TTS defaults in auto mode
+        changes["SQ_TTS_ENGINE"] = "pyttsx3"
+        changes["SQ_TTS_RATE"] = "150"
+        changes["SQ_TTS_VOICE"] = ""
 
     # 4. Summary and Apply
 
@@ -386,6 +438,93 @@ def run_setup(interactive: bool = True, mode: str = "balance"):
     
     config.save()
     print("\n✅ Configuration saved to .env")
+
+
+def run_setup_tts(interactive: bool = True):
+    """Run TTS-only setup wizard.
+
+    This configures only SQ_TTS_ENGINE, SQ_TTS_VOICE and SQ_TTS_RATE
+    without touching LLM or STT settings.
+    """
+
+    # Detect non-interactive environment
+    if interactive and (not sys.stdin.isatty() or os.environ.get("CI") or os.environ.get("NON_INTERACTIVE")):
+        print("⚠️ Non-interactive environment detected. Switching to auto mode.")
+        interactive = False
+
+    changes: Dict[str, Any] = {}
+
+    print("\n🔉 Text-to-Speech (TTS) Configuration Only")
+
+    if interactive:
+        print("   Choose default TTS engine:")
+
+        tts_options = [
+            {"id": "pyttsx3", "name": "pyttsx3 (cross-platform, recommended)"},
+            {"id": "espeak", "name": "espeak (Linux CLI)"},
+            {"id": "say", "name": "say (macOS built-in)"},
+            {"id": "powershell", "name": "PowerShell (Windows built-in)"},
+            {"id": "auto", "name": "auto (let Streamware choose based on OS)"},
+        ]
+
+        for idx, opt in enumerate(tts_options):
+            print(f"   {idx + 1}. {opt['name']}")
+
+        while True:
+            try:
+                choice = input(f"\nChoose TTS engine [1-{len(tts_options)}] (default 1): ").strip()
+                if not choice:
+                    tts_choice = tts_options[0]
+                    break
+                idx = int(choice) - 1
+                if 0 <= idx < len(tts_options):
+                    tts_choice = tts_options[idx]
+                    break
+            except ValueError:
+                pass
+            print("Invalid selection.")
+
+        changes["SQ_TTS_ENGINE"] = tts_choice["id"]
+
+        # TTS rate
+        default_rate = "150"
+        rate_input = input(f"   TTS speech rate (words per minute, default {default_rate}): ").strip()
+        if not rate_input:
+            rate_input = default_rate
+        try:
+            int(rate_input)
+        except ValueError:
+            rate_input = default_rate
+        changes["SQ_TTS_RATE"] = rate_input
+
+        # Optional voice hint
+        voice_hint = input("   Preferred voice name (substring, e.g. 'polski', leave empty for default): ").strip()
+        changes["SQ_TTS_VOICE"] = voice_hint
+    else:
+        # Non-interactive: keep existing values or apply sensible defaults
+        current_engine = config.get("SQ_TTS_ENGINE", "pyttsx3") or "pyttsx3"
+        current_rate = config.get("SQ_TTS_RATE", "150") or "150"
+        current_voice = config.get("SQ_TTS_VOICE", "")
+
+        changes["SQ_TTS_ENGINE"] = current_engine
+        changes["SQ_TTS_RATE"] = current_rate
+        changes["SQ_TTS_VOICE"] = current_voice
+
+    print("\nProposed TTS Configuration:")
+    for key, value in changes.items():
+        print(f"   {key} = {value}")
+
+    if interactive:
+        response = input("\nApply these TTS changes? [Y/n] ").strip().lower()
+        if response in ("n", "no"):
+            print("TTS setup cancelled.")
+            return
+
+    for key, value in changes.items():
+        config.set(key, value)
+
+    config.save()
+    print("\n✅ TTS configuration saved to .env")
 
 if __name__ == "__main__":
     import argparse

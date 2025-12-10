@@ -410,6 +410,7 @@ Shortcuts:
     live_parser.add_argument('--model', default='llava:7b', help='AI model (default: llava:7b)')
     live_parser.add_argument('--webhook', help='Webhook URL for alerts')
     live_parser.add_argument('--file', '-o', help='Save HTML report to file')
+    live_parser.add_argument('--frames-dir', help='Directory to save captured frames (e.g. ./frames)')
     
     # Global options
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
@@ -2767,6 +2768,10 @@ def handle_live(args) -> int:
     uri += f"&analysis={analysis}"
     uri += f"&motion={motion}"
     uri += f"&frames_mode={frames}"
+    
+    # Optional frames output directory
+    if getattr(args, 'frames_dir', None):
+        uri += f"&frames_dir={args.frames_dir}"
     
     # Explicit numeric params (override descriptive presets)
     if getattr(args, 'interval', None):

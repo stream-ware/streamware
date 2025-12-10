@@ -146,8 +146,13 @@ Examples:
         return 0
         
     if args.setup:
-        from .setup import run_setup
-        run_setup(mode=args.mode)
+        from .setup import run_setup, run_setup_tts
+
+        # Special case: `streamware --setup tts` runs TTS-only wizard
+        if args.uri and str(args.uri).lower() == "tts":
+            run_setup_tts()
+        else:
+            run_setup(mode=args.mode)
         return 0
 
     if not args.uri:

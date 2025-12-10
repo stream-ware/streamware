@@ -7,6 +7,12 @@ One-liner examples for the most common tasks.
 ```bash
 pip install streamware
 ollama pull llava:13b  # For vision AI
+
+# Optional: auto-configure LLM + voice
+streamware --setup --mode balance      # full setup (recommended)
+
+# TTS-only setup (does not change LLM/STT)
+streamware --setup tts
 ```
 
 ## 📷 Network & Cameras
@@ -143,8 +149,11 @@ sq live narrator --url "rtsp://camera/live" \
 # Watch for specific triggers
 sq live watch --url "rtsp://camera/live" \
     --trigger "person appears,door opens" \
-    --tts --duration 300
+    --tts --duration 300 \
+    --frames-dir ./frames   # save captured frames locally
 ```
+
+> ℹ️ Frames captured by the live narrator can be persisted to a folder with `--frames-dir`.
 
 ### Python API
 ```python
@@ -259,6 +268,13 @@ sq config --web
 # AI Model (llava:13b recommended)
 SQ_MODEL=llava:13b
 
+# Voice / STT–TTS configuration
+SQ_STT_PROVIDER=whisper_local        # google, whisper_local, whisper_api
+SQ_WHISPER_MODEL=small              # tiny, base, small, medium, large
+SQ_TTS_ENGINE=pyttsx3               # auto, pyttsx3, espeak, say, powershell
+SQ_TTS_VOICE=polski                 # preferred voice name (substring)
+SQ_TTS_RATE=160                     # speech rate (words per minute)
+
 # Default focus for detection
 SQ_STREAM_FOCUS=person
 
@@ -272,6 +288,25 @@ SQ_SLACK_WEBHOOK=https://hooks.slack.com/services/xxx
 SQ_TELEGRAM_BOT_TOKEN=xxx
 SQ_TELEGRAM_CHAT_ID=xxx
 ```
+
+### Troubleshooting RTSP / ffmpeg
+
+If you see messages like:
+
+```text
+Frame capture failed: Command '['ffmpeg', ..., '-i', 'rtsp://camera/live', ...]' returned non-zero exit status 145
+```
+
+Najczęstsze przyczyny:
+- Błędny URL RTSP lub kamera jest offline
+- Nieprawidłowe dane logowania (`user:pass@` w URL)
+- Firewall / sieć blokuje połączenie
+- Brak lub niekompatybilna wersja `ffmpeg`
+
+Spróbuj:
+- Otworzyć ten sam URL w `ffplay` / `ffmpeg` lub VLC
+- Zweryfikować, że `ffmpeg` jest zainstalowany i w `$PATH`
+- Sprawdzić, czy kamera działa lokalnie w tej samej sieci
 
 ### Change Settings
 ```bash

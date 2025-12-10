@@ -14,6 +14,11 @@ Voice-controlled automation with STT/TTS and AI vision.
 ## 🚀 Quick Start
 
 ```bash
+# (optional but recommended) Auto-configure voice in .env
+streamware --setup --mode balance
+# Or only TTS settings:
+streamware --setup tts
+
 # Voice keyboard
 sq voice-keyboard type "wpisz hello world"
 
@@ -36,6 +41,14 @@ sudo apt-get install xdotool espeak scrot
 # Python packages (auto-installed)
 pip install SpeechRecognition PyAudio pyttsx3
 ```
+
+You can fine-tune voice behaviour via `.env`:
+
+- `SQ_STT_PROVIDER` – STT engine (`google`, `whisper_local`, `whisper_api`)
+- `SQ_WHISPER_MODEL` – Whisper model size (`tiny`, `base`, `small`, `medium`, `large`)
+- `SQ_TTS_ENGINE` – TTS backend (`auto`, `pyttsx3`, `espeak`, `say`, `powershell`)
+- `SQ_TTS_VOICE` – preferred voice name (substring, e.g. `polski`)
+- `SQ_TTS_RATE` – speech rate (words per minute)
 
 ## 📚 Related Documentation
 

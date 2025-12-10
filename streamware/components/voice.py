@@ -57,16 +57,24 @@ class VoiceComponent(Component):
         super().__init__(uri)
         self.operation = uri.operation or "listen"
         
-        self.text = uri.get_param("text")
-        self.language = uri.get_param("language", "en")
-        self.voice = uri.get_param("voice")
-        self.output_file = uri.get_param("output")
-        self.engine = uri.get_param("engine", "auto")
-        
         # Configuration from .env
         from ..config import config
         self.stt_provider = config.get("SQ_STT_PROVIDER", "google")
         self.whisper_model = config.get("SQ_WHISPER_MODEL", "base")
+        default_tts_engine = config.get("SQ_TTS_ENGINE", "auto")
+        default_tts_voice = config.get("SQ_TTS_VOICE", "")
+        default_tts_rate = config.get("SQ_TTS_RATE", "150")
+
+        # URI parameters (override config where applicable)
+        self.text = uri.get_param("text")
+        self.language = uri.get_param("language", "en")
+        self.voice = uri.get_param("voice", default_tts_voice)
+        self.output_file = uri.get_param("output")
+        self.engine = uri.get_param("engine", default_tts_engine)
+        try:
+            self.tts_rate = int(uri.get_param("rate", default_tts_rate))
+        except (TypeError, ValueError):
+            self.tts_rate = 150
         
         # Override if specified in URI
         if uri.get_param("provider"):
@@ -261,25 +269,34 @@ class VoiceComponent(Component):
         # Try different TTS engines
         success = False
         engine_used = None
+        preferred_engine = (self.engine or "auto").lower()
         
         # Try pyttsx3 (cross-platform)
-        try:
-            import pyttsx3
-            engine = pyttsx3.init()
-            
-            if self.voice:
-                voices = engine.getProperty('voices')
-                for voice in voices:
-                    if self.voice.lower() in voice.name.lower():
-                        engine.setProperty('voice', voice.id)
-                        break
-            
-            engine.say(text)
-            engine.runAndWait()
-            success = True
-            engine_used = "pyttsx3"
-        except Exception as e:
-            logger.debug(f"pyttsx3 failed: {e}")
+        if preferred_engine in ("auto", "pyttsx3"):
+            try:
+                import pyttsx3
+                engine = pyttsx3.init()
+
+                # Apply configured rate if possible
+                try:
+                    if getattr(self, "tts_rate", None):
+                        engine.setProperty('rate', int(self.tts_rate))
+                except Exception as rate_err:
+                    logger.debug(f"Failed to set TTS rate: {rate_err}")
+                
+                if self.voice:
+                    voices = engine.getProperty('voices')
+                    for voice in voices:
+                        if self.voice.lower() in getattr(voice, 'name', '').lower():
+                            engine.setProperty('voice', voice.id)
+                            break
+                
+                engine.say(text)
+                engine.runAndWait()
+                success = True
+                engine_used = "pyttsx3"
+            except Exception as e:
+                logger.debug(f"pyttsx3 failed: {e}")
         
         # Try system commands
         if not success:
@@ -287,15 +304,18 @@ class VoiceComponent(Component):
             system = platform.system()
             
             try:
-                if system == "Darwin":  # macOS
+                # macOS 'say'
+                if preferred_engine in ("say",) or (preferred_engine == "auto" and system == "Darwin"):
                     subprocess.run(["say", text], check=True)
                     engine_used = "say"
                     success = True
-                elif system == "Linux":
+                # Linux 'espeak'
+                elif preferred_engine in ("espeak",) or (preferred_engine == "auto" and system == "Linux"):
                     subprocess.run(["espeak", text], check=True)
                     engine_used = "espeak"
                     success = True
-                elif system == "Windows":
+                # Windows PowerShell TTS
+                elif preferred_engine in ("powershell",) or (preferred_engine == "auto" and system == "Windows"):
                     subprocess.run(["powershell", "-Command", f"Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('{text}')"], check=True)
                     engine_used = "powershell"
                     success = True
