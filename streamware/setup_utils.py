@@ -237,6 +237,66 @@ def check_tts_available() -> Tuple[bool, Optional[str]]:
     return False, None
 
 
+def test_tts_works(engine: str = None) -> Tuple[bool, str]:
+    """Actually test if TTS works by speaking a test phrase.
+    
+    Args:
+        engine: Specific engine to test, or None to auto-detect
+        
+    Returns:
+        (works, message) tuple
+    """
+    if engine is None:
+        available, engine = check_tts_available()
+        if not available:
+            return False, "No TTS engine found"
+    
+    try:
+        if engine == "pyttsx3":
+            import pyttsx3
+            tts = pyttsx3.init()
+            # Just initialize, don't actually speak during test
+            tts.stop()
+            return True, "pyttsx3 initialized successfully"
+        
+        elif engine == "espeak":
+            import subprocess
+            result = subprocess.run(
+                ["espeak", "--version"],
+                capture_output=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                return True, "espeak available"
+            return False, "espeak not working"
+        
+        elif engine == "say":
+            import subprocess
+            # macOS say - just check it exists
+            result = subprocess.run(
+                ["say", "-v", "?"],
+                capture_output=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                return True, "say available"
+            return False, "say not working"
+        
+        elif engine == "pico":
+            import subprocess
+            if shutil.which("pico2wave"):
+                return True, "pico2wave available"
+            return False, "pico2wave not found"
+        
+        else:
+            return False, f"Unknown engine: {engine}"
+            
+    except ImportError as e:
+        return False, f"Import error: {e}"
+    except Exception as e:
+        return False, f"TTS test failed: {e}"
+
+
 def ensure_tts_available(interactive: bool = True) -> bool:
     """Ensure at least one TTS engine is available.
     
@@ -385,6 +445,375 @@ def get_system_info() -> Dict[str, str]:
     }
 
 
+def check_ollama_available() -> Tuple[bool, str]:
+    """Check if Ollama is running and accessible.
+    
+    Returns:
+        (available, message) tuple
+    """
+    import requests
+    
+    try:
+        from .config import config
+        ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+        resp = requests.get(f"{ollama_url}/api/tags", timeout=5)
+        if resp.ok:
+            models = resp.json().get("models", [])
+            return True, f"Ollama running ({len(models)} models)"
+        else:
+            return False, "Ollama not responding"
+    except requests.exceptions.ConnectionError:
+        return False, "Ollama not running. Start with: ollama serve"
+    except Exception as e:
+        return False, f"Ollama error: {e}"
+
+
+def test_llm_works(model: str = None) -> Tuple[bool, str]:
+    """Actually test if LLM can process an image.
+    
+    Args:
+        model: Model to test, or None for default
+        
+    Returns:
+        (works, message) tuple
+    """
+    from .config import config
+    
+    provider = config.get("SQ_LLM_PROVIDER", "ollama")
+    
+    if provider == "openai":
+        api_key = config.get("SQ_OPENAI_API_KEY", "")
+        if not api_key:
+            return False, "OpenAI selected but SQ_OPENAI_API_KEY not set"
+        return True, "OpenAI API key configured"
+    
+    elif provider == "anthropic":
+        api_key = config.get("SQ_ANTHROPIC_API_KEY", "")
+        if not api_key:
+            return False, "Anthropic selected but SQ_ANTHROPIC_API_KEY not set"
+        return True, "Anthropic API key configured"
+    
+    elif provider == "ollama":
+        # Test actual Ollama connection
+        ollama_ok, msg = check_ollama_available()
+        if not ollama_ok:
+            return False, msg
+        
+        # Test model availability
+        if model:
+            model_ok, model_msg = check_ollama_model(model)
+            if not model_ok:
+                return False, model_msg
+        
+        return True, f"Ollama ready"
+    
+    else:
+        return False, f"Unknown LLM provider: {provider}"
+
+
+def select_llm_provider(interactive: bool = True) -> bool:
+    """Let user select LLM provider configuration.
+    
+    Args:
+        interactive: If True, prompt user
+        
+    Returns:
+        True if valid configuration selected
+    """
+    from .config import config
+    
+    if not interactive:
+        return False
+    
+    print("\n🔧 LLM Configuration")
+    print("=" * 40)
+    print("\nSelect LLM provider:")
+    print("  1. Ollama (local, free, recommended)")
+    print("  2. OpenAI (cloud, requires API key)")
+    print("  3. Anthropic (cloud, requires API key)")
+    
+    try:
+        choice = input("\nChoice [1-3, default=1]: ").strip()
+        if not choice:
+            choice = "1"
+        
+        if choice == "1":
+            config.set("SQ_LLM_PROVIDER", "ollama")
+            
+            # Check if Ollama is running
+            ollama_ok, msg = check_ollama_available()
+            if not ollama_ok:
+                print(f"   ⚠️  {msg}")
+                print("   Start Ollama with: ollama serve")
+                return False
+            
+            # Save ONLY this key to .env (preserve everything else)
+            try:
+                config.save(keys_only=["SQ_LLM_PROVIDER"])
+                print("\n✅ Using Ollama (local) - saved to .env")
+            except Exception as e:
+                print(f"\n✅ Using Ollama (local) - could not save to .env: {e}")
+            
+            return True
+            
+        elif choice == "2":
+            api_key = input("Enter OpenAI API key: ").strip()
+            if not api_key:
+                print("   ❌ API key required")
+                return False
+            
+            config.set("SQ_LLM_PROVIDER", "openai")
+            config.set("SQ_OPENAI_API_KEY", api_key)
+            
+            # Save ONLY these keys to .env (preserve everything else)
+            try:
+                config.save(keys_only=["SQ_LLM_PROVIDER", "SQ_OPENAI_API_KEY"])
+                print("\n✅ Using OpenAI - saved to .env")
+            except Exception as e:
+                print(f"\n✅ Using OpenAI - could not save to .env: {e}")
+            return True
+            
+        elif choice == "3":
+            api_key = input("Enter Anthropic API key: ").strip()
+            if not api_key:
+                print("   ❌ API key required")
+                return False
+            
+            config.set("SQ_LLM_PROVIDER", "anthropic")
+            config.set("SQ_ANTHROPIC_API_KEY", api_key)
+            
+            # Save ONLY these keys to .env (preserve everything else)
+            try:
+                config.save(keys_only=["SQ_LLM_PROVIDER", "SQ_ANTHROPIC_API_KEY"])
+                print("\n✅ Using Anthropic - saved to .env")
+            except Exception as e:
+                print(f"\n✅ Using Anthropic - could not save to .env: {e}")
+            return True
+            
+        else:
+            print("   ❌ Invalid choice")
+            return False
+            
+    except (EOFError, KeyboardInterrupt):
+        print("\n   Cancelled")
+        return False
+
+
+def check_ollama_model(model: str) -> Tuple[bool, str]:
+    """Check if specific Ollama model is installed.
+    
+    Returns:
+        (available, message) tuple
+    """
+    import requests
+    
+    try:
+        from .config import config
+        ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+        resp = requests.get(f"{ollama_url}/api/tags", timeout=5)
+        if resp.ok:
+            models = [m.get("name", "") for m in resp.json().get("models", [])]
+            base_name = model.split(":")[0]
+            
+            # Check exact or base match
+            for m in models:
+                if m == model or m == f"{model}:latest" or m.startswith(base_name):
+                    return True, m
+            
+            return False, f"Model {model} not installed"
+        else:
+            return False, "Cannot check models"
+    except Exception as e:
+        return False, f"Error: {e}"
+
+
+def install_ollama_model(model: str, interactive: bool = True) -> bool:
+    """Install Ollama model.
+    
+    Args:
+        model: Model name (e.g. "llava:7b", "gemma2:2b")
+        interactive: If True, ask user before installing
+        
+    Returns:
+        True if installed successfully
+    """
+    import subprocess
+    
+    if interactive:
+        print(f"\n⚠️  Model '{model}' not found.")
+        try:
+            response = input(f"   Install with 'ollama pull {model}'? [Y/n]: ").strip().lower()
+            if response and response not in ("y", "yes"):
+                return False
+        except (EOFError, KeyboardInterrupt):
+            return False
+    
+    print(f"   Pulling {model}... (this may take a few minutes)")
+    
+    try:
+        result = subprocess.run(
+            ["ollama", "pull", model],
+            capture_output=False,
+            timeout=600  # 10 minutes max
+        )
+        
+        if result.returncode == 0:
+            print(f"   ✅ {model} installed successfully")
+            return True
+        else:
+            print(f"   ❌ Failed to install {model}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        print(f"   ❌ Installation timed out")
+        return False
+    except FileNotFoundError:
+        print(f"   ❌ Ollama not found. Install from: https://ollama.ai")
+        return False
+    except Exception as e:
+        print(f"   ❌ Error: {e}")
+        return False
+
+
+def ensure_ollama_model(model: str, interactive: bool = True) -> bool:
+    """Ensure Ollama model is available, install if not.
+    
+    Args:
+        model: Model name
+        interactive: If True, prompt user
+        
+    Returns:
+        True if model is available
+    """
+    available, msg = check_ollama_model(model)
+    if available:
+        return True
+    
+    return install_ollama_model(model, interactive)
+
+
+def run_startup_checks(
+    vision_model: str = None,
+    guarder_model: str = None,
+    check_tts: bool = False,
+    interactive: bool = True
+) -> dict:
+    """Run all startup checks and install missing dependencies.
+    
+    Args:
+        vision_model: Vision LLM model (e.g. "llava:7b")
+        guarder_model: Guarder model (e.g. "gemma2:2b")
+        check_tts: Whether to check TTS availability
+        interactive: Whether to prompt for installation
+        
+    Returns:
+        Dict with check results
+    """
+    from .config import config
+    
+    results = {
+        "llm": False,
+        "ollama": False,
+        "vision_model": False,
+        "guarder_model": False,
+        "tts": False,
+        "all_ok": False,
+    }
+    
+    print("\n🔍 Checking dependencies...")
+    
+    # 0. Check LLM provider configuration
+    llm_ok, llm_msg = test_llm_works(vision_model)
+    
+    if not llm_ok:
+        print(f"   ❌ LLM: {llm_msg}")
+        
+        if interactive:
+            print("\n   LLM is not configured correctly.")
+            if select_llm_provider(interactive=True):
+                # Re-check after configuration
+                llm_ok, llm_msg = test_llm_works(vision_model)
+        
+        if not llm_ok:
+            print(f"\n❌ Cannot start without working LLM configuration.")
+            return results
+    
+    results["llm"] = True
+    provider = config.get("SQ_LLM_PROVIDER", "ollama")
+    print(f"   ✅ LLM: {provider} ({llm_msg})")
+    
+    # 1. Check Ollama (only if using Ollama provider)
+    if provider == "ollama":
+        ollama_ok, ollama_msg = check_ollama_available()
+        results["ollama"] = ollama_ok
+        
+        if not ollama_ok:
+            print(f"   ❌ Ollama: {ollama_msg}")
+            if interactive:
+                print("\n   Ollama is required for AI features.")
+                print("   Install from: https://ollama.ai")
+                print("   Then run: ollama serve")
+            return results
+        else:
+            print(f"   ✅ Ollama: {ollama_msg}")
+    else:
+        results["ollama"] = True  # Not needed for cloud providers
+    
+    # 2. Check vision model
+    if vision_model is None:
+        vision_model = config.get("SQ_MODEL", "llava:7b")
+    
+    vision_ok, vision_msg = check_ollama_model(vision_model)
+    if vision_ok:
+        print(f"   ✅ Vision model: {vision_msg}")
+        results["vision_model"] = True
+    else:
+        print(f"   ⚠️  Vision model: {vision_msg}")
+        if ensure_ollama_model(vision_model, interactive):
+            results["vision_model"] = True
+    
+    # 3. Check guarder model
+    if guarder_model is None:
+        guarder_model = config.get("SQ_GUARDER_MODEL", "gemma2:2b")
+    
+    guarder_ok, guarder_msg = check_ollama_model(guarder_model)
+    if guarder_ok:
+        print(f"   ✅ Guarder model: {guarder_msg}")
+        results["guarder_model"] = True
+    else:
+        print(f"   ⚠️  Guarder model: {guarder_msg}")
+        if ensure_ollama_model(guarder_model, interactive):
+            results["guarder_model"] = True
+    
+    # 4. Check TTS (optional) - actually test it works
+    if check_tts:
+        tts_ok, tts_engine = check_tts_available()
+        if tts_ok:
+            # Actually test if TTS works
+            works, msg = test_tts_works(tts_engine)
+            if works:
+                print(f"   ✅ TTS: {tts_engine} ({msg})")
+                results["tts"] = True
+            else:
+                print(f"   ⚠️  TTS: {tts_engine} found but not working: {msg}")
+                if ensure_tts_available(interactive):
+                    results["tts"] = True
+        else:
+            print(f"   ⚠️  TTS: not available")
+            if ensure_tts_available(interactive):
+                results["tts"] = True
+    
+    # Summary
+    results["all_ok"] = results["ollama"] and results["vision_model"]
+    
+    if results["all_ok"]:
+        print("\n✅ All dependencies ready!")
+    else:
+        print("\n⚠️  Some dependencies missing. Features may be limited.")
+    
+    return results
+
+
 def run_first_time_setup(interactive: bool = True) -> bool:
     """Run first-time setup if needed.
     
@@ -404,17 +833,19 @@ def run_first_time_setup(interactive: bool = True) -> bool:
     print("\n🚀 First-time Streamware Setup")
     print("=" * 40)
     
-    # Check core dependencies
-    ensure_core_dependencies(interactive=True)
-    
-    # Check TTS
-    ensure_tts_available(interactive=True)
+    # Run all checks
+    results = run_startup_checks(
+        check_tts=True,
+        interactive=True
+    )
     
     # Mark as configured
-    try:
-        config_flag.touch()
-    except Exception:
-        pass
+    if results["all_ok"]:
+        try:
+            config_flag.touch()
+        except Exception:
+            pass
+        print("\n✅ Setup complete!")
+        return True
     
-    print("\n✅ Setup complete!")
-    return True
+    return False

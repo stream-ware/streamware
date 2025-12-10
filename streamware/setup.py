@@ -438,7 +438,8 @@ def run_setup(interactive: bool = True, mode: str = "balance"):
     for key, value in changes.items():
         config.set(key, value)
     
-    config.save()
+    # Save only changed keys to preserve other settings
+    config.save(keys_only=list(changes.keys()))
     print("\n✅ Configuration saved to .env")
 
 
@@ -527,7 +528,8 @@ def run_setup_tts(interactive: bool = True):
     for key, value in changes.items():
         config.set(key, value)
 
-    config.save()
+    # Save only changed keys to preserve other settings
+    config.save(keys_only=list(changes.keys()))
     print("\n✅ TTS configuration saved to .env")
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ Usage:
 import os
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 # Default configuration values
 DEFAULTS = {
@@ -28,6 +28,8 @@ DEFAULTS = {
     "SQ_ANTHROPIC_API_KEY": "",
     "SQ_LLM_PROVIDER": "ollama",
     "SQ_LLM_TIMEOUT": "30",
+    "SQ_GUARDER_MODEL": "gemma2:2b",   # Small model for response validation (fast)
+    "SQ_USE_GUARDER": "true",          # LLM-based response filtering (default: on)
     
     # Audio / Voice
     "SQ_STT_PROVIDER": "google",
@@ -42,6 +44,13 @@ DEFAULTS = {
     "SQ_STREAM_DURATION": "30",
     "SQ_STREAM_FOCUS": "",
     "SQ_STREAM_FRAMES_DIR": "",
+    "SQ_RAMDISK_PATH": "/dev/shm/streamware",
+    "SQ_RAMDISK_ENABLED": "true",
+    "SQ_RAMDISK_SIZE_MB": "512",
+    "SQ_CAPTURE_FPS": "0.5",
+    "SQ_IMAGE_MAX_SIZE": "512",
+    "SQ_IMAGE_QUALITY": "75",
+    "SQ_USE_CACHE": "true",
     
     # Detection Settings (descriptive)
     "SQ_SENSITIVITY": "medium",      # ultra, high, medium, low, minimal
@@ -139,6 +148,10 @@ CONFIG_CATEGORIES = {
         ("SQ_STREAM_FOCUS", "Focus Target", "Detection focus: person, animal, vehicle, etc."),
         ("SQ_STREAM_SENSITIVITY", "Sensitivity", "Detection sensitivity: low, medium, high"),
         ("SQ_STREAM_FRAMES_DIR", "Frames Directory", "Save captured frames to this directory"),
+        ("SQ_RAMDISK_PATH", "RAM Disk Path", "Path for RAM disk frame storage (default: /dev/shm/streamware)"),
+        ("SQ_RAMDISK_ENABLED", "RAM Disk Enabled", "Use RAM disk for faster frame I/O (true/false)"),
+        ("SQ_RAMDISK_SIZE_MB", "RAM Disk Size (MB)", "Maximum RAM disk size in megabytes"),
+        ("SQ_CAPTURE_FPS", "Capture FPS", "Frames per second to capture from stream"),
     ],
     "Network Scanning": [
         ("SQ_NETWORK_SUBNET", "Default Subnet", "Subnet to scan (empty = auto-detect)"),
@@ -273,24 +286,87 @@ class Config:
         """Set configuration value"""
         self._config[key] = str(value)
     
-    def save(self, path: Optional[Path] = None):
-        """Save configuration to .env file"""
+    def save(self, path: Optional[Path] = None, full: bool = False, keys_only: List[str] = None):
+        """Save configuration to .env file.
+        
+        Args:
+            path: Path to save to (default: current .env file)
+            full: If True, write all values. If False, only update existing keys.
+            keys_only: If provided, only update these specific keys (safest option)
+        """
         if path is None:
             path = self._env_file or Path.cwd() / ".env"
         
-        lines = []
+        # If keys_only specified, do minimal update
+        if keys_only and path.exists():
+            existing_lines = []
+            try:
+                with open(path, "r") as f:
+                    existing_lines = f.readlines()
+            except Exception:
+                pass
+            
+            if existing_lines:
+                updated_lines = []
+                for line in existing_lines:
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("#") and "=" in stripped:
+                        key = stripped.split("=", 1)[0].strip()
+                        if key in keys_only and key in self._config:
+                            updated_lines.append(f"{key}={self._config[key]}\n")
+                        else:
+                            updated_lines.append(line)
+                    else:
+                        updated_lines.append(line)
+                
+                with open(path, "w") as f:
+                    f.writelines(updated_lines)
+                
+                self._env_file = path
+                return
         
-        # Group by category
-        for category, items in CONFIG_CATEGORIES.items():
-            lines.append(f"\n# {category}")
-            for key, label, desc in items:
-                value = self._config.get(key, DEFAULTS.get(key, ""))
-                lines.append(f"{key}={value}")
+        # Incremental save - update only keys in _config, preserve everything else
+        if path.exists() and not full:
+            existing_lines = []
+            try:
+                with open(path, "r") as f:
+                    existing_lines = f.readlines()
+            except Exception:
+                pass
+            
+            if existing_lines:
+                updated_lines = []
+                for line in existing_lines:
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("#") and "=" in stripped:
+                        key = stripped.split("=", 1)[0].strip()
+                        if key in self._config:
+                            updated_lines.append(f"{key}={self._config[key]}\n")
+                        else:
+                            # Preserve unknown keys (user's custom variables)
+                            updated_lines.append(line)
+                    else:
+                        updated_lines.append(line)
+                
+                with open(path, "w") as f:
+                    f.writelines(updated_lines)
+                
+                self._env_file = path
+                return
         
-        with open(path, "w") as f:
-            f.write("# Streamware Configuration\n")
-            f.write("# Generated by: sq config --save\n")
-            f.write("\n".join(lines))
+        # Full save - only when explicitly requested or file doesn't exist
+        if full or not path.exists():
+            lines = []
+            for category, items in CONFIG_CATEGORIES.items():
+                lines.append(f"\n# {category}")
+                for key, label, desc in items:
+                    value = self._config.get(key, DEFAULTS.get(key, ""))
+                    lines.append(f"{key}={value}")
+            
+            with open(path, "w") as f:
+                f.write("# Streamware Configuration\n")
+                f.write("# Generated by: sq config --save\n")
+                f.write("\n".join(lines))
         
         self._env_file = path
     
@@ -466,7 +542,7 @@ def run_config_web(host: str = "0.0.0.0", port: int = 8080):
             for key, value in data.items():
                 if key in DEFAULTS:
                     config.set(key, value)
-            config.save()
+            config.save(keys_only=list(data.keys()))
             return jsonify({"success": True, "message": "Configuration saved to .env"})
         except Exception as e:
             return jsonify({"success": False, "message": str(e)})

@@ -122,11 +122,12 @@ class TTSManager:
         rate = rate or self.config.rate
         voice = voice or self.config.voice
         
-        # Determine engine order
+        # Determine engine order - always include fallbacks
         if engine == TTSEngine.AUTO:
             engines_to_try = self._get_engine_priority()
         else:
-            engines_to_try = [engine]
+            # Try specified engine first, then fallback to others
+            engines_to_try = [engine] + [e for e in self._get_engine_priority() if e != engine]
         
         # Try each engine
         for eng in engines_to_try:
@@ -138,7 +139,7 @@ class TTSManager:
                 logger.debug(f"TTS engine {eng.value} failed: {e}")
                 continue
         
-        logger.warning("No TTS engine available. Run: streamware --check tts")
+        logger.warning("No TTS engine available. Run: sq check tts")
         return False
     
     def _clean_text(self, text: str) -> str:
@@ -158,8 +159,8 @@ class TTSManager:
             return [TTSEngine.SAY, TTSEngine.PYTTSX3]
         elif system == "windows":
             return [TTSEngine.PYTTSX3, TTSEngine.POWERSHELL]
-        else:  # Linux - pyttsx3 first (more reliable when installed)
-            return [TTSEngine.PYTTSX3, TTSEngine.ESPEAK, TTSEngine.PICO, TTSEngine.FESTIVAL]
+        else:  # Linux - espeak first (truly non-blocking with Popen)
+            return [TTSEngine.ESPEAK, TTSEngine.PYTTSX3, TTSEngine.PICO, TTSEngine.FESTIVAL]
     
     def _speak_with_engine(
         self,
@@ -188,31 +189,50 @@ class TTSManager:
     
     def _speak_pyttsx3(self, text: str, rate: int, voice: str, block: bool) -> bool:
         """Speak using pyttsx3."""
-        try:
-            import pyttsx3
-            
-            # Reuse engine instance to avoid weak reference issues
-            if self._pyttsx3_engine is None:
-                self._pyttsx3_engine = pyttsx3.init()
-            
-            engine = self._pyttsx3_engine
-            engine.setProperty('rate', rate)
-            
-            if voice:
-                voices = engine.getProperty('voices')
-                for v in voices:
-                    if voice.lower() in v.name.lower():
-                        engine.setProperty('voice', v.id)
-                        break
-            
-            engine.say(text)
-            engine.runAndWait()
-            return True
-        except Exception as e:
-            logger.debug(f"pyttsx3 failed: {e}")
-            # Reset engine on failure
-            self._pyttsx3_engine = None
-            return False
+        import threading
+        
+        def _do_speak():
+            try:
+                import pyttsx3
+                
+                # Create new engine for thread safety
+                engine = pyttsx3.init()
+                engine.setProperty('rate', rate)
+                
+                if voice:
+                    voices = engine.getProperty('voices')
+                    for v in voices:
+                        if voice.lower() in v.name.lower():
+                            engine.setProperty('voice', v.id)
+                            break
+                
+                engine.say(text)
+                engine.runAndWait()
+                engine.stop()
+            except Exception as e:
+                logger.debug(f"pyttsx3 thread failed: {e}")
+        
+        if block:
+            _do_speak()
+        else:
+            # Run in thread for non-blocking
+            # NOT daemon - we want TTS to complete even if main thread exits
+            t = threading.Thread(target=_do_speak, daemon=False)
+            t.start()
+            # Store reference to join later if needed
+            if not hasattr(self, '_tts_threads'):
+                self._tts_threads = []
+            self._tts_threads.append(t)
+        
+        return True
+    
+    def wait_for_tts(self, timeout: float = 10.0):
+        """Wait for all pending TTS to complete."""
+        if hasattr(self, '_tts_threads'):
+            for t in self._tts_threads:
+                if t.is_alive():
+                    t.join(timeout=timeout)
+            self._tts_threads = []
     
     def _speak_espeak(self, text: str, rate: int, voice: str, block: bool) -> bool:
         """Speak using espeak."""
@@ -222,10 +242,10 @@ class TTSManager:
         cmd.append(text)
         
         if block:
-            result = subprocess.run(cmd, capture_output=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, timeout=30, stdin=subprocess.DEVNULL)
             return result.returncode == 0
         else:
-            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
             return True
     
     def _speak_pico(self, text: str, rate: int, block: bool) -> bool:
@@ -394,6 +414,12 @@ def get_available_engines() -> List[str]:
     """Get list of available TTS engine names."""
     manager = get_manager()
     return [e.value for e in manager.get_available_engines()]
+
+
+def wait_for_tts(timeout: float = 10.0):
+    """Wait for all pending TTS to complete."""
+    manager = get_manager()
+    manager.wait_for_tts(timeout)
 
 
 def test_tts() -> dict:

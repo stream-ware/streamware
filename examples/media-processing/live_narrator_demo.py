@@ -23,7 +23,7 @@ from datetime import datetime
 
 # Example URLs - replace with your camera
 EXAMPLE_CAMERAS = [
-    "rtsp://admin:123456@192.168.188.146:554/h264Preview_01_main",
+    "rtsp://admin:admin@192.168.1.100:554/h264Preview_01_main",
     "rtsp://user:pass@192.168.1.100:554/stream",
 ]
 

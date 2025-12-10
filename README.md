@@ -260,6 +260,78 @@ sq media describe_video --file video.mp4
 sq media transcribe --file audio.mp3
 ```
 
+### 🚀 Performance Optimization (iGPU / Low VRAM)
+
+For systems with integrated GPU or limited VRAM (4-8GB shared):
+
+```ini
+# .env - optimized for speed
+SQ_IMAGE_PRESET=fast         # smaller images (384px, 55% quality)
+SQ_FRAME_SCALE=0.25          # analyze at 25% resolution
+SQ_MOTION_THRESHOLD=30       # less sensitive (fewer LLM calls)
+SQ_MODEL=llava:7b            # use 7B instead of 13B
+SQ_LLM_TIMEOUT=90            # longer timeout for slow GPU
+```
+
+**CLI options for speed:**
+```bash
+sq live narrator --url "rtsp://..." --mode track --focus person --lite
+#                                                              ^^^^^^
+#                                              --lite = no images in RAM
+```
+
+**Model recommendations:**
+| VRAM | Recommended Model |
+|------|-------------------|
+| 4GB  | `llava:7b` or `bakllava` |
+| 8GB  | `llava:7b` or `llava:13b` (slower) |
+| 16GB+ | `llava:13b` or `llava:34b` |
+
+**Install pico TTS (better quality than espeak):**
+```bash
+sudo apt install libttspico-utils
+# Then in .env:
+SQ_TTS_ENGINE=pico
+```
+
+### 🛡️ Smart Response Filtering (Guarder)
+
+Streamware uses a small LLM (3B) to validate vision model responses before logging - reduces noise like "no changes detected":
+
+```bash
+# Install guarder model (2GB, fast)
+ollama pull qwen2.5:3b
+
+# Or use even smaller model
+ollama pull gemma2:2b
+```
+
+**Configuration (`.env`):**
+```ini
+SQ_GUARDER_MODEL=qwen2.5:3b   # Validation model
+SQ_USE_GUARDER=true           # Enabled by default
+```
+
+**How it works:**
+```
+Vision LLM (llava:7b) → Response → Guarder (qwen2.5:3b) → YES/NO
+                                                           │
+                                        YES → Log + TTS ───┘
+                                        NO  → Skip (noise)
+```
+
+**CLI options:**
+```bash
+# Full monitoring with smart filtering
+sq live narrator --url "rtsp://..." --mode track --focus person --tts
+
+# Disable guarder (use regex only)
+sq live narrator --url "rtsp://..." --no-guarder
+
+# Lite mode (less RAM) + quiet
+sq live narrator --url "rtsp://..." --lite --quiet
+```
+
 ### ⚡ Image Optimization for LLM
 
 Streamware automatically optimizes images before sending to vision LLMs to reduce latency and API costs:
@@ -346,6 +418,43 @@ Available prompts:
 - `motion_region` – motion region analysis
 - `tracking_detect` – object tracking
 - `live_narrator_*` – live narration modes
+
+---
+
+## 🏗️ Architecture
+
+### Core Modules
+
+| Module | Description |
+|--------|-------------|
+| `llm_client.py` | Centralized LLM client with connection pooling, retries, metrics |
+| `tts.py` | Unified TTS with automatic engine detection and fallback |
+| `image_optimize.py` | Image preprocessing for vision LLMs (downscale, compress) |
+| `prompts/` | External prompt templates (editable .txt files) |
+
+### LLM Client Usage
+```python
+from streamware.llm_client import vision_query, get_client
+
+# Quick query
+result = vision_query("/path/to/image.jpg", "Describe this image")
+
+# With metrics
+client = get_client()
+result = client.analyze_image(image_path, prompt)
+print(client.get_metrics())  # {'total_calls': 5, 'avg_time_ms': 1200, ...}
+```
+
+### TTS Usage
+```python
+from streamware.tts import speak, get_available_engines
+
+# Check available engines
+print(get_available_engines())  # ['espeak', 'pyttsx3']
+
+# Speak with options
+speak("Hello world", engine="espeak", rate=150)
+```
 
 ---
 

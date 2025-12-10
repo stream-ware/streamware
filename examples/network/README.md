@@ -199,14 +199,14 @@ sq network find "cameras" --yaml
 
 # Step 2: Get RTSP URL from output
 # camera:
-#   - ip: 192.168.188.142
+#   - ip: 192.168.1.1
 #     vendor: Reolink
 #     rtsp:
-#       - "rtsp://192.168.188.142:554/h264Preview_01_main"
+#       - "rtsp://192.168.1.100:554/h264Preview_01_main"
 #     credentials: "admin/admin123"
 
 # Step 3: Analyze stream
-sq stream rtsp --url "rtsp://admin:admin123@192.168.188.142:554/h264Preview_01_main" --mode diff --interval 5
+sq stream rtsp --url "rtsp://admin:admin123@192.168.1.100:554/h264Preview_01_main" --mode diff --interval 5
 ```
 
 ### Security Monitoring Pipeline
@@ -224,10 +224,10 @@ sq network scan --yaml
 sq network find "cameras" --yaml
 
 # 3. Monitor each camera
-sq stream rtsp --url "rtsp://admin:admin123@192.168.188.142:554/h264Preview_01_main" --mode diff --continuous
+sq stream rtsp --url "rtsp://admin:admin123@192.168.1.100:554/h264Preview_01_main" --mode diff --continuous
 
 # 4. On activity, send alert (example with Slack)
-sq slack alerts --message "Motion detected on camera 192.168.188.142"
+sq slack alerts --message "Motion detected on camera 192.168.1.100"
 ```
 
 ### Bash Pipeline Example

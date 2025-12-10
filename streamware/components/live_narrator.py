@@ -392,6 +392,17 @@ class LiveNarratorComponent(Component):
         self.tts_voice = uri.get_param("tts_voice", config.get("SQ_TTS_VOICE", ""))
         self.tts_rate = int(uri.get_param("tts_rate", config.get("SQ_TTS_RATE", "150")))
         
+        # Intent for smart detection pipeline
+        import urllib.parse
+        intent_raw = uri.get_param("intent", "")
+        self.intent = urllib.parse.unquote(intent_raw) if intent_raw else ""
+        
+        # Verbose mode for detailed logging
+        self.verbose = str_to_bool(uri.get_param("verbose", "false"))
+        
+        # RAM disk for fast frame capture
+        self.use_ramdisk = str_to_bool(uri.get_param("ramdisk", config.get("SQ_RAMDISK_ENABLED", "true")))
+        
         # Get defaults from config
         default_model = config.get("SQ_MODEL", "llava:7b")
         default_duration = config.get("SQ_STREAM_DURATION", "60")
@@ -445,11 +456,12 @@ class LiveNarratorComponent(Component):
         self.triggers = self._parse_triggers(trigger_str)
         self.webhook_url = uri.get_param("webhook_url", "")
         
+        # Lite mode (no images in memory) and quiet mode
+        self.lite_mode = str_to_bool(uri.get_param("lite", "false"))
+        self.quiet = str_to_bool(uri.get_param("quiet", "false"))
+        
         # Language
         self.language = uri.get_param("lang", "en")
-        
-        # Quiet mode - suppress live output
-        self.quiet = str_to_bool(uri.get_param("quiet", "false"))
         
         # Advanced analysis
         self.use_advanced = str_to_bool(uri.get_param("advanced", "true"), True)
@@ -519,79 +531,336 @@ class LiveNarratorComponent(Component):
     
     def _run_narrator(self) -> Dict:
         """Run continuous narration with TTS and advanced analysis"""
+        from ..timing_logger import get_logger
+        from ..frame_optimizer import get_optimizer, OptimizerConfig
+        from ..smart_detector import SmartDetector
+        
+        # Get logger with verbose flag
+        tlog = get_logger(verbose=self.verbose)
+        
+        if self.verbose:
+            print("\n📊 Verbose mode: showing all steps in real-time", flush=True)
+        
+        # Initialize parallel processor for multi-threaded execution
+        from ..parallel_processor import get_processor, TaskPriority
+        import os
+        cpu_count = os.cpu_count() or 4
+        parallel = get_processor(max_workers=max(4, cpu_count // 2))
+        print(f"⚡ Parallel processing enabled ({parallel.max_workers} workers)", flush=True)
+        
+        # FastCapture for low-latency RTSP streaming (10x faster than subprocess)
+        from ..fast_capture import FastCapture
+        fast_capture = None
+        use_fast_capture = config.get("SQ_FAST_CAPTURE", "true").lower() == "true"
+        
+        if use_fast_capture and self.source.startswith("rtsp://"):
+            try:
+                fast_capture = FastCapture(
+                    rtsp_url=self.source,
+                    fps=1.0 / max(1.0, self.interval),
+                    use_gpu=True,
+                    buffer_size=3,
+                )
+                fast_capture.start()
+                print("🚀 FastCapture enabled (persistent RTSP connection)", flush=True)
+                # Wait for first frame
+                import time as _time
+                _time.sleep(1.0)
+            except Exception as e:
+                logger.warning(f"FastCapture init failed, using fallback: {e}")
+                fast_capture = None
+        
+        if self.use_ramdisk:
+            print("📁 Using RAM disk for frame storage", flush=True)
+        
+        # Pipeline: capture next frame while processing current
+        next_frame_future = None
+        
+        # Initialize frame optimizer for intelligent processing
+        opt_config = OptimizerConfig(
+            base_interval=self.interval,
+            min_interval=max(1.0, self.interval / 3),
+            max_interval=min(15.0, self.interval * 3),
+            use_local_detection=True,
+        )
+        optimizer = get_optimizer(opt_config)
+        
+        # Initialize detection pipeline from intent or mode
+        guarder_model = config.get("SQ_GUARDER_MODEL", "gemma2:2b")
+        
+        # Check if intent was specified
+        intent_str = getattr(self, 'intent', None) or config.get("SQ_INTENT", "")
+        
+        if intent_str:
+            from ..detection_pipeline import DetectionPipeline
+            detection_pipeline = DetectionPipeline.from_intent(
+                intent_str,
+                guarder_model=guarder_model,
+                vision_model=self.model,
+            )
+            logger.info(f"Using intent-based pipeline: {detection_pipeline.intent.name}")
+        else:
+            detection_pipeline = None
+        
+        # Fallback to SmartDetector for non-intent mode
+        smart_detector = SmartDetector(
+            focus=self.focus or "person",
+            guarder_model=guarder_model,
+            use_hog=True,
+            use_small_llm=True,
+        )
+        
         start_time = time.time()
         frame_num = 0
+        current_interval = self.interval
         
         while time.time() - start_time < self.duration and self._running:
             frame_num += 1
-            frame_path = self._capture_frame(frame_num)
+            tlog.start_frame(frame_num)
+            
+            # Capture frame - use FastCapture if available (10x faster)
+            tlog.start("capture")
+            if fast_capture and fast_capture.is_running:
+                # Get pre-buffered frame from FastCapture
+                frame_info = fast_capture.get_frame(timeout=3.0)
+                if frame_info:
+                    frame_path = frame_info.path
+                    tlog.end("capture", f"fast={frame_info.capture_time_ms:.0f}ms")
+                else:
+                    frame_path = self._capture_frame(frame_num)
+                    tlog.end("capture", "fallback")
+            else:
+                frame_path = self._capture_frame(frame_num)
+                tlog.end("capture")
             
             if not frame_path or not frame_path.exists():
-                time.sleep(self.interval)
+                tlog.end_frame("capture_failed")
+                time.sleep(current_interval)
                 continue
             
-            # Advanced frame analysis (motion, edges, person detection)
+            # === SMART DETECTION PIPELINE ===
+            # Priority: OpenCV (fast) → Small LLM (medium) → Large LLM (slow)
+            
             frame_analysis = {}
             annotated_frame = frame_path
             
-            if self.use_advanced:
+            if self.mode == "track":
+                # Use SmartDetector for tracking mode
+                tlog.start("smart_detect")
+                detection = smart_detector.analyze(frame_path, self._prev_frame)
+                tlog.end("smart_detect", f"target={detection.has_target} motion={detection.motion_percent:.1f}%")
+                
+                # Adaptive interval based on motion
+                current_interval = optimizer.get_adaptive_interval(detection.motion_percent)
+                
+                # Skip if SmartDetector says no need to process
+                if detection.skip_reason and frame_num > 1:
+                    if not self.quiet:
+                        ts = datetime.now().strftime("%H:%M:%S")
+                        print(f"⚪ [{ts}] {detection.skip_reason} (next: {current_interval:.1f}s)", flush=True)
+                    
+                    # Log the skip decision
+                    tlog.log_decision(
+                        frame_num, "smart_detect", "skipped",
+                        detection.skip_reason,
+                        {"motion": detection.motion_percent, "has_target": detection.has_target}
+                    )
+                    tlog.increment_frame_count(skipped=True)
+                    tlog.end_frame(detection.skip_reason)
+                    self._prev_frame = frame_path
+                    time.sleep(current_interval)
+                    continue
+                
+                # If SmartDetector has quick summary, use it
+                if detection.quick_summary and not detection.should_process_llm:
+                    description = detection.quick_summary
+                    
+                    # Check if should notify (TTS)
+                    if detection.should_notify:
+                        from ..response_filter import should_notify as check_notify, format_for_tts
+                        
+                        if not self.quiet:
+                            ts = datetime.now().strftime("%H:%M:%S")
+                            print(f"📝 [{ts}] {description}", flush=True)
+                        
+                        # TTS
+                        if self.tts_enabled and check_notify(description, mode=self.mode):
+                            tts_text = format_for_tts(description)
+                            if tts_text:
+                                self._speak(tts_text)
+                        
+                        # Log entry
+                        entry = NarrationEntry(
+                            timestamp=datetime.now(),
+                            frame_num=frame_num,
+                            description=description,
+                        )
+                        self._history.append(entry)
+                    
+                    tlog.end_frame(description[:30] if description else "smart_skip")
+                    self._prev_frame = frame_path
+                    time.sleep(current_interval)
+                    continue
+                
+                # Store motion info for later
+                frame_analysis = {
+                    "motion_percent": detection.motion_percent,
+                    "has_motion": detection.motion_level.value > 0,
+                }
+                self._last_analysis = frame_analysis
+                
+            elif self.use_advanced:
+                # Legacy advanced analysis for non-tracking modes
+                tlog.start("motion_analysis")
                 frame_analysis, annotated_frame = self._frame_analyzer.analyze(frame_path)
+                tlog.end("motion_analysis", f"motion={frame_analysis.get('motion_percent', 0):.1f}%")
                 self._last_analysis = frame_analysis
                 
                 motion_pct = frame_analysis.get("motion_percent", 0)
-                has_motion = frame_analysis.get("has_motion", True)
+                current_interval = optimizer.get_adaptive_interval(motion_pct)
                 
-                # Skip LLM completely if no motion detected (save API calls)
-                if frame_num > 1 and not has_motion:
-                    if not self.quiet:
-                        ts = datetime.now().strftime("%H:%M:%S")
-                        print(f"⚪ [{ts}] No motion (skipping LLM)")
-                    self._prev_frame = frame_path
-                    time.sleep(self.interval)
-                    continue
-                
-                # Very low motion - respond without LLM call
                 if motion_pct < 0.5 and frame_num > 1:
-                    description = "No significant motion"
-                    self._prev_frame = frame_path
                     if not self.quiet:
                         ts = datetime.now().strftime("%H:%M:%S")
-                        print(f"⚪ [{ts}] {description}")
-                    time.sleep(self.interval)
+                        print(f"⚪ [{ts}] No significant motion", flush=True)
+                    tlog.end_frame("low_motion")
+                    self._prev_frame = frame_path
+                    time.sleep(current_interval)
                     continue
             else:
-                # Fallback to simple diff
+                # Simple diff fallback
                 if self.use_diff and self._prev_frame:
                     change_pct = self._compute_change(frame_path)
                     if change_pct < self.min_change:
+                        tlog.end_frame("no_change")
                         self._prev_frame = frame_path
                         time.sleep(self.interval)
                         continue
             
-            # Get AI description with analysis context (only when motion detected)
-            description = self._describe_frame_advanced(
-                annotated_frame or frame_path, 
-                frame_analysis
+            # Optimize image for LLM (reduces transfer time) - can run in parallel
+            tlog.start("image_optimize")
+            try:
+                from ..image_optimizer import optimize_for_llm, get_optimal_size_for_model, get_description_cache
+                
+                optimal_size = get_optimal_size_for_model(self.model)
+                
+                # Run optimization in background thread
+                def do_optimize():
+                    return optimize_for_llm(
+                        annotated_frame or frame_path,
+                        max_size=optimal_size,
+                        quality=75
+                    )
+                
+                opt_future = parallel.submit_optimize(do_optimize)
+                optimized_path = parallel.wait_for(opt_future, timeout=5)
+                if optimized_path and optimized_path.result:
+                    optimized_path = optimized_path.result
+                else:
+                    optimized_path = annotated_frame or frame_path
+                
+                tlog.end("image_optimize", f"size={optimal_size}")
+                
+                # Check cache first
+                cache = get_description_cache()
+                cached_desc = cache.get(optimized_path)
+                if cached_desc:
+                    tlog.log_decision(frame_num, "cache", "hit", f"Using cached: {cached_desc[:40]}")
+                    description = cached_desc
+                    tlog.start("vision_llm")
+                    tlog.end("vision_llm", "cache_hit")
+                else:
+                    # Get AI description with analysis context
+                    tlog.start("vision_llm")
+                    description = self._describe_frame_advanced(
+                        optimized_path, 
+                        frame_analysis
+                    )
+                    tlog.end("vision_llm", f"len={len(description) if description else 0}")
+                    
+                    # Cache the result in background
+                    if description:
+                        parallel.submit_optimize(lambda: cache.put(optimized_path, description))
+            except ImportError:
+                tlog.end("image_optimize", "skipped")
+                # Fallback without optimization
+                tlog.start("vision_llm")
+                description = self._describe_frame_advanced(
+                    annotated_frame or frame_path, 
+                    frame_analysis
+                )
+                tlog.end("vision_llm", f"len={len(description) if description else 0}")
+            
+            # Log the LLM response
+            tlog.log_decision(
+                frame_num, "vision_llm_response", 
+                "received" if description else "empty",
+                description[:100] if description else "No response",
+                {"length": len(description) if description else 0}
             )
             
-            # Check for duplicates
+            # Check for duplicates and filter noise
             if description and description != self._last_description:
                 self._last_description = description
                 
-                # Check triggers
-                triggered, matches = self._check_triggers(description)
+                # Smart filtering - uses LLM to summarize into short sentence
+                from ..response_filter import is_significant_smart, should_notify, format_for_tts
+                
+                tlog.start("guarder_llm")
+                guarder_model = config.get("SQ_GUARDER_MODEL", "gemma2:2b")
+                is_worth_logging, short_description = is_significant_smart(
+                    description, 
+                    mode=self.mode,
+                    focus=self.focus or "person",
+                    guarder_model=guarder_model
+                )
+                tlog.end("guarder_llm", short_description[:40] if short_description else "")
+                
+                # Log guarder decision with full context
+                tlog.log_decision(
+                    frame_num, "guarder_filter",
+                    "accepted" if is_worth_logging else "filtered",
+                    f"original: {description[:50]}... → summary: {short_description[:50]}",
+                    {"original_len": len(description), "summary_len": len(short_description) if short_description else 0, 
+                     "is_significant": is_worth_logging, "mode": self.mode, "focus": self.focus}
+                )
+                
+                # Use short description instead of verbose one
+                description = short_description
+                
+                # Check triggers (on original verbose description for accuracy)
+                triggered, matches = self._check_triggers(self._last_description)
+                
+                # Skip logging if not significant and no trigger (reduce noise)
+                if not is_worth_logging and not triggered:
+                    if not self.quiet:
+                        ts = datetime.now().strftime("%H:%M:%S")
+                        print(f"⚪ [{ts}] {short_description}", flush=True)
+                    
+                    # Log the filter decision
+                    tlog.log_decision(
+                        frame_num, "output_filter", "filtered",
+                        f"Not significant and no trigger: {short_description[:60]}",
+                        {"triggered": triggered, "is_worth_logging": is_worth_logging}
+                    )
+                    tlog.increment_frame_count(skipped=True)
+                    tlog.end_frame("filtered")
+                    self._prev_frame = frame_path
+                    time.sleep(self.interval)
+                    continue
                 
                 # Encode BOTH original and annotated frames for report
                 original_base64 = ""
                 annotated_base64 = ""
-                try:
-                    with open(frame_path, "rb") as f:
-                        original_base64 = base64.b64encode(f.read()).decode()
-                    if annotated_frame and annotated_frame != frame_path:
-                        with open(annotated_frame, "rb") as f:
-                            annotated_base64 = base64.b64encode(f.read()).decode()
-                except Exception:
-                    pass
+                if not getattr(self, 'lite_mode', False):  # Skip if --lite
+                    try:
+                        with open(frame_path, "rb") as f:
+                            original_base64 = base64.b64encode(f.read()).decode()
+                        if annotated_frame and annotated_frame != frame_path:
+                            with open(annotated_frame, "rb") as f:
+                                annotated_base64 = base64.b64encode(f.read()).decode()
+                    except Exception:
+                        pass
                 
                 # Create entry with analysis data
                 entry = NarrationEntry(
@@ -616,24 +885,71 @@ class LiveNarratorComponent(Component):
                         analysis_info = f" [motion:{motion:.1f}% person:{person_conf:.0%}]"
                     
                     if triggered:
-                        print(f"🔴 [{ts}]{analysis_info} TRIGGER: {', '.join(matches)}")
-                        print(f"   {description[:200]}...")
+                        print(f"🔴 [{ts}]{analysis_info} TRIGGER: {', '.join(matches)}", flush=True)
+                        print(f"   {description}", flush=True)
                     else:
-                        print(f"📝 [{ts}]{analysis_info} {description[:120]}...")
+                        print(f"📝 [{ts}]{analysis_info} {description}", flush=True)
                 
-                # Speak (TTS works even in quiet mode)
-                if self.tts_enabled:
+                # Speak (TTS) only for significant events
+                should_speak = should_notify(description, mode=self.mode) or triggered
+                tlog.start("tts_check")
+                
+                # Log the TTS decision with full context
+                tlog.log_decision(
+                    frame_num, "tts_check", 
+                    "will_speak" if (self.tts_enabled and should_speak) else "skipped",
+                    f"enabled={self.tts_enabled} should_notify={should_speak} triggered={triggered}",
+                    {"description": description[:100], "mode": self.mode}
+                )
+                
+                if self.tts_enabled and should_speak:
                     if triggered:
+                        tlog.end("tts_check", "trigger_speak")
                         self._speak(f"Alert! {matches[0]}")
                     else:
-                        self._speak(description[:200])
+                        tts_text = format_for_tts(description)
+                        if tts_text:
+                            tlog.end("tts_check", f"speak: {tts_text[:30]}")
+                            tlog.log_decision(frame_num, "tts_speak", "spoken", tts_text[:50])
+                            self._speak(tts_text)
+                        else:
+                            tlog.end("tts_check", "no_tts_text")
+                            tlog.log_decision(frame_num, "tts_format", "empty", "format_for_tts returned empty")
+                else:
+                    tlog.end("tts_check", f"skip: enabled={self.tts_enabled} should={should_speak}")
                 
                 # Webhook
                 if triggered and self.webhook_url:
                     self._send_webhook(entry)
+                
+                tlog.increment_frame_count(skipped=False)
+                tlog.end_frame(description[:30] if description else "logged")
+            else:
+                tlog.increment_frame_count(skipped=True)
+                tlog.end_frame("duplicate")
             
             self._prev_frame = frame_path
-            time.sleep(self.interval)
+            time.sleep(current_interval)
+        
+        # Cleanup FastCapture
+        if fast_capture:
+            fast_capture.stop()
+            print("🛑 FastCapture stopped", flush=True)
+        
+        # Write timing summary and optimizer stats
+        tlog.write_summary()
+        tlog.log(f"Optimizer stats: {optimizer.get_stats()}")
+        tlog.log(f"Parallel stats: {parallel.stats}")
+        tlog.print_log_summary()
+        
+        # Print parallel processing stats
+        pstats = parallel.stats
+        print(f"\n⚡ Parallel stats: {pstats['completed']} tasks, avg {pstats['avg_time_ms']:.0f}ms", flush=True)
+        
+        # Wait for any pending TTS to complete before exiting
+        if self.tts_enabled:
+            from ..tts import wait_for_tts
+            wait_for_tts(timeout=5.0)
         
         # Summary
         triggered_count = sum(1 for e in self._history if e.triggered)
@@ -788,18 +1104,53 @@ class LiveNarratorComponent(Component):
         }
     
     def _capture_frame(self, frame_num: int) -> Optional[Path]:
-        """Capture frame from source"""
-        output_path = self._temp_dir / f"frame_{frame_num:05d}.jpg"
+        """Capture frame from source.
+        
+        Uses RAM disk (/dev/shm) when enabled for faster I/O.
+        Supports GPU acceleration (NVDEC) when available.
+        """
+        # Use RAM disk path if enabled
+        if self.use_ramdisk and self.source.startswith("rtsp://"):
+            ramdisk_path = Path(config.get("SQ_RAMDISK_PATH", "/dev/shm/streamware"))
+            ramdisk_path.mkdir(parents=True, exist_ok=True)
+            output_path = ramdisk_path / f"frame_{frame_num:05d}.jpg"
+        else:
+            output_path = self._temp_dir / f"frame_{frame_num:05d}.jpg"
         
         try:
             if self.source.startswith("rtsp://"):
-                cmd = [
-                    "ffmpeg", "-y", "-rtsp_transport", "tcp",
+                # RTSP capture with optimizations
+                cmd = ["ffmpeg", "-y"]
+                
+                # Check for GPU acceleration
+                has_gpu = getattr(self, '_has_nvdec', None)
+                if has_gpu is None:
+                    # Check once
+                    try:
+                        result = subprocess.run(
+                            ["ffmpeg", "-hide_banner", "-hwaccels"],
+                            capture_output=True, text=True, timeout=3
+                        )
+                        has_gpu = "cuda" in result.stdout.lower()
+                        self._has_nvdec = has_gpu
+                    except:
+                        self._has_nvdec = False
+                        has_gpu = False
+                
+                # GPU hardware decoding
+                if has_gpu:
+                    cmd.extend(["-hwaccel", "cuda"])
+                
+                # Low latency options
+                cmd.extend([
+                    "-rtsp_transport", "tcp",
+                    "-fflags", "nobuffer",
+                    "-flags", "low_delay",
                     "-i", self.source,
                     "-frames:v", "1",
                     "-q:v", "2",
                     str(output_path)
-                ]
+                ])
             else:
                 cmd = [
                     "ffmpeg", "-y",
@@ -808,7 +1159,7 @@ class LiveNarratorComponent(Component):
                     str(output_path)
                 ]
             
-            subprocess.run(cmd, check=True, capture_output=True, timeout=10)
+            subprocess.run(cmd, check=True, capture_output=True, timeout=10, stdin=subprocess.DEVNULL)
 
             # Optionally persist a copy of the frame to user-specified directory
             if self._frames_output_dir:
@@ -963,18 +1314,27 @@ class LiveNarratorComponent(Component):
     
     def _describe_frame_advanced(self, frame_path: Path, analysis: Dict) -> str:
         """Get AI description with preprocessed analysis context"""
+        from ..timing_logger import get_logger
+        tlog = get_logger()
+        
         try:
             from ..llm_client import get_client
             
             # Crop to motion regions if available to focus LLM on changes
+            tlog.start("crop_motion")
             crop_path = self._crop_to_motion_regions(frame_path, analysis or {})
+            tlog.end("crop_motion")
             
             # Build context-aware prompt
+            tlog.start("build_prompt")
             prompt = self._build_advanced_prompt(analysis)
+            tlog.end("build_prompt", f"len={len(prompt)}")
             
             # Use centralized LLM client
+            tlog.start("llm_request")
             client = get_client()
             result = client.analyze_image(crop_path, prompt, model=self.model)
+            tlog.end("llm_request", f"success={result.get('success')}")
             
             if result.get("success"):
                 desc = result.get("response", "").strip()

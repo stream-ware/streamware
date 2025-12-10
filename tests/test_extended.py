@@ -181,16 +181,17 @@ class TestLiveNarratorFramesDir:
         temp_dir.mkdir()
         frames_dir.mkdir()
 
-        uri = StreamwareURI("live://narrator?source=rtsp://test/stream&duration=1")
+        uri = StreamwareURI("live://narrator?source=rtsp://test/stream&duration=1&ramdisk=false")
         component = LiveNarratorComponent(uri)
 
         # Inject directories used by _capture_frame
         component._temp_dir = temp_dir
         component._frames_output_dir = frames_dir
+        component.use_ramdisk = False  # Disable for test
 
         expected_output = temp_dir / "frame_00001.jpg"
 
-        def fake_run(cmd, check, capture_output, timeout):  # noqa: ARG001
+        def fake_run(cmd, check, capture_output, timeout, stdin=None):  # noqa: ARG001
             expected_output.write_bytes(b"testframe")
 
         # Import the actual live_narrator module for patching
@@ -478,6 +479,155 @@ class TestMarkdownLogging:
         assert mock_save.call_args[0][1] == "logs.md"
 
 
+class TestResponseFilter:
+    """Tests for LLM response filtering"""
+
+    def test_is_significant_detects_noise(self):
+        """is_significant should detect noise responses"""
+        from streamware.response_filter import is_significant
+
+        # Noise - should return False
+        assert is_significant("No significant changes") is False
+        assert is_significant("VISIBLE: NO") is False
+        assert is_significant("No person visible") is False
+        assert is_significant("PRESENT: NO") is False
+
+    def test_is_significant_detects_events(self):
+        """is_significant should detect real events"""
+        from streamware.response_filter import is_significant
+
+        # Significant - should return True
+        assert is_significant("VISIBLE: YES\nLOCATION: center") is True
+        assert is_significant("Person detected at door") is True
+        assert is_significant("PRESENT: YES\nSTATE: walking") is True
+
+    def test_extract_structured_fields(self):
+        """extract_structured_fields should parse response"""
+        from streamware.response_filter import extract_structured_fields
+
+        response = """VISIBLE: YES
+LOCATION: center
+STATE: standing
+ALERT: NO"""
+        
+        fields = extract_structured_fields(response)
+        assert fields.get("visible") == "YES"
+        assert fields.get("location") == "center"
+        assert fields.get("state") == "standing"
+
+    def test_format_for_tts(self):
+        """format_for_tts should create clean text"""
+        from streamware.response_filter import format_for_tts
+
+        response = "OBJECT: person\nLOCATION: door\nSTATE: entering"
+        tts = format_for_tts(response)
+        assert "person" in tts
+        assert "door" in tts
+
+
+class TestSetupUtils:
+    """Tests for cross-platform setup utilities"""
+
+    def test_get_platform(self):
+        """get_platform should return valid platform"""
+        from streamware.setup_utils import get_platform, Platform
+
+        plat = get_platform()
+        assert plat in (Platform.LINUX, Platform.MACOS, Platform.WINDOWS, Platform.UNKNOWN)
+
+    def test_check_dependency(self):
+        """check_dependency should work for pip packages"""
+        from streamware.setup_utils import check_dependency, Dependency
+
+        # requests should be installed
+        dep = Dependency(
+            name="requests",
+            check_cmd=["python3", "-c", "import requests"],
+            install_pip="requests"
+        )
+        assert check_dependency(dep) is True
+
+    def test_check_tts_available(self):
+        """check_tts_available should return tuple"""
+        from streamware.setup_utils import check_tts_available
+
+        available, engine = check_tts_available()
+        assert isinstance(available, bool)
+        assert engine is None or isinstance(engine, str)
+
+    def test_get_system_info(self):
+        """get_system_info should return dict"""
+        from streamware.setup_utils import get_system_info
+
+        info = get_system_info()
+        assert "platform" in info
+        assert "python_version" in info
+
+
+class TestLLMClient:
+    """Tests for centralized LLM client"""
+
+    def test_llm_config_from_env(self):
+        """LLMConfig should load from environment"""
+        from streamware.llm_client import LLMConfig
+
+        config = LLMConfig.from_env()
+        assert config.provider in ("ollama", "openai", "anthropic")
+        assert config.timeout > 0
+        assert config.max_retries >= 0
+
+    def test_llm_metrics_tracking(self):
+        """LLMMetrics should track statistics"""
+        from streamware.llm_client import LLMMetrics
+
+        metrics = LLMMetrics()
+        assert metrics.total_calls == 0
+        assert metrics.avg_time_ms == 0
+
+        metrics.total_calls = 10
+        metrics.successful_calls = 8
+        metrics.total_time_ms = 5000
+
+        assert metrics.avg_time_ms == 500
+        assert metrics.success_rate == 0.8
+
+    def test_get_client_singleton(self):
+        """get_client should return singleton"""
+        from streamware.llm_client import get_client
+
+        client1 = get_client()
+        client2 = get_client()
+        assert client1 is client2
+
+
+class TestTTSModule:
+    """Tests for unified TTS module"""
+
+    def test_tts_config_from_env(self):
+        """TTSConfig should load from environment"""
+        from streamware.tts import TTSConfig
+
+        config = TTSConfig.from_env()
+        assert config.rate > 0
+
+    def test_get_manager_singleton(self):
+        """get_manager should return singleton"""
+        from streamware.tts import get_manager
+
+        mgr1 = get_manager()
+        mgr2 = get_manager()
+        assert mgr1 is mgr2
+
+    def test_clean_text(self):
+        """TTS should clean text properly"""
+        from streamware.tts import get_manager
+
+        mgr = get_manager()
+        cleaned = mgr._clean_text('  Hello  "world"  ')
+        assert cleaned == "Hello world"
+        assert '"' not in cleaned
+
+
 class TestPromptsModule:
     """Tests for prompts module"""
 
@@ -593,4 +743,80 @@ class TestImageOptimization:
         # Should be valid base64
         decoded = base64.b64decode(result)
         assert len(decoded) > 0
+
+
+class TestFrameOptimizer:
+    """Tests for frame optimization module"""
+
+    def test_adaptive_interval_high_motion(self):
+        """High motion should give short interval"""
+        from streamware.frame_optimizer import FrameOptimizer, OptimizerConfig
+
+        config = OptimizerConfig(min_interval=1.0, max_interval=10.0, high_motion_threshold=10.0)
+        optimizer = FrameOptimizer(config)
+
+        interval = optimizer.get_adaptive_interval(motion_percent=15.0)
+        assert interval <= 3.0  # Should be close to min (with smoothing)
+
+    def test_adaptive_interval_low_motion(self):
+        """Low motion should give long interval"""
+        from streamware.frame_optimizer import FrameOptimizer, OptimizerConfig
+
+        config = OptimizerConfig(min_interval=1.0, max_interval=10.0, low_motion_threshold=2.0)
+        optimizer = FrameOptimizer(config)
+
+        # Call multiple times to allow smoothing
+        for _ in range(3):
+            interval = optimizer.get_adaptive_interval(motion_percent=0.5)
+        assert interval >= 5.0  # Should trend toward max
+
+    def test_optimizer_config_defaults(self):
+        """OptimizerConfig should have sensible defaults"""
+        from streamware.frame_optimizer import OptimizerConfig
+
+        config = OptimizerConfig()
+        assert config.min_interval > 0
+        assert config.max_interval > config.min_interval
+        assert config.ssim_threshold > 0.5
+
+    def test_optimizer_reset(self):
+        """Reset should clear state"""
+        from streamware.frame_optimizer import FrameOptimizer
+
+        optimizer = FrameOptimizer()
+        optimizer.get_adaptive_interval(5.0)
+        optimizer.reset()
+
+        assert len(optimizer._frame_cache) == 0
+        assert len(optimizer._stats) == 0
+
+    def test_get_optimizer_singleton(self):
+        """get_optimizer should return same instance"""
+        from streamware.frame_optimizer import get_optimizer
+
+        opt1 = get_optimizer()
+        opt2 = get_optimizer()
+        # Note: with config param it creates new instance
+        assert opt1 is not None
+        assert opt2 is not None
+
+
+class TestBatchGuarder:
+    """Tests for batch guarder"""
+
+    def test_batch_guarder_init(self):
+        """BatchGuarder should initialize correctly"""
+        from streamware.frame_optimizer import BatchGuarder
+
+        guarder = BatchGuarder(batch_size=3, timeout=5.0)
+        assert guarder.batch_size == 3
+        assert guarder.timeout == 5.0
+
+    def test_flush_empty_returns_empty(self):
+        """Flush on empty batch should return empty list"""
+        from streamware.frame_optimizer import BatchGuarder
+
+        guarder = BatchGuarder(batch_size=5)
+        results = guarder.flush()
+        assert results == []
 

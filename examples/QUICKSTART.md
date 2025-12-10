@@ -289,6 +289,55 @@ SQ_TELEGRAM_BOT_TOKEN=xxx
 SQ_TELEGRAM_CHAT_ID=xxx
 ```
 
+### Diagnostics
+
+Run built-in checks to verify your setup:
+
+```bash
+# Check camera connectivity + Ollama vision
+streamware --check camera "rtsp://admin:pass@192.168.1.100:554/stream"
+
+# Check TTS engine (will offer to install if missing)
+streamware --check tts
+
+# Check Ollama only
+streamware --check ollama
+
+# All checks
+streamware --check all "rtsp://camera/live"
+```
+
+### Smart Filtering (Guarder Model)
+
+Streamware uses a small LLM to filter noise from logs:
+
+```bash
+# Install guarder model (recommended)
+ollama pull qwen2.5:3b
+
+# Or smaller/faster
+ollama pull gemma2:2b
+```
+
+When you run `sq live narrator`, it will:
+1. Check if guarder model is available
+2. Offer to install if missing
+3. Use LLM filtering by default (regex as fallback)
+
+```bash
+# Full monitoring with smart filtering
+sq live narrator --url "rtsp://..." --mode track --focus person --tts
+
+# Lite mode (less RAM, no images stored)
+sq live narrator --url "rtsp://..." --lite --quiet
+```
+
+**Configuration (`.env`):**
+```ini
+SQ_GUARDER_MODEL=qwen2.5:3b   # Small LLM for validation
+SQ_USE_GUARDER=true           # Enabled by default
+```
+
 ### Troubleshooting RTSP / ffmpeg
 
 If you see messages like:

@@ -2,6 +2,9 @@
 *.mp4
 *.png
 *.jpg
+live_log.md
+logs.txt
+logs.csv
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

@@ -18,7 +18,7 @@ CLI equivalent:
     sq network find "cameras" --yaml
     
     # Step 2: Analyze camera stream
-    sq stream rtsp --url "rtsp://admin:admin123@192.168.188.142:554/h264Preview_01_main" --mode diff
+    sq stream rtsp --url "rtsp://admin:admin123@192.168.1.100:554/h264Preview_01_main" --mode diff
 
 Related:
     - examples/network/network_discovery.py
@@ -271,7 +271,7 @@ Examples:
 
 CLI equivalent:
   sq network find "cameras" --yaml
-  sq stream rtsp --url "rtsp://admin:admin123@192.168.188.142:554/h264Preview_01_main" --mode diff
+  sq stream rtsp --url "rtsp://admin:admin123@192.168.1.100:554/h264Preview_01_main" --mode diff
         """
     )
     parser.add_argument("--analyze", "-a", action="store_true", 
