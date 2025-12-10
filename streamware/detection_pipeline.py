@@ -3,7 +3,7 @@ Detection Pipeline - Prioritized Multi-Stage Detection System
 
 Provides intelligent detection with priority-based processing:
 - Stage 1: Fast local detection (OpenCV, PIL)
-- Stage 2: Small LLM validation (gemma2:2b, qwen2.5:3b)
+- Stage 2: Small LLM validation (gemma:2b, qwen2.5:3b)
 - Stage 3: Large LLM description (llava, gpt-4o)
 
 Each stage can short-circuit if detection is confident enough.
@@ -222,8 +222,8 @@ class LLMCapability:
 # LLM Registry - all available models
 LLM_REGISTRY: Dict[str, LLMCapability] = {
     # Small/Fast models (guarder)
-    "gemma2:2b": LLMCapability(
-        name="gemma2:2b", provider="ollama", size="small",
+    "gemma:2b": LLMCapability(
+        name="gemma:2b", provider="ollama", size="small",
         vision=False, speed="fast", quality="medium", cost="free",
         can_describe=False, can_converse=False
     ),
@@ -386,7 +386,7 @@ class DetectionPipeline:
         intent: UserIntent = UserIntent.TRACK_PERSON,
         focus: str = "person",
         sensitivity: str = "medium",
-        guarder_model: str = "gemma2:2b",
+        guarder_model: str = "gemma:2b",
         vision_model: str = "llava:7b",
     ):
         self.intent = intent

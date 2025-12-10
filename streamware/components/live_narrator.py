@@ -400,12 +400,16 @@ class LiveNarratorComponent(Component):
         # Verbose mode for detailed logging
         self.verbose = str_to_bool(uri.get_param("verbose", "false"))
         
+        # Log file for timing logs (passed from CLI --log-file)
+        self.log_file = uri.get_param("log_file", None)
+        self.log_format = uri.get_param("log_format", "csv")  # csv, json, yaml, md, all
+        
         # RAM disk for fast frame capture
         self.use_ramdisk = str_to_bool(uri.get_param("ramdisk", config.get("SQ_RAMDISK_ENABLED", "true")))
         
         # Get defaults from config
         default_model = config.get("SQ_MODEL", "llava:7b")
-        default_duration = config.get("SQ_STREAM_DURATION", "60")
+        default_duration = config.get("SQ_STREAM_DURATION", "30")
         
         # Descriptive parameters (analysis, motion, frames)
         from ..presets import get_descriptive_preset, ANALYSIS_PRESETS, MOTION_PRESETS, FRAME_PRESETS
@@ -479,6 +483,15 @@ class LiveNarratorComponent(Component):
         self._tts_queue = []
         self._last_description = ""
         self._last_analysis = {}
+        
+        # Movement tracking state (for smart track mode)
+        self._position_history: List[Dict] = []  # [{x, y, timestamp, regions}]
+        self._last_position: Optional[Dict] = None
+        self._movement_direction: str = ""  # entering, exiting, left, right, stationary
+        self._person_state: str = ""  # visible, not_visible, just_appeared, just_left
+        
+        # Object tracker for multi-object tracking across frames
+        self._object_tracker = None  # Lazy init
     
     def _parse_triggers(self, trigger_str: str) -> List[Trigger]:
         """Parse trigger conditions from string"""
@@ -491,6 +504,107 @@ class LiveNarratorComponent(Component):
             if condition:
                 triggers.append(Trigger(condition=condition))
         return triggers
+    
+    def _analyze_movement(self, analysis: Dict, frame_width: int = 1920, frame_height: int = 1080) -> Dict:
+        """Analyze movement direction from motion regions using ObjectTracker.
+        
+        Returns dict with:
+            - direction: entering, exiting, moving_left, moving_right, stationary, unknown
+            - person_state: visible, not_visible, just_appeared, just_left
+            - position: center position of motion (x, y)
+            - description: human-readable movement description
+            - tracked_objects: list of tracked objects with IDs
+        """
+        from ..object_tracker import ObjectTracker, extract_detections_from_regions
+        
+        # Initialize tracker if needed
+        if self._object_tracker is None:
+            self._object_tracker = ObjectTracker(
+                focus=self.focus or "person",
+                max_lost_frames=5,
+                iou_threshold=0.3,
+                distance_threshold=0.25,
+            )
+        
+        regions = analysis.get("motion_regions", [])
+        has_motion = analysis.get("has_motion", False)
+        likely_person = analysis.get("likely_person", False)
+        
+        result = {
+            "direction": "unknown",
+            "person_state": "unknown",
+            "position": None,
+            "description": "",
+            "tracked_objects": [],
+            "object_count": 0,
+        }
+        
+        # Convert regions to detections with frame dimensions
+        for r in regions:
+            r["frame_width"] = frame_width
+            r["frame_height"] = frame_height
+        
+        detections = extract_detections_from_regions(regions)
+        
+        # Update tracker
+        tracking_result = self._object_tracker.update(detections)
+        
+        result["tracked_objects"] = tracking_result.objects
+        result["object_count"] = tracking_result.active_count
+        
+        if not tracking_result.objects:
+            # No objects tracked
+            if self._last_position:
+                result["person_state"] = "just_left"
+                result["direction"] = "exiting"
+                result["description"] = f"{self.focus.title()} left the frame"
+            else:
+                result["person_state"] = "not_visible"
+                result["description"] = "Scene is still"
+            
+            self._last_position = None
+            return result
+        
+        # Get primary object (largest or first)
+        primary_obj = max(tracking_result.objects, key=lambda o: o.bbox.area)
+        
+        # Update position
+        center_x = primary_obj.bbox.x * frame_width
+        center_y = primary_obj.bbox.y * frame_height
+        current_pos = {"x": center_x, "y": center_y, "timestamp": time.time()}
+        result["position"] = current_pos
+        
+        # Use tracker's direction
+        result["direction"] = primary_obj.direction.value
+        result["person_state"] = primary_obj.state.value
+        
+        # Build description from tracker
+        if tracking_result.active_count == 1:
+            result["description"] = primary_obj.get_summary()
+        else:
+            # Multiple objects
+            summaries = [f"#{obj.id}: {obj.get_summary()}" for obj in tracking_result.objects[:3]]
+            result["description"] = f"{tracking_result.active_count} objects tracked. " + ". ".join(summaries)
+        
+        # Add entry/exit events
+        if tracking_result.has_entries():
+            for obj in tracking_result.entries:
+                result["description"] += f" {obj.object_type.title()} #{obj.id} entered."
+        
+        if tracking_result.has_exits():
+            for obj in tracking_result.exits:
+                result["description"] += f" {obj.object_type.title()} #{obj.id} left."
+        
+        # Update position history
+        self._position_history.append(current_pos)
+        if len(self._position_history) > 10:
+            self._position_history.pop(0)
+        
+        self._last_position = current_pos
+        self._movement_direction = result["direction"]
+        self._person_state = result["person_state"]
+        
+        return result
     
     def process(self, data: Any) -> Dict:
         """Process live narration"""
@@ -531,15 +645,29 @@ class LiveNarratorComponent(Component):
     
     def _run_narrator(self) -> Dict:
         """Run continuous narration with TTS and advanced analysis"""
-        from ..timing_logger import get_logger
+        from ..timing_logger import get_logger, set_log_file
         from ..frame_optimizer import get_optimizer, OptimizerConfig
         from ..smart_detector import SmartDetector
         
-        # Get logger with verbose flag
+        # Check if log_file was passed through URI
+        log_file = getattr(self, 'log_file', None)
+        if log_file:
+            set_log_file(log_file, verbose=self.verbose)
+        
+        # Get logger (will reuse existing if set_log_file was called)
         tlog = get_logger(verbose=self.verbose)
         
         if self.verbose:
             print("\n📊 Verbose mode: showing all steps in real-time", flush=True)
+        
+        # Initialize SVG analysis exporter for visual analysis
+        from ..frame_diff_dsl import FrameDiffAnalyzer, DSLGenerator
+        from ..dsl_visualizer import SVGFrameGenerator
+        
+        svg_analyzer = FrameDiffAnalyzer()
+        dsl_generator = DSLGenerator()
+        svg_generator = SVGFrameGenerator(width=640, height=480)
+        frame_deltas = []  # Collect all deltas for final export
         
         # Initialize parallel processor for multi-threaded execution
         from ..parallel_processor import get_processor, TaskPriority
@@ -586,7 +714,7 @@ class LiveNarratorComponent(Component):
         optimizer = get_optimizer(opt_config)
         
         # Initialize detection pipeline from intent or mode
-        guarder_model = config.get("SQ_GUARDER_MODEL", "gemma2:2b")
+        guarder_model = config.get("SQ_GUARDER_MODEL", "gemma:2b")
         
         # Check if intent was specified
         intent_str = getattr(self, 'intent', None) or config.get("SQ_INTENT", "")
@@ -603,11 +731,17 @@ class LiveNarratorComponent(Component):
             detection_pipeline = None
         
         # Fallback to SmartDetector for non-intent mode
+        # Enable YOLO by default for faster detection
+        use_yolo = config.get("SQ_USE_YOLO", "true").lower() == "true"
+        yolo_model = config.get("SQ_YOLO_MODEL", "yolov8n")
+        
         smart_detector = SmartDetector(
             focus=self.focus or "person",
             guarder_model=guarder_model,
             use_hog=True,
             use_small_llm=True,
+            use_yolo=use_yolo,
+            yolo_model=yolo_model,
         )
         
         start_time = time.time()
@@ -637,6 +771,14 @@ class LiveNarratorComponent(Component):
                 tlog.end_frame("capture_failed")
                 time.sleep(current_interval)
                 continue
+            
+            # === SVG ANALYSIS (runs in parallel, doesn't block) ===
+            try:
+                svg_delta = svg_analyzer.analyze(frame_path)
+                dsl_generator.add_delta(svg_delta)
+                frame_deltas.append(svg_delta)
+            except Exception as e:
+                logger.debug(f"SVG analysis failed: {e}")
             
             # === SMART DETECTION PIPELINE ===
             # Priority: OpenCV (fast) → Small LLM (medium) → Large LLM (slow)
@@ -702,10 +844,15 @@ class LiveNarratorComponent(Component):
                     time.sleep(current_interval)
                     continue
                 
-                # Store motion info for later
+                # Store motion and detection info for later
                 frame_analysis = {
                     "motion_percent": detection.motion_percent,
                     "has_motion": detection.motion_level.value > 0,
+                    "has_target": detection.has_target,
+                    "detection_method": detection.detection_method,
+                    "detection_count": detection.detection_count,
+                    "quick_summary": detection.quick_summary,
+                    "detections": detection.detections,
                 }
                 self._last_analysis = frame_analysis
                 
@@ -761,9 +908,13 @@ class LiveNarratorComponent(Component):
                 
                 tlog.end("image_optimize", f"size={optimal_size}")
                 
-                # Check cache first
+                # Check cache first (but disable in track mode - we need fresh descriptions)
                 cache = get_description_cache()
-                cached_desc = cache.get(optimized_path)
+                
+                # Disable cache in track mode - movement changes need fresh analysis
+                use_cache = self.mode != "track"
+                
+                cached_desc = cache.get(optimized_path) if use_cache else None
                 if cached_desc:
                     tlog.log_decision(frame_num, "cache", "hit", f"Using cached: {cached_desc[:40]}")
                     description = cached_desc
@@ -778,8 +929,8 @@ class LiveNarratorComponent(Component):
                     )
                     tlog.end("vision_llm", f"len={len(description) if description else 0}")
                     
-                    # Cache the result in background
-                    if description:
+                    # Cache the result in background (but not in track mode)
+                    if description and use_cache:
                         parallel.submit_optimize(lambda: cache.put(optimized_path, description))
             except ImportError:
                 tlog.end("image_optimize", "skipped")
@@ -800,14 +951,12 @@ class LiveNarratorComponent(Component):
             )
             
             # Check for duplicates and filter noise
-            if description and description != self._last_description:
-                self._last_description = description
-                
+            if description:
                 # Smart filtering - uses LLM to summarize into short sentence
                 from ..response_filter import is_significant_smart, should_notify, format_for_tts
                 
                 tlog.start("guarder_llm")
-                guarder_model = config.get("SQ_GUARDER_MODEL", "gemma2:2b")
+                guarder_model = config.get("SQ_GUARDER_MODEL", "gemma:2b")
                 is_worth_logging, short_description = is_significant_smart(
                     description, 
                     mode=self.mode,
@@ -816,13 +965,44 @@ class LiveNarratorComponent(Component):
                 )
                 tlog.end("guarder_llm", short_description[:40] if short_description else "")
                 
+                # State change detection - always report person appeared/disappeared
+                prev_had_person = hasattr(self, '_last_state_person') and self._last_state_person
+                curr_has_person = "person" in short_description.lower() and "no person" not in short_description.lower()
+                state_changed = prev_had_person != curr_has_person
+                self._last_state_person = curr_has_person
+                
+                # Skip if same as last description AND no state change
+                if short_description == getattr(self, '_last_short_description', '') and not state_changed:
+                    tlog.log_decision(frame_num, "duplicate_filter", "skipped", 
+                                     f"Same as previous: {short_description[:40]}", {})
+                    tlog.increment_frame_count(skipped=True)
+                    tlog.end_frame("duplicate")
+                    self._prev_frame = frame_path
+                    time.sleep(self.interval)
+                    continue
+                
+                self._last_description = description
+                self._last_short_description = short_description
+                
                 # Log guarder decision with full context
+                filter_reason = ""
+                if not is_worth_logging:
+                    # Determine why it was filtered
+                    if "no person" in short_description.lower() or "no " + (self.focus or "person").lower() in short_description.lower():
+                        filter_reason = "no_target_detected"
+                    elif "no_change" in short_description.lower():
+                        filter_reason = "no_change_from_previous"
+                    elif not short_description or len(short_description) < 5:
+                        filter_reason = "empty_summary"
+                    else:
+                        filter_reason = "not_significant"
+                
                 tlog.log_decision(
                     frame_num, "guarder_filter",
                     "accepted" if is_worth_logging else "filtered",
-                    f"original: {description[:50]}... → summary: {short_description[:50]}",
+                    f"ORIGINAL: {description[:80]}... | SUMMARY: {short_description[:50]} | REASON: {filter_reason}",
                     {"original_len": len(description), "summary_len": len(short_description) if short_description else 0, 
-                     "is_significant": is_worth_logging, "mode": self.mode, "focus": self.focus}
+                     "is_significant": is_worth_logging, "mode": self.mode, "focus": self.focus, "filter_reason": filter_reason}
                 )
                 
                 # Use short description instead of verbose one
@@ -940,11 +1120,58 @@ class LiveNarratorComponent(Component):
         tlog.write_summary()
         tlog.log(f"Optimizer stats: {optimizer.get_stats()}")
         tlog.log(f"Parallel stats: {parallel.stats}")
-        tlog.print_log_summary()
+        
+        # Export logs in requested format
+        if self.log_file:
+            from pathlib import Path
+            base_path = Path(self.log_file).with_suffix('')
+            
+            if self.log_format == 'all':
+                tlog.export_all(str(base_path))
+            elif self.log_format == 'json':
+                tlog.export_json(base_path.with_suffix('.json'))
+                print(f"\n📊 Logs saved: {base_path.with_suffix('.json')}", flush=True)
+            elif self.log_format == 'yaml':
+                tlog.export_yaml(base_path.with_suffix('.yaml'))
+                print(f"\n📊 Logs saved: {base_path.with_suffix('.yaml')}", flush=True)
+            elif self.log_format == 'md':
+                tlog.export_markdown(base_path.with_suffix('.md'))
+                print(f"\n📊 Logs saved: {base_path.with_suffix('.md')}", flush=True)
+            else:
+                # Default: CSV (already saved during logging)
+                tlog.print_log_summary()
+        else:
+            tlog.print_log_summary()
         
         # Print parallel processing stats
         pstats = parallel.stats
         print(f"\n⚡ Parallel stats: {pstats['completed']} tasks, avg {pstats['avg_time_ms']:.0f}ms", flush=True)
+        
+        # Export SVG analysis HTML
+        if frame_deltas:
+            try:
+                from ..dsl_visualizer import generate_dsl_html
+                from pathlib import Path
+                
+                # Determine output path
+                if self.log_file:
+                    html_path = Path(self.log_file).with_suffix('.html')
+                else:
+                    html_path = Path(f"motion_analysis_{int(time.time())}.html")
+                
+                dsl_output = dsl_generator.get_full_dsl()
+                generate_dsl_html(
+                    deltas=frame_deltas,
+                    dsl_output=dsl_output,
+                    output_path=str(html_path),
+                    title=f"Motion Analysis - {self.mode} mode",
+                    fps=2.0,
+                )
+                
+                print(f"\n🎯 SVG Analysis saved: {html_path}", flush=True)
+                print(f"   Frames: {len(frame_deltas)}, Tracked: {len(dsl_generator.tracks)}", flush=True)
+            except Exception as e:
+                logger.debug(f"SVG export failed: {e}")
         
         # Wait for any pending TTS to complete before exiting
         if self.tts_enabled:
@@ -980,6 +1207,10 @@ class LiveNarratorComponent(Component):
             },
             # Last frame analysis
             "last_analysis": self._last_analysis,
+            # SVG Analysis
+            "svg_analysis_path": str(html_path) if frame_deltas else None,
+            "svg_frames_analyzed": len(frame_deltas),
+            "svg_objects_tracked": len(dsl_generator.tracks) if frame_deltas else 0,
             # Results
             "frames_analyzed": frame_num,
             "descriptions": len(self._history),
@@ -1336,6 +1567,23 @@ class LiveNarratorComponent(Component):
             result = client.analyze_image(crop_path, prompt, model=self.model)
             tlog.end("llm_request", f"success={result.get('success')}")
             
+            # Verbose logging: show prompt and response
+            if self.verbose:
+                # Log prompt (truncated for readability)
+                prompt_preview = prompt.replace('\n', ' ')[:200]
+                tlog.log_decision(
+                    0, "llm_prompt", "sent",
+                    f"[{self.model}] {prompt_preview}...",
+                    {"prompt_len": len(prompt), "model": self.model}
+                )
+                # Log full response
+                response_text = result.get("response", "")[:300] if result.get("success") else "FAILED"
+                tlog.log_decision(
+                    0, "llm_response", "received" if result.get("success") else "failed",
+                    f"[{self.model}] {response_text}",
+                    {"response_len": len(result.get("response", "")), "success": result.get("success")}
+                )
+            
             if result.get("success"):
                 desc = result.get("response", "").strip()
                 self._prev_description = desc
@@ -1347,7 +1595,12 @@ class LiveNarratorComponent(Component):
             return self._describe_frame(frame_path)  # Fallback
     
     def _build_advanced_prompt(self, analysis: Dict) -> str:
-        """Build prompt with motion/edge analysis context"""
+        """Build prompt with motion/edge analysis context.
+        
+        Prompts are loaded from streamware/prompts/*.txt files.
+        Can be customized by editing those files or via environment variables.
+        """
+        from ..prompts import get_prompt, render_prompt
         
         # Base context from analysis
         context_parts = []
@@ -1369,6 +1622,19 @@ class LiveNarratorComponent(Component):
         if likely_person:
             context_parts.append(f"Pre-analysis suggests person present ({person_conf:.0%} confidence)")
         
+        # Add YOLO detection info if available
+        has_target = analysis.get("has_target", False)
+        detection_method = analysis.get("detection_method", "")
+        quick_summary = analysis.get("quick_summary", "")
+        detections = analysis.get("detections", [])
+        
+        if has_target and "yolo" in detection_method.lower():
+            if quick_summary:
+                context_parts.append(f"⚠️ YOLO DETECTED: {quick_summary}")
+            elif detections:
+                det_types = [d.get("type", "object") for d in detections[:3]]
+                context_parts.append(f"⚠️ YOLO DETECTED: {', '.join(det_types)}")
+        
         context = "\n".join(context_parts) if context_parts else "No pre-analysis data"
         
         # Build mode-specific prompt with context
@@ -1376,29 +1642,109 @@ class LiveNarratorComponent(Component):
             focus_obj = self.focus.lower()
             prev_info = f'\nPrevious: "{self._prev_description[:60]}"' if self._prev_description else ""
             
+            # Analyze movement direction from regions
+            movement = self._analyze_movement(analysis)
+            movement_hint = ""
+            if movement["description"]:
+                movement_hint = f"\nMOVEMENT ANALYSIS: {movement['description']}"
+                movement_hint += f" (state: {movement['person_state']}, direction: {movement['direction']})"
+            
+            # Activity focus for high motion
+            activity_focus = ""
+            if motion_pct > 20:
+                activity_focus = "\n⚠️ SIGNIFICANT MOTION DETECTED - Look for activity changes like walking, moving, standing up!"
+            
+            # Try to load prompt from file, fallback to default
+            prompt_vars = {
+                "context": context,
+                "movement_hint": movement_hint,
+                "prev_info": prev_info,
+                "activity_focus": activity_focus,
+                "motion_pct": f"{motion_pct:.0f}",
+                "focus": self.focus,
+                "Focus": self.focus.title(),
+            }
+            
             if focus_obj in ("person", "people", "human"):
-                return f"""ANALYSIS CONTEXT:
-{context}
+                # Try loading from file
+                file_prompt = get_prompt("track_person")
+                if file_prompt:
+                    try:
+                        return file_prompt.format(**prompt_vars)
+                    except KeyError:
+                        pass  # Fall through to default
+                
+                # Clear prompt for person detection
+                return f"""Look at this security camera image carefully.
 
-IMAGE: This security camera frame has red rectangles marking areas where motion was detected.
+Is there a PERSON visible? If yes, describe what they are doing and where they are.
+If NO person is visible, say "No person visible".
+
+Answer in 1 sentence.\""""
+            
+            elif focus_obj in ("bird", "birds"):
+                # Try loading from file
+                file_prompt = get_prompt("track_bird")
+                if file_prompt:
+                    try:
+                        return file_prompt.format(**prompt_vars)
+                    except KeyError:
+                        pass
+                
+                return f"""CONTEXT: {context}{movement_hint}
 {prev_info}
 
-TASK: Based on the motion analysis and image, is there a PERSON in this frame?
+Bird feeder / garden camera image.
 
-If motion analysis shows "likely person" OR you see a person:
-- Describe WHERE the person is (use the motion regions as hints)
-- Describe WHAT they are doing
-- Note if they are sitting, standing, walking
+TASK: Describe any birds visible.
 
-If no person is visible despite motion: describe what caused the motion.
-If no motion: say "No movement detected"
+Focus on:
+1. How many birds? (count them)
+2. What are they doing? (eating, perching, flying, landing)
+3. Where in the frame? (feeder, branch, ground, flying)
+4. Any notable features? (color, size)
 
-Be specific and concise."""
+Response format: "[Count] bird(s) [activity] at [location]."
+Examples:
+- "2 birds eating at the feeder. One small brown, one larger blue."
+- "Bird flying toward feeder from left."
+- "No birds currently visible, feeder is empty."
+
+Be specific about count and activity.\""""
+            
+            elif focus_obj in ("animal", "cat", "dog", "pet", "wildlife"):
+                # Try loading from file
+                file_prompt = get_prompt("track_animal")
+                if file_prompt:
+                    try:
+                        return file_prompt.format(**prompt_vars)
+                    except KeyError:
+                        pass
+                
+                return f"""CONTEXT: {context}{movement_hint}
+{prev_info}
+
+Camera monitoring for animals.
+
+TASK: Describe any {focus_obj}s visible.
+
+Focus on:
+1. What animal? (species if identifiable)
+2. What is it doing? (walking, sitting, eating, sleeping, playing)
+3. Where? (position in frame)
+
+Response format: "[Animal] [activity] in [location]."
+Example: "Cat sitting on the left side of frame, appears alert."
+Example: "Dog walking across the yard toward the right."
+
+Be specific about the animal and its activity.\""""
+            
             else:
-                return f"""ANALYSIS: {context}{prev_info}
+                return f"""ANALYSIS: {context}{movement_hint}{prev_info}
 
-Looking for: {self.focus}
-Describe if {self.focus} is present and its state."""
+Tracking: {self.focus}
+Describe {self.focus}'s position, movement direction, and state.
+Format: "[State]. [Movement direction]." """
 
         elif self.mode == "diff":
             return f"""ANALYSIS CONTEXT:

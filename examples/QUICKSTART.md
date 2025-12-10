@@ -6,14 +6,50 @@ One-liner examples for the most common tasks.
 
 ```bash
 pip install streamware
-ollama pull llava:13b  # For vision AI
+
+# Install fast models (recommended)
+ollama pull moondream   # Fast vision model
+ollama pull gemma:2b    # Fast guarder
+
+# Or use install script:
+./install_fast_model.sh
 
 # Optional: auto-configure LLM + voice
-streamware --setup --mode balance      # full setup (recommended)
+streamware --setup --mode fast        # optimized for speed (recommended)
+streamware --setup --mode balance     # balanced quality/speed
 
 # TTS-only setup (does not change LLM/STT)
 streamware --setup tts
 ```
+
+## 🎯 Live Narrator (NEW - Recommended)
+
+**Real-time video analysis with YOLO + Vision LLM + TTS**
+
+```bash
+# Person tracking with voice narration
+sq live narrator --url "rtsp://camera/stream" --mode track --focus person --tts
+
+# Bird feeder monitoring
+sq live narrator --url "rtsp://birdcam/stream" --mode track --focus bird --tts
+
+# Pet camera (cats & dogs)
+sq live narrator --url "rtsp://petcam/stream" --mode track --focus pet --tts
+
+# Vehicle tracking
+sq live narrator --url "rtsp://parking/stream" --mode track --focus vehicle --tts
+
+# Verbose mode (see timing)
+sq live narrator --url "rtsp://camera/stream" --mode track --focus person --tts --verbose
+```
+
+### Performance
+| Component | Time |
+|-----------|------|
+| YOLO detection | ~10ms |
+| Vision LLM (moondream) | ~1.5s |
+| Guarder (gemma:2b) | ~250ms |
+| **Total cycle** | **~2s** |
 
 ## 📷 Network & Cameras
 

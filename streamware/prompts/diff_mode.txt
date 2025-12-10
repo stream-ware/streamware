@@ -1,0 +1,10 @@
+ANALYSIS CONTEXT:
+{context}
+
+Previous description: "{prev_description}"
+
+Based on the motion analysis (red rectangles show changed areas):
+- Describe ONLY what changed
+- Focus on: {focus}
+- If person moved, describe the movement
+- Be very brief

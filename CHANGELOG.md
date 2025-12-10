@@ -5,6 +5,71 @@ All notable changes to Streamware will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2024-12-10
+
+### ⚡ Performance Optimizations
+
+Major performance improvements for Live Narrator real-time video analysis:
+
+- **FastCapture** - Persistent RTSP connection (4000ms → 0ms capture time)
+  - OpenCV backend with auto-fallback to FFmpeg
+  - GPU acceleration (NVDEC) support
+  - Frame buffering (10 frames) for slow processing
+  
+- **Model Optimization** - Default to fast models
+  - `moondream` as default vision model (~1.5s vs llava:13b ~4s)
+  - `gemma:2b` as default guarder (text-only, ~250ms)
+  
+- **RAM Disk** - `/dev/shm/streamware` for fast frame I/O
+- **Smart Caching** - Avoid redundant LLM calls for similar frames
+- **Parallel Processing** - 8 workers for I/O tasks
+
+### 🎯 Intelligent Movement Tracking
+
+New `--mode track` with movement direction analysis:
+- Detects entering/exiting from frame edges
+- Tracks horizontal (left/right) and vertical (approaching/leaving) movement
+- Identifies stationary vs moving subjects
+- Position history for trajectory analysis
+
+### 🛠️ Bug Fixes
+
+- **Fixed:** `gemma:2b` incorrectly used as vision model in SmartDetector
+  - Now properly detected as text-only model
+  - Falls back to main vision LLM for image analysis
+  
+- **Fixed:** LLM returning template examples instead of descriptions
+  - Simplified prompts without copyable examples
+  - Added preamble stripping ("Sure, here is...")
+  
+- **Fixed:** Model matching in setup (gemma: vs gemma2:)
+  - Precise model name matching
+  - Auto-installation of missing models
+
+### 📚 Documentation
+
+- New: `docs/LIVE_NARRATOR_ARCHITECTURE.md` - Full system architecture
+- Updated: README with performance optimization guide
+- Updated: `.env.example` with optimal settings
+
+### 🔧 Configuration Changes
+
+**New defaults:**
+```ini
+SQ_MODEL=moondream
+SQ_GUARDER_MODEL=gemma:2b
+SQ_STREAM_MODE=track
+SQ_STREAM_FOCUS=person
+SQ_FAST_CAPTURE=true
+```
+
+**New install script:**
+```bash
+./install_fast_model.sh  # Auto-installs moondream + gemma:2b
+```
+
+---
+
 ## [0.1.0] - 2024-01-20
 
 ### Added

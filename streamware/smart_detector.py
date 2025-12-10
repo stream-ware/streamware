@@ -2,20 +2,24 @@
 Smart Detector for Streamware
 
 Prioritized detection pipeline for tracking mode:
-1. OpenCV (fastest) - motion detection, HOG person detection
-2. Small LLM (fast) - validate detection, check significance
-3. Large LLM (slow) - only when full description needed
+1. YOLO (fast, accurate) - object detection if available
+2. OpenCV (fastest) - motion detection, HOG person detection (fallback)
+3. Small LLM (fast) - validate detection, check significance
+4. Large LLM (slow) - only when full description needed
+
+YOLO is auto-installed on first use for best detection accuracy.
 
 Usage:
     from streamware.smart_detector import SmartDetector
     
-    detector = SmartDetector(focus="person")
+    detector = SmartDetector(focus="person", use_yolo=True)
     
     result = detector.analyze(frame_path, prev_frame_path)
     # result.should_process - whether to call large LLM
     # result.has_target - whether target object detected
     # result.motion_level - motion intensity
     # result.quick_summary - short description from small LLM
+    # result.detections - YOLO detections if available
 """
 
 import logging
@@ -63,8 +67,13 @@ class DetectionResult:
     motion_percent: float = 0.0
     confidence: float = 0.0
     
+    # YOLO detections (if available)
+    detections: List = None  # List of Detection objects
+    detection_count: int = 0
+    
     # Timing
     opencv_ms: float = 0.0
+    yolo_ms: float = 0.0
     small_llm_ms: float = 0.0
     
     # Debug
@@ -73,26 +82,96 @@ class DetectionResult:
 
 
 class SmartDetector:
-    """Intelligent detection pipeline optimized for tracking."""
+    """Intelligent detection pipeline optimized for tracking.
+    
+    Uses YOLO for fast, accurate detection when available.
+    Falls back to HOG if YOLO is not installed.
+    """
     
     def __init__(
         self,
         focus: str = "person",
-        guarder_model: str = "gemma2:2b",
-        motion_threshold: float = 0.5,
+        guarder_model: str = "gemma:2b",
+        motion_threshold: float = None,  # None = use config
+        use_yolo: bool = True,
         use_hog: bool = True,
         use_small_llm: bool = True,
+        yolo_model: str = "yolov8n",
     ):
+        from .config import config
+        
         self.focus = focus
         self.guarder_model = guarder_model
+        
+        # Use config if not specified (lower = more sensitive)
+        # Default 0.1% which means ~0.1% of pixels must change
+        if motion_threshold is None:
+            motion_threshold = float(config.get("SQ_MIN_CHANGE", "0.1"))
         self.motion_threshold = motion_threshold
+        
+        self.use_yolo = use_yolo
         self.use_hog = use_hog
         self.use_small_llm = use_small_llm
+        self.yolo_model = yolo_model
         
         self._hog_detector = None
+        self._yolo_detector = None
+        self._animal_detector = None  # For animal/bird detection
+        self._yolo_available = None  # None = not checked yet
         self._prev_summary: str = ""
         self._prev_detection: Optional[DetectionResult] = None
         self._consecutive_no_target: int = 0
+    
+    def _init_yolo(self) -> bool:
+        """Initialize YOLO detector if available."""
+        if self._yolo_available is not None:
+            return self._yolo_available
+        
+        if not self.use_yolo:
+            logger.debug("YOLO disabled by config")
+            self._yolo_available = False
+            return False
+        
+        try:
+            from .yolo_detector import ensure_yolo_available, YOLODetector
+            
+            # Try to install/check YOLO (verbose=False to reduce noise)
+            if ensure_yolo_available(verbose=False):
+                # Map focus to YOLO classes
+                classes = None
+                if self.focus == "person":
+                    classes = ["person"]
+                elif self.focus == "vehicle":
+                    classes = ["car", "truck", "bus", "motorcycle", "bicycle"]
+                elif self.focus in ("animal", "bird", "cat", "dog", "pet", "wildlife"):
+                    # Use specialized animal detector
+                    from .animal_detector import AnimalDetector
+                    self._animal_detector = AnimalDetector(
+                        focus=self.focus if self.focus != "animal" else "all",
+                        model=self.yolo_model,
+                        confidence_threshold=0.25,
+                    )
+                    self._yolo_available = True
+                    logger.info(f"🎯 Animal detector initialized: {self.focus}")
+                    return True
+                
+                self._yolo_detector = YOLODetector(
+                    model=self.yolo_model,
+                    classes=classes,
+                    confidence_threshold=0.25,
+                )
+                self._yolo_available = True
+                logger.info(f"🎯 YOLO detector initialized: {self.yolo_model}, classes={classes}")
+                return True
+            else:
+                logger.warning("YOLO not available (ultralytics not installed). Using HOG fallback.")
+        except ImportError as e:
+            logger.warning(f"YOLO import failed: {e}. Using HOG fallback.")
+        except Exception as e:
+            logger.warning(f"YOLO initialization failed: {e}. Using HOG fallback.")
+        
+        self._yolo_available = False
+        return False
     
     def analyze(
         self,
@@ -103,9 +182,10 @@ class SmartDetector:
         
         Priority order:
         1. Motion detection (OpenCV) - skip if no motion
-        2. Person detection (HOG) - skip if no person shape
-        3. Small LLM validation - confirm detection
-        4. Change detection - skip if same as before
+        2. YOLO detection (if available) - fast, accurate
+        3. HOG Person Detection (fallback) - skip if no person shape
+        4. Small LLM validation - confirm detection
+        5. Change detection - skip if same as before
         
         Args:
             frame_path: Current frame
@@ -115,6 +195,7 @@ class SmartDetector:
             DetectionResult with all analysis
         """
         result = DetectionResult()
+        result.detections = []
         
         # Stage 1: Motion Detection (OpenCV)
         start = time.time()
@@ -123,14 +204,98 @@ class SmartDetector:
         result.motion_percent = motion_pct
         result.motion_level = self._classify_motion(motion_pct)
         
-        # Skip if no motion
-        if motion_pct < self.motion_threshold and prev_frame_path:
+        # Skip if no motion - but do periodic checks even without motion
+        # to catch slow movements or stationary people
+        self._frame_count = getattr(self, '_frame_count', 0) + 1
+        force_check = (self._frame_count % 10 == 0)  # Check every 10th frame regardless
+        
+        if motion_pct < self.motion_threshold and prev_frame_path and not force_check:
             result.skip_reason = f"no_motion_{motion_pct:.1f}%"
             result.detection_method = "opencv_motion"
             return result
         
-        # Stage 2: HOG Person Detection (OpenCV)
-        if self.use_hog and self.focus == "person":
+        # Stage 2: YOLO Detection (if available) - much more accurate than HOG
+        yolo_detected = False
+        if self._init_yolo():
+            try:
+                start = time.time()
+                
+                # Use animal detector for animal/bird focus
+                if self._animal_detector and self.focus in ("animal", "bird", "cat", "dog", "pet", "wildlife"):
+                    animal_result = self._animal_detector.detect(frame_path)
+                    result.yolo_ms = animal_result.detection_ms
+                    
+                    if animal_result.has_animals:
+                        result.detections = [
+                            {
+                                "x": a.x, "y": a.y, "w": a.w, "h": a.h,
+                                "confidence": a.confidence,
+                                "type": a.species.value,
+                                "behavior": a.behavior.value,
+                                "position": a.position,
+                            }
+                            for a in animal_result.animals
+                        ]
+                        result.detection_count = animal_result.total_count
+                        result.has_target = True
+                        result.confidence = max(a.confidence for a in animal_result.animals)
+                        result.detection_level = DetectionLevel.HIGH
+                        result.detection_method = "yolo_animal"
+                        yolo_detected = True
+                        self._consecutive_no_target = 0
+                        
+                        result.quick_summary = animal_result.get_detailed_summary()
+                        logger.debug(f"Animal detected: {result.quick_summary} in {result.yolo_ms:.0f}ms")
+                    else:
+                        self._consecutive_no_target += 1
+                        if self._consecutive_no_target % 5 != 0:
+                            result.skip_reason = "yolo_no_animal"
+                            result.detection_method = "yolo_animal"
+                            return result
+                
+                # Use regular YOLO detector
+                elif self._yolo_detector:
+                    detections = self._yolo_detector.detect(frame_path)
+                    result.yolo_ms = (time.time() - start) * 1000
+                    
+                    if detections:
+                        result.detections = [d.to_dict() for d in detections]
+                        result.detection_count = len(detections)
+                        result.has_target = True
+                        result.confidence = max(d.confidence for d in detections)
+                        result.detection_level = DetectionLevel.HIGH
+                        result.detection_method = "yolo"
+                        yolo_detected = True
+                        self._consecutive_no_target = 0
+                        
+                        # Build quick summary from YOLO detections
+                        class_counts = {}
+                        for d in detections:
+                            class_counts[d.class_name] = class_counts.get(d.class_name, 0) + 1
+                        
+                        summary_parts = []
+                        for cls, count in class_counts.items():
+                            if count == 1:
+                                summary_parts.append(f"{cls.title()}")
+                            else:
+                                summary_parts.append(f"{count} {cls}s")
+                        
+                        result.quick_summary = ", ".join(summary_parts) + " detected"
+                        logger.debug(f"YOLO detected: {result.quick_summary} in {result.yolo_ms:.0f}ms")
+                    else:
+                        # YOLO found nothing
+                        self._consecutive_no_target += 1
+                        if self._consecutive_no_target % 5 != 0:
+                            result.skip_reason = "yolo_no_target"
+                            result.detection_method = "yolo"
+                            return result
+                    
+            except Exception as e:
+                logger.warning(f"YOLO detection failed: {e}")
+                # Fall through to HOG
+        
+        # Stage 3: HOG Person Detection (fallback if no YOLO or YOLO failed)
+        if not yolo_detected and self.use_hog and self.focus == "person":
             has_person_hog, hog_confidence, hog_boxes = self._detect_person_hog(frame_path)
             
             if not has_person_hog and hog_confidence > 0.7:
@@ -147,6 +312,7 @@ class SmartDetector:
                 result.has_target = has_person_hog
                 result.confidence = hog_confidence
                 result.detection_level = DetectionLevel.MEDIUM if has_person_hog else DetectionLevel.LOW
+                result.detection_method = "opencv_hog"
         
         # Stage 3: Small LLM Validation
         if self.use_small_llm:
@@ -290,10 +456,28 @@ class SmartDetector:
             return True, 0.5, []
     
     def _llm_quick_check(self, frame_path: Path) -> Tuple[bool, float]:
-        """Quick LLM check: is target present?"""
+        """Quick LLM check: is target present?
+        
+        NOTE: Most small models (gemma:2b, etc.) are NOT vision models.
+        Only use vision-capable models for this check.
+        If guarder_model is not a vision model, assume target is present
+        and let the main vision LLM handle detection.
+        """
         import requests
         from .config import config
         from .image_optimize import prepare_image_for_llm_base64
+        
+        # Check if guarder model is vision-capable
+        # Most guarder models (gemma, qwen, phi) are text-only!
+        vision_models = ["llava", "moondream", "bakllava", "llava-llama3", "minicpm-v"]
+        guarder_lower = self.guarder_model.lower()
+        is_vision_model = any(vm in guarder_lower for vm in vision_models)
+        
+        if not is_vision_model:
+            # Non-vision model - cannot check images, assume target might be present
+            # This is less strict - better to process than miss detections
+            logger.debug(f"Guarder {self.guarder_model} is not vision model, skipping quick check")
+            return True, 0.5  # Assume present, let main LLM decide
         
         try:
             image_data = prepare_image_for_llm_base64(frame_path, preset="fast")
@@ -323,16 +507,29 @@ class SmartDetector:
                 elif "NO" in answer:
                     return False, 0.9
             
-            return True, 0.5
+            return True, 0.5  # On error, assume present
             
         except Exception:
-            return True, 0.5
+            return True, 0.5  # On error, assume present
     
     def _llm_quick_summary(self, frame_path: Path) -> str:
-        """Get quick summary from small LLM."""
+        """Get quick summary from small LLM.
+        
+        NOTE: Only works with vision-capable models.
+        For text-only models, returns empty string (main LLM will describe).
+        """
         import requests
         from .config import config
         from .image_optimize import prepare_image_for_llm_base64
+        
+        # Check if guarder model is vision-capable
+        vision_models = ["llava", "moondream", "bakllava", "llava-llama3", "minicpm-v"]
+        guarder_lower = self.guarder_model.lower()
+        is_vision_model = any(vm in guarder_lower for vm in vision_models)
+        
+        if not is_vision_model:
+            # Non-vision model - cannot describe images
+            return ""
         
         try:
             image_data = prepare_image_for_llm_base64(frame_path, preset="fast")
@@ -341,10 +538,8 @@ class SmartDetector:
         
         ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
         
-        prompt = f"""Describe the {self.focus} in this image in ONE short sentence (max 10 words).
-Format: "{self.focus.title()}: [location], [action]"
-Example: "Person: at desk, using computer"
-If no {self.focus}: "No {self.focus} visible"
+        prompt = f"""Describe the {self.focus} briefly (max 10 words). Just describe what you see, no format.
+If no {self.focus}: say "No {self.focus} visible"
 Answer:"""
         
         try:

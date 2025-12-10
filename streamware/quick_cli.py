@@ -199,7 +199,7 @@ Shortcuts:
                              help='Media operation')
     media_parser.add_argument('--file', help='Input file')
     media_parser.add_argument('--text', help='Text for TTS')
-    media_parser.add_argument('--model', default='llava', help='AI model')
+    media_parser.add_argument('--model', default=None, help='AI model (default: from SQ_MODEL config)')
     media_parser.add_argument('--prompt', help='Custom prompt for AI analysis')
     media_parser.add_argument('--output', help='Output file')
     media_parser.add_argument('--mode', choices=['full', 'stream', 'diff'], default='full',
@@ -282,7 +282,7 @@ Shortcuts:
     stream_parser.add_argument('--interval', '-i', type=int, default=5, help='Seconds between captures')
     stream_parser.add_argument('--duration', '-d', type=int, default=30, help='Total duration (0=infinite)')
     stream_parser.add_argument('--device', default='0', help='Webcam device')
-    stream_parser.add_argument('--model', default='llava:13b', help='AI model (llava:13b recommended)')
+    stream_parser.add_argument('--model', default=None, help='AI model (default: from SQ_MODEL config)')
     stream_parser.add_argument('--prompt', help='Custom prompt for AI')
     stream_parser.add_argument('--focus', '-f', 
                               help='Focus tracking: person, animal, vehicle, face, motion, package, intrusion')
@@ -408,7 +408,7 @@ Shortcuts:
     live_parser.add_argument('--interval', '-i', type=float, help='Seconds between checks (or use sensitivity)')
     live_parser.add_argument('--duration', '-d', type=int, default=60, help='Duration (seconds)')
     live_parser.add_argument('--threshold', type=int, help='Change threshold 0-100 (or use sensitivity)')
-    live_parser.add_argument('--model', default='llava:7b', help='AI model (default: llava:7b)')
+    live_parser.add_argument('--model', default=None, help='AI model (default: from SQ_MODEL config)')
     live_parser.add_argument('--webhook', help='Webhook URL for alerts')
     live_parser.add_argument('--file', '-o', help='Save report to file (HTML or Markdown)')
     live_parser.add_argument('--log', choices=['md'], help='Generate Markdown log (md)')
@@ -416,7 +416,9 @@ Shortcuts:
     live_parser.add_argument('--lite', action='store_true', help='Lite mode: no images in memory (faster, less RAM)')
     live_parser.add_argument('--quiet', '-q', action='store_true', help='Quiet mode: minimal output')
     live_parser.add_argument('--guarder', action='store_true', help='Use small LLM (qwen2.5:3b) to validate responses before logging')
-    live_parser.add_argument('--log-file', help='Save detailed timing logs to file (e.g. logs.md)')
+    live_parser.add_argument('--log-file', help='Save detailed timing logs to file (e.g. log.csv)')
+    live_parser.add_argument('--log-format', choices=['csv', 'json', 'yaml', 'md', 'all'], default='csv',
+                            help='Log format: csv, json, yaml, md (markdown), or all')
     live_parser.add_argument('--adaptive', action='store_true', default=True, help='Adaptive frame rate based on motion (default: on)')
     live_parser.add_argument('--no-adaptive', action='store_true', help='Disable adaptive frame rate')
     live_parser.add_argument('--fast', action='store_true', help='Fast mode: smaller model, lower resolution, aggressive caching')
@@ -426,6 +428,16 @@ Shortcuts:
     live_parser.add_argument('--auto', action='store_true', help='Auto-configure based on hardware (detects CPU/GPU and optimizes)')
     live_parser.add_argument('--ramdisk', action='store_true', default=True, help='Use RAM disk for frame capture (default: on)')
     live_parser.add_argument('--no-ramdisk', action='store_true', help='Disable RAM disk, use temp files')
+    
+    # Visualize command - real-time SVG visualization
+    viz_parser = subparsers.add_parser('visualize', help='Real-time SVG visualization in browser')
+    viz_parser.add_argument('--url', '-u', required=True, help='RTSP stream URL')
+    viz_parser.add_argument('--port', '-p', type=int, default=8080, help='HTTP server port (default: 8080)')
+    viz_parser.add_argument('--fps', type=float, default=1.0, help='Frames per second (default: 1)')
+    viz_parser.add_argument('--width', type=int, default=640, help='Frame width (default: 640)')
+    viz_parser.add_argument('--height', type=int, default=480, help='Frame height (default: 480)')
+    viz_parser.add_argument('--simple', action='store_true', help='Use simple HTTP server (no WebSocket)')
+    viz_parser.add_argument('--fast', action='store_true', help='Fast mode: lower resolution, higher FPS')
     
     # Global options
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
@@ -503,6 +515,8 @@ Shortcuts:
             return handle_live(args)
         elif args.command == 'watch':
             return handle_watch(args)
+        elif args.command == 'visualize':
+            return handle_visualize(args)
         else:
             print(f"Unknown command: {args.command}", file=sys.stderr)
             return 1
@@ -2853,7 +2867,7 @@ def handle_live(args) -> int:
     from .config import config
     
     vision_model = getattr(args, 'model', None) or config.get("SQ_MODEL", "llava:7b")
-    guarder_model = config.get("SQ_GUARDER_MODEL", "gemma2:2b")
+    guarder_model = config.get("SQ_GUARDER_MODEL", "gemma:2b")
     check_tts = getattr(args, 'tts', False)
     
     # Debug TTS flag
@@ -2992,10 +3006,13 @@ def handle_live(args) -> int:
     
     # Setup timing logger if --log-file specified
     log_file = getattr(args, 'log_file', None)
+    log_format = getattr(args, 'log_format', 'csv')
     if log_file and isinstance(log_file, str):
         from .timing_logger import set_log_file
-        set_log_file(log_file)
-        print(f"📊 Timing logs will be saved to: {log_file}")
+        set_log_file(log_file, verbose=getattr(args, 'verbose', False))
+        print(f"📊 Timing logs will be saved to: {log_file} (format: {log_format})")
+        # Also pass through URI so component can access it
+        uri += f"&log_file={log_file}&log_format={log_format}"
     
     # Show header only if not quiet and not structured format
     fmt = _get_output_format(args)
@@ -3313,6 +3330,43 @@ def _print_live_yaml(result: dict, mode: str = "full"):
                 print(f"    {triggered}description: \"{entry.get('description', '')}\"")
                 if entry.get("matches"):
                     print(f"    matches: {entry.get('matches')}")
+
+
+def handle_visualize(args) -> int:
+    """Handle real-time visualization command."""
+    from .realtime_visualizer import start_visualizer
+    
+    # Fast mode: lower resolution, higher FPS
+    width = args.width
+    height = args.height
+    fps = args.fps
+    
+    if getattr(args, 'fast', False):
+        width = min(width, 320)
+        height = min(height, 240)
+        fps = min(15, max(fps, 10))
+        print("⚡ Fast mode enabled")
+    
+    print(f"\n🎯 Starting Real-time Motion Visualizer")
+    print(f"   URL: {args.url}")
+    print(f"   Port: {args.port}")
+    print(f"   FPS: {fps}")
+    print(f"   Size: {width}x{height}")
+    print(f"\n   Open http://localhost:{args.port} in browser\n")
+    
+    try:
+        start_visualizer(
+            rtsp_url=args.url,
+            port=args.port,
+            fps=fps,
+            width=width,
+            height=height,
+            use_simple=getattr(args, 'simple', False),
+        )
+    except KeyboardInterrupt:
+        print("\n🛑 Visualizer stopped")
+    
+    return 0
 
 
 if __name__ == '__main__':

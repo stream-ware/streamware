@@ -50,7 +50,12 @@ class FrameInfo:
 
 
 class FastCapture:
-    """High-performance RTSP capture with GPU acceleration."""
+    """High-performance RTSP capture with GPU acceleration.
+    
+    Backends:
+        - "ffmpeg": Persistent FFmpeg process (default, most compatible)
+        - "opencv": OpenCV VideoCapture (faster, requires opencv-python)
+    """
     
     def __init__(
         self,
@@ -59,12 +64,24 @@ class FastCapture:
         use_gpu: bool = True,
         buffer_size: int = 3,
         resolution: Tuple[int, int] = None,
+        backend: str = "auto",  # "auto", "opencv", "ffmpeg"
     ):
         self.rtsp_url = rtsp_url
         self.fps = fps
         self.use_gpu = use_gpu
         self.buffer_size = buffer_size
         self.resolution = resolution
+        
+        # Auto-select backend: prefer OpenCV if available
+        if backend == "auto":
+            # Check config first
+            config_backend = config.get("SQ_CAPTURE_BACKEND", "auto")
+            if config_backend in ("opencv", "ffmpeg"):
+                self.backend = config_backend
+            else:
+                self.backend = "opencv" if self._check_opencv() else "ffmpeg"
+        else:
+            self.backend = backend
         
         # Use RAM disk
         self.ramdisk_path = Path(config.get("SQ_RAMDISK_PATH", "/dev/shm/streamware"))
@@ -81,11 +98,22 @@ class FastCapture:
         # FFmpeg process
         self._ffmpeg_process: Optional[subprocess.Popen] = None
         
+        # OpenCV capture
+        self._cv_capture = None
+        
         # Check GPU availability
         self._has_nvdec = self._check_nvdec() if use_gpu else False
         
         # Stats
         self._capture_times: List[float] = []
+    
+    def _check_opencv(self) -> bool:
+        """Check if OpenCV is available."""
+        try:
+            import cv2
+            return True
+        except ImportError:
+            return False
     
     def _check_nvdec(self) -> bool:
         """Check if NVDEC hardware decoding is available."""
@@ -154,7 +182,82 @@ class FastCapture:
         self._stop_event.clear()
         self._frame_num = 0
         
-        # Start FFmpeg process
+        if self.backend == "opencv":
+            # OpenCV capture (faster, lower latency)
+            self._start_opencv()
+        else:
+            # FFmpeg capture (more compatible)
+            self._start_ffmpeg()
+        
+        logger.info(f"Started fast capture: {self.fps} FPS, backend: {self.backend}, GPU: {self._has_nvdec}")
+    
+    def _start_opencv(self):
+        """Start OpenCV-based capture with cross-platform compatibility."""
+        try:
+            import cv2
+            
+            # Try multiple backends in order of preference
+            backends_to_try = []
+            
+            # 1. GStreamer with NVDEC (NVIDIA GPU)
+            if self.use_gpu and self._has_nvdec:
+                gst_pipeline = (
+                    f"rtspsrc location={self.rtsp_url} latency=0 ! "
+                    f"rtph264depay ! h264parse ! nvdec ! "
+                    f"videoconvert ! appsink"
+                )
+                backends_to_try.append(("gstreamer_nvdec", gst_pipeline, cv2.CAP_GSTREAMER))
+            
+            # 2. GStreamer standard (Linux)
+            gst_simple = (
+                f"rtspsrc location={self.rtsp_url} latency=100 ! "
+                f"decodebin ! videoconvert ! appsink"
+            )
+            backends_to_try.append(("gstreamer", gst_simple, cv2.CAP_GSTREAMER))
+            
+            # 3. FFmpeg backend (most compatible)
+            backends_to_try.append(("ffmpeg", self.rtsp_url, cv2.CAP_FFMPEG))
+            
+            # 4. Any available backend
+            backends_to_try.append(("any", self.rtsp_url, cv2.CAP_ANY))
+            
+            for name, source, backend in backends_to_try:
+                try:
+                    logger.debug(f"Trying OpenCV backend: {name}")
+                    cap = cv2.VideoCapture(source, backend)
+                    
+                    # Set buffer size low for lower latency
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    
+                    if cap.isOpened():
+                        # Test read a frame
+                        ret, frame = cap.read()
+                        if ret and frame is not None:
+                            self._cv_capture = cap
+                            logger.info(f"OpenCV capture started with backend: {name}")
+                            
+                            # Start capture thread
+                            self._capture_thread = Thread(target=self._opencv_capture_loop, daemon=True)
+                            self._capture_thread.start()
+                            return
+                        else:
+                            cap.release()
+                    else:
+                        cap.release()
+                except Exception as e:
+                    logger.debug(f"Backend {name} failed: {e}")
+                    continue
+            
+            # All backends failed
+            raise RuntimeError("All OpenCV backends failed")
+            
+        except Exception as e:
+            logger.warning(f"OpenCV capture failed, falling back to FFmpeg: {e}")
+            self.backend = "ffmpeg"
+            self._start_ffmpeg()
+    
+    def _start_ffmpeg(self):
+        """Start FFmpeg-based capture."""
         cmd = self._build_ffmpeg_cmd()
         logger.debug(f"FFmpeg command: {' '.join(cmd)}")
         
@@ -162,14 +265,90 @@ class FastCapture:
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            stdin=subprocess.DEVNULL,  # Prevent terminal interference
+            stdin=subprocess.DEVNULL,
         )
         
         # Start frame monitoring thread
         self._capture_thread = Thread(target=self._monitor_frames, daemon=True)
         self._capture_thread.start()
+    
+    def _opencv_capture_loop(self):
+        """OpenCV capture loop - fastest method."""
+        try:
+            import cv2
+        except ImportError:
+            return
         
-        logger.info(f"Started fast capture: {self.fps} FPS, GPU: {self._has_nvdec}")
+        frame_interval = 1.0 / self.fps
+        last_capture = 0
+        
+        while not self._stop_event.is_set():
+            try:
+                now = time.time()
+                
+                # Rate limit captures
+                if now - last_capture < frame_interval:
+                    time.sleep(0.01)
+                    continue
+                
+                start = time.perf_counter()
+                ret, frame = self._cv_capture.read()
+                capture_ms = (time.perf_counter() - start) * 1000
+                
+                if ret and frame is not None:
+                    self._frame_num += 1
+                    
+                    # Resize if needed
+                    if self.resolution:
+                        frame = cv2.resize(frame, self.resolution)
+                    
+                    # Save to RAM disk
+                    frame_path = self.ramdisk_path / f"frame_{self._frame_num:05d}.jpg"
+                    cv2.imwrite(str(frame_path), frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                    
+                    frame_info = FrameInfo(
+                        path=frame_path,
+                        frame_num=self._frame_num,
+                        timestamp=now,
+                        capture_time_ms=capture_ms
+                    )
+                    
+                    # Add to queue
+                    try:
+                        self._frame_queue.put_nowait(frame_info)
+                    except:
+                        try:
+                            self._frame_queue.get_nowait()
+                            self._frame_queue.put_nowait(frame_info)
+                        except:
+                            pass
+                    
+                    self._capture_times.append(capture_ms)
+                    last_capture = now
+                    
+                    # Cleanup old frames
+                    self._cleanup_old_frames()
+                    
+            except Exception as e:
+                logger.debug(f"OpenCV capture error: {e}")
+                time.sleep(0.1)
+        
+        # Cleanup
+        if self._cv_capture:
+            self._cv_capture.release()
+    
+    def _cleanup_old_frames(self):
+        """Remove old frame files, keep last 10 (enough for slow processing)."""
+        try:
+            old_frames = sorted(self.ramdisk_path.glob("frame_*.jpg"))
+            if len(old_frames) > 10:
+                for old_frame in old_frames[:-10]:
+                    try:
+                        old_frame.unlink()
+                    except:
+                        pass
+        except:
+            pass
     
     def stop(self):
         """Stop capture."""
@@ -185,6 +364,14 @@ class FastCapture:
                 self._ffmpeg_process.kill()
             self._ffmpeg_process = None
         
+        # Stop OpenCV
+        if self._cv_capture:
+            try:
+                self._cv_capture.release()
+            except:
+                pass
+            self._cv_capture = None
+        
         # Wait for thread
         if self._capture_thread:
             self._capture_thread.join(timeout=2)
@@ -192,7 +379,7 @@ class FastCapture:
         # Cleanup
         self._cleanup_frames()
         
-        logger.info("Stopped fast capture")
+        logger.info(f"Stopped fast capture (backend: {self.backend})")
     
     def _monitor_frames(self):
         """Monitor for new frames from FFmpeg (single file mode)."""
@@ -236,10 +423,10 @@ class FastCapture:
                         
                         last_mtime = mtime
                         
-                        # Cleanup old frame copies (keep last 3)
+                        # Cleanup old frame copies (keep last 10 for slow processing)
                         old_frames = sorted(self.ramdisk_path.glob("frame_*.jpg"))
-                        if len(old_frames) > 3:
-                            for old_frame in old_frames[:-3]:
+                        if len(old_frames) > 10:
+                            for old_frame in old_frames[:-10]:
                                 try:
                                     old_frame.unlink()
                                 except:

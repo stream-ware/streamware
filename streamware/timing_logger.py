@@ -142,17 +142,16 @@ class TimingLogger:
         self._decisions: List[dict] = []
         
         if self.log_file:
-            # Create CSV file alongside MD file
-            self.csv_file = self.log_file.with_suffix('.csv')
-        elif self.verbose:
-            # Auto-create CSV in RAM disk when verbose mode
-            from .config import config
-            ramdisk_path = Path(config.get("SQ_RAMDISK_PATH", "/dev/shm/streamware"))
-            ramdisk_path.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            self.csv_file = ramdisk_path / f"log_{timestamp}.csv"
-            self.log_file = ramdisk_path / f"log_{timestamp}.txt"
-            print(f"📊 Auto-logging to: {self.csv_file}", flush=True)
+            # Create CSV and TXT files based on log_file
+            log_path = Path(self.log_file)
+            if log_path.suffix.lower() == '.csv':
+                self.csv_file = log_path
+                self.log_file = log_path.with_suffix('.txt')
+            else:
+                self.csv_file = log_path.with_suffix('.csv')
+                # Keep log_file as-is for TXT
+        # Note: We no longer auto-create log files. If you want logging,
+        # use --log-file or set_log_file() explicitly.
         
         self.frames: List[FrameLog] = []
         self.current_frame: Optional[FrameLog] = None
@@ -462,6 +461,215 @@ class TimingLogger:
                     f.write("\n")
                 
                 f.write(f"\nEnded: {datetime.now().isoformat()}\n")
+    
+    def export_json(self, output_path: Path = None) -> str:
+        """Export logs to JSON format."""
+        import json
+        
+        data = {
+            "metadata": {
+                "started": self.frames[0].timestamp.isoformat() if self.frames else None,
+                "ended": datetime.now().isoformat(),
+                "total_frames": self._total_frames,
+                "skipped_frames": self._skipped_frames,
+                "decisions": len(self._decisions),
+            },
+            "stats": {},
+            "frames": [],
+            "decisions": self._decisions,
+        }
+        
+        # Add stats
+        for name, times in self._stats.items():
+            if times:
+                data["stats"][name] = {
+                    "avg_ms": sum(times) / len(times),
+                    "min_ms": min(times),
+                    "max_ms": max(times),
+                    "count": len(times),
+                }
+        
+        # Add frames
+        for frame in self.frames:
+            frame_data = {
+                "frame_num": frame.frame_num,
+                "timestamp": frame.timestamp.isoformat(),
+                "total_ms": frame.total_ms,
+                "result": frame.result,
+                "events": [
+                    {
+                        "name": e.name,
+                        "duration_ms": e.duration_ms,
+                        "details": e.details,
+                    }
+                    for e in frame.events
+                ],
+            }
+            data["frames"].append(frame_data)
+        
+        json_str = json.dumps(data, indent=2, default=str)
+        
+        if output_path:
+            output_path = Path(output_path)
+            output_path.write_text(json_str)
+        
+        return json_str
+    
+    def export_yaml(self, output_path: Path = None) -> str:
+        """Export logs to YAML format."""
+        try:
+            import yaml
+        except ImportError:
+            # Fallback to simple YAML-like format
+            return self._export_simple_yaml(output_path)
+        
+        data = {
+            "metadata": {
+                "started": self.frames[0].timestamp.isoformat() if self.frames else None,
+                "ended": datetime.now().isoformat(),
+                "total_frames": self._total_frames,
+                "skipped_frames": self._skipped_frames,
+                "decisions": len(self._decisions),
+            },
+            "stats": {},
+            "frames": [],
+            "decisions": self._decisions,
+        }
+        
+        # Add stats
+        for name, times in self._stats.items():
+            if times:
+                data["stats"][name] = {
+                    "avg_ms": round(sum(times) / len(times), 1),
+                    "min_ms": round(min(times), 1),
+                    "max_ms": round(max(times), 1),
+                    "count": len(times),
+                }
+        
+        # Add frames (summarized)
+        for frame in self.frames:
+            frame_data = {
+                "frame": frame.frame_num,
+                "time": frame.timestamp.strftime("%H:%M:%S"),
+                "total_ms": round(frame.total_ms, 0),
+                "result": frame.result,
+            }
+            data["frames"].append(frame_data)
+        
+        yaml_str = yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        
+        if output_path:
+            output_path = Path(output_path)
+            output_path.write_text(yaml_str)
+        
+        return yaml_str
+    
+    def _export_simple_yaml(self, output_path: Path = None) -> str:
+        """Simple YAML export without PyYAML dependency."""
+        lines = [
+            "metadata:",
+            f"  started: {self.frames[0].timestamp.isoformat() if self.frames else 'null'}",
+            f"  ended: {datetime.now().isoformat()}",
+            f"  total_frames: {self._total_frames}",
+            f"  skipped_frames: {self._skipped_frames}",
+            f"  decisions: {len(self._decisions)}",
+            "",
+            "stats:",
+        ]
+        
+        for name, times in self._stats.items():
+            if times:
+                lines.append(f"  {name}:")
+                lines.append(f"    avg_ms: {sum(times) / len(times):.1f}")
+                lines.append(f"    min_ms: {min(times):.1f}")
+                lines.append(f"    max_ms: {max(times):.1f}")
+                lines.append(f"    count: {len(times)}")
+        
+        lines.extend(["", "frames:"])
+        for frame in self.frames:
+            lines.append(f"  - frame: {frame.frame_num}")
+            lines.append(f"    time: {frame.timestamp.strftime('%H:%M:%S')}")
+            lines.append(f"    total_ms: {frame.total_ms:.0f}")
+            if frame.result:
+                lines.append(f"    result: {frame.result}")
+        
+        yaml_str = "\n".join(lines)
+        
+        if output_path:
+            output_path = Path(output_path)
+            output_path.write_text(yaml_str)
+        
+        return yaml_str
+    
+    def export_markdown(self, output_path: Path = None) -> str:
+        """Export logs to Markdown format."""
+        lines = [
+            "# Timing Log Report",
+            "",
+            f"**Started:** {self.frames[0].timestamp.isoformat() if self.frames else 'N/A'}",
+            f"**Ended:** {datetime.now().isoformat()}",
+            "",
+            "## Summary",
+            "",
+            f"- **Total Frames:** {self._total_frames}",
+            f"- **Skipped Frames:** {self._skipped_frames}",
+            f"- **Decisions:** {len(self._decisions)}",
+            "",
+            "## Performance Stats",
+            "",
+            "| Step | Avg (ms) | Min (ms) | Max (ms) | Count |",
+            "|------|----------|----------|----------|-------|",
+        ]
+        
+        for name, times in sorted(self._stats.items()):
+            if times:
+                avg = sum(times) / len(times)
+                lines.append(f"| {name} | {avg:.1f} | {min(times):.1f} | {max(times):.1f} | {len(times)} |")
+        
+        lines.extend([
+            "",
+            "## Frame Details",
+            "",
+        ])
+        
+        for frame in self.frames[:50]:  # Limit to first 50 frames
+            lines.append(f"### Frame {frame.frame_num} ({frame.timestamp.strftime('%H:%M:%S')})")
+            lines.append("")
+            for event in frame.events:
+                duration = f"{event.duration_ms:.0f}ms" if event.duration_ms else "-"
+                detail = f" - {event.details}" if event.details else ""
+                lines.append(f"- **{event.name}:** {duration}{detail}")
+            if frame.result:
+                lines.append(f"- **Result:** {frame.result}")
+            lines.append("")
+        
+        if len(self.frames) > 50:
+            lines.append(f"*... and {len(self.frames) - 50} more frames*")
+        
+        md_str = "\n".join(lines)
+        
+        if output_path:
+            output_path = Path(output_path)
+            output_path.write_text(md_str)
+        
+        return md_str
+    
+    def export_all(self, base_path: str):
+        """Export to all formats (CSV, TXT, JSON, YAML, MD)."""
+        base = Path(base_path).with_suffix('')
+        
+        # CSV is already written during logging
+        
+        # Export other formats
+        self.export_json(base.with_suffix('.json'))
+        self.export_yaml(base.with_suffix('.yaml'))
+        self.export_markdown(base.with_suffix('.md'))
+        
+        print(f"\n📊 Logs exported:", flush=True)
+        print(f"   CSV:  {base.with_suffix('.csv')}", flush=True)
+        print(f"   JSON: {base.with_suffix('.json')}", flush=True)
+        print(f"   YAML: {base.with_suffix('.yaml')}", flush=True)
+        print(f"   MD:   {base.with_suffix('.md')}", flush=True)
 
 
 # Global logger instance
@@ -469,19 +677,42 @@ _logger: Optional[TimingLogger] = None
 
 
 def get_logger(log_file: Optional[str] = None, verbose: bool = False) -> TimingLogger:
-    """Get or create timing logger."""
+    """Get or create timing logger.
+    
+    If a logger already exists, reuse it but update verbose flag if requested.
+    Does NOT create auto-log if csv_file is already set.
+    """
     global _logger
     
+    if _logger is not None:
+        # Logger already exists - just update verbose flag if needed
+        if verbose:
+            _logger.verbose = True
+            _logger.enabled = True
+        # Return existing logger - DON'T create new one
+        return _logger
+    
+    # No logger exists - create new one
     if log_file or verbose:
         _logger = TimingLogger(log_file, verbose=verbose)
-    elif _logger is None:
+    else:
         _logger = TimingLogger(None)  # Disabled logger
     
     return _logger
 
 
 def set_log_file(log_file: str, verbose: bool = False):
-    """Set log file for global logger."""
+    """Set log file for global logger. 
+    
+    This should be called BEFORE get_logger() to set the output file.
+    """
     global _logger
+    # Create new logger with the specified file
     _logger = TimingLogger(log_file, verbose=verbose)
     return _logger
+
+
+def reset_logger():
+    """Reset global logger (for testing)."""
+    global _logger
+    _logger = None

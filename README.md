@@ -281,34 +281,59 @@ sq live narrator --url "rtsp://..." --mode track --focus person --lite
 ```
 
 **Model recommendations:**
-| VRAM | Recommended Model |
-|------|-------------------|
-| 4GB  | `llava:7b` or `bakllava` |
-| 8GB  | `llava:7b` or `llava:13b` (slower) |
-| 16GB+ | `llava:13b` or `llava:34b` |
+| VRAM | Recommended Model | Speed |
+|------|-------------------|-------|
+| 2GB  | `moondream` ⭐ | ~1.5s |
+| 4GB  | `llava:7b` | ~2-3s |
+| 8GB  | `llava:13b` | ~4-5s |
 
-**Install pico TTS (better quality than espeak):**
+### ⚡ Performance Optimizations (NEW)
+
+Streamware includes major performance optimizations for real-time video analysis:
+
+| Optimization | Before | After | Improvement |
+|--------------|--------|-------|-------------|
+| **FastCapture** | 4000ms | 0ms | Persistent RTSP connection |
+| **Vision LLM** | 4000ms | 1500ms | moondream instead of llava:13b |
+| **Guarder LLM** | 2700ms | 250ms | gemma:2b |
+| **Total cycle** | 10s | 2s | **80% faster** |
+
+**Quick setup for fast mode:**
 ```bash
-sudo apt install libttspico-utils
-# Then in .env:
-SQ_TTS_ENGINE=pico
+# Install fast models (auto-installs on first run)
+./install_fast_model.sh
+
+# Or manually:
+ollama pull moondream    # Fast vision model
+ollama pull gemma:2b     # Fast guarder (text-only!)
 ```
+
+**Optimal `.env` for speed:**
+```ini
+SQ_MODEL=moondream            # 2-3x faster than llava:13b
+SQ_GUARDER_MODEL=gemma:2b     # Fast text filtering
+SQ_FAST_CAPTURE=true          # Persistent RTSP connection
+SQ_RAMDISK_ENABLED=true       # RAM disk for frames
+SQ_STREAM_MODE=track          # Smart movement tracking
+SQ_STREAM_FOCUS=person        # Focus on person detection
+```
+
+📖 **Full architecture documentation:** [docs/LIVE_NARRATOR_ARCHITECTURE.md](docs/LIVE_NARRATOR_ARCHITECTURE.md)
 
 ### 🛡️ Smart Response Filtering (Guarder)
 
-Streamware uses a small LLM (3B) to validate vision model responses before logging - reduces noise like "no changes detected":
+Streamware uses a small text LLM to summarize and filter verbose vision model responses:
 
 ```bash
-# Install guarder model (2GB, fast)
-ollama pull qwen2.5:3b
-
-# Or use even smaller model
-ollama pull gemma2:2b
+# Install fast guarder model
+ollama pull gemma:2b
 ```
+
+**⚠️ Important:** `gemma:2b` is a **text-only** model - it cannot analyze images. It only summarizes text responses from the vision model.
 
 **Configuration (`.env`):**
 ```ini
-SQ_GUARDER_MODEL=qwen2.5:3b   # Validation model
+SQ_GUARDER_MODEL=gemma:2b     # Fast text summarization
 SQ_USE_GUARDER=true           # Enabled by default
 ```
 

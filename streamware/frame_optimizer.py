@@ -397,7 +397,7 @@ class BatchGuarder:
         self._last_batch_time = time.time()
         
         ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
-        guarder_model = config.get("SQ_GUARDER_MODEL", "gemma2:2b")
+        guarder_model = config.get("SQ_GUARDER_MODEL", "gemma:2b")
         
         # Build batch prompt
         items = "\n".join([

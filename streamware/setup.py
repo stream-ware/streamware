@@ -187,27 +187,33 @@ def run_setup(interactive: bool = True, mode: str = "balance"):
     
     # Mode definitions
     mode_config = {
+        "fast": {
+            "whisper": "tiny",
+            "ollama_vision": "moondream",      # Fastest vision model (~1.5s)
+            "ollama_chat": "gemma:2b",        # Fast chat/guarder
+            "desc": "Maximum speed, real-time monitoring (recommended)"
+        },
         "eco": {
             "whisper": "tiny",
-            "ollama_vision": "llava:7b",
-            "ollama_chat": "llama3:8b", # or phi3
+            "ollama_vision": "moondream",      # Fast and lightweight
+            "ollama_chat": "gemma:2b",
             "desc": "Lightweight, low resource usage"
         },
         "balance": {
             "whisper": "base",
-            "ollama_vision": "llava:13b",
-            "ollama_chat": "llama3",
+            "ollama_vision": "llava:7b",       # Good balance
+            "ollama_chat": "llama3:8b",
             "desc": "Good trade-off between speed and quality"
         },
         "performance": {
             "whisper": "large",
-            "ollama_vision": "llava:34b", # or similar
-            "ollama_chat": "llama3:70b",
-            "desc": "Best quality, high resource usage"
+            "ollama_vision": "llava:13b",      # Best quality
+            "ollama_chat": "llama3",
+            "desc": "Best quality, slower processing"
         }
     }
     
-    selected_config = mode_config.get(mode, mode_config["balance"])
+    selected_config = mode_config.get(mode, mode_config["fast"])  # Default to fast mode
     
     env_status = verify_environment()
     changes = {}

@@ -2,21 +2,46 @@
 
 This directory contains example scripts demonstrating various features and usage patterns of the Streamware framework.
 
+## 🎯 Live Narrator (NEW - Recommended!)
+
+**Real-time video analysis with YOLO + Vision LLM + TTS**
+
+```bash
+# Person tracking with voice narration
+sq live narrator --url "rtsp://camera/stream" --mode track --focus person --tts
+
+# Bird feeder monitoring
+sq live narrator --url "rtsp://birdcam/stream" --mode track --focus bird --tts
+
+# Pet camera (cats & dogs)
+sq live narrator --url "rtsp://petcam/stream" --mode track --focus pet --tts
+
+# Verbose mode (see timing)
+sq live narrator --url "rtsp://camera/stream" --mode track --focus person --tts --verbose
+```
+
+See: [media-processing/live_narrator_examples.sh](media-processing/live_narrator_examples.sh)
+
+---
+
 ## 📁 Project Examples
 
 | Project | Description | Examples |
 |---------|-------------|----------|
-| [llm-ai/](llm-ai/) | AI text processing, code generation | `text_to_sql.py`, `chat_assistant.py`, `multi_provider.py` |
+| [media-processing/](media-processing/) | **Live Narrator, YOLO, TTS** | `live_narrator_examples.sh`, `video_captioning.py` |
+| [llm-ai/](llm-ai/) | AI text processing, code generation | `text_to_sql.py`, `chat_assistant.py` |
 | [voice-control/](voice-control/) | Voice commands, STT/TTS | `voice_keyboard.py`, `voice_mouse.py` |
 | [automation/](automation/) | Desktop automation | `mouse_control.py`, `keyboard_control.py` |
 | [communication/](communication/) | Email, Slack, Telegram | `slack_bot.py`, `telegram_bot.py` |
 | [data-pipelines/](data-pipelines/) | ETL, data transformation | `api_to_database.py`, `csv_processor.py` |
 | [deployment/](deployment/) | Docker, K8s, SSH deploy | `docker_deploy.py`, `ssh_deploy.sh` |
-| [media-processing/](media-processing/) | Image/video/audio AI | `video_captioning.py`, `video_modes_demo.py` |
 
 ## 🚀 Quick Start
 
 ```bash
+# Live Narrator (RECOMMENDED - real-time video with TTS)
+sq live narrator --url "rtsp://camera/stream" --mode track --focus person --tts --verbose
+
 # LLM/AI
 python examples/llm-ai/text_to_sql.py "Get all users"
 python examples/llm-ai/chat_assistant.py --provider ollama/qwen2.5:14b
@@ -38,7 +63,6 @@ python examples/data-pipelines/api_to_database.py
 python examples/media-processing/video_captioning.py video.mp4              # full mode
 python examples/media-processing/video_captioning.py video.mp4 --mode stream # frame-by-frame
 python examples/media-processing/video_captioning.py video.mp4 --mode diff   # changes
-python examples/media-processing/video_modes_demo.py video.mp4               # compare all
 ```
 
 ## 🎬 Video Analysis Modes

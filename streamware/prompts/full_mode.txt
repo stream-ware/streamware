@@ -1,0 +1,13 @@
+ANALYSIS CONTEXT:
+{context}
+
+Describe what you see in this security camera image.
+Red rectangles mark areas where motion was detected.
+
+Focus on:
+- People (count, positions, activities)
+- Vehicles (if any)
+- Notable objects or changes
+- {focus}
+
+Be concise but thorough.

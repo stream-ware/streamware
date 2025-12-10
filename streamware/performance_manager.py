@@ -63,7 +63,7 @@ class PerformanceConfig:
     """Configuration optimized for detected hardware."""
     # Model selection
     vision_model: str = "llava:7b"
-    guarder_model: str = "gemma2:2b"
+    guarder_model: str = "gemma:2b"
     use_vision_model: bool = True
     
     # Processing settings

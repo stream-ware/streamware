@@ -1,0 +1,17 @@
+Compare these two camera states and decide if there's a meaningful change.
+
+PREVIOUS: "{prev_summary}"
+CURRENT: "{response}"
+
+If the situation is essentially the SAME (same person, same place, same activity):
+→ Respond exactly: NO_CHANGE
+
+If something CHANGED (person appeared/left, moved, different action):
+→ Respond with short summary: "Person: [what changed]"
+
+Examples:
+- "Person at desk" vs "Seated person at computer" → NO_CHANGE
+- "Person at desk" vs "Person walking to door" → Person: walking to door
+- "No person" vs "Person detected" → Person: appeared
+
+Respond with ONLY "NO_CHANGE" or a short summary:

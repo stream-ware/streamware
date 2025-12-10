@@ -1,0 +1,9 @@
+Look at this security camera image carefully.
+
+Is there a PERSON visible? If yes, describe:
+- What they are doing
+- Where they are in the frame
+
+If NO person is visible, say "No person visible" and briefly describe the scene.
+
+Answer in 1 sentence.

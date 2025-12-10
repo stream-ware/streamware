@@ -207,29 +207,28 @@ def should_notify(response: str, mode: str = "general") -> bool:
     if any(p in response_lower for p in noise_patterns):
         return False
     
-    # In track mode, notify if person/object is positively mentioned
-    # Skip static filtering in track mode - we want to know about ALL persons
+    # In track mode, notify for ANY person-related activity
+    # We want to be informed about movements and presence
     if mode == "track":
-        # Positive detection patterns
-        positive_patterns = [
-            "person detected", "person is", "person at", "person:",
-            "person observed", "person seen", "person visible",
-            "person seated", "person sitting", "person working",
-            "individual is", "individual at", "seated individual",
-            "someone is", "human detected", "figure detected",
-            "shows a person", "photograph shows", "image shows"
+        # Activity keywords that always warrant notification
+        activity_keywords = [
+            "walking", "moving", "standing", "running", "entering", "leaving",
+            "approaching", "sitting", "working", "looking", "reaching",
+            "holding", "carrying", "talking", "using", "typing", "reading"
         ]
-        if any(p in response_lower for p in positive_patterns):
+        if any(kw in response_lower for kw in activity_keywords):
             return True
         
-        # Simple presence check (but not negated)
-        if "person" in response_lower or "individual" in response_lower or "human" in response_lower:
-            # Make sure it's not negated
-            negations = ["no ", "not ", "without ", "lack of "]
-            for neg in negations:
-                if neg + "person" in response_lower or neg + "individual" in response_lower:
-                    return False
-            return True
+        # Person-related words - notify if detected
+        person_keywords = ["person", "man", "woman", "someone", "human", "people",
+                          "individual", "figure", "they", "he", "she"]
+        for kw in person_keywords:
+            if kw in response_lower:
+                # Make sure it's not negated
+                negations = ["no ", "not ", "without ", "lack of ", "no_"]
+                is_negated = any(neg + kw in response_lower for neg in negations)
+                if not is_negated:
+                    return True
     
     # Check structured fields
     fields = extract_structured_fields(response)
@@ -325,7 +324,7 @@ def check_guarder_model_available(model: str = "qwen2.5:3b") -> Tuple[bool, str]
                     return True, m
             
             # Check for alternative small models (fallback)
-            small_models = ["gemma2:2b", "phi3:mini", "llama3.2:latest", "deepseek-r1:1.5b"]
+            small_models = ["gemma:2b", "phi3:mini", "llama3.2:latest", "deepseek-r1:1.5b"]
             for sm in small_models:
                 if sm in models:
                     return True, sm
@@ -368,7 +367,7 @@ def ensure_guarder_model(model: str = "qwen2.5:3b", interactive: bool = True) ->
     print(f"\n   Guarder model '{model}' is needed for smart response filtering.")
     print("   Recommended models (small, fast):")
     print("   1. qwen2.5:3b  - Best quality (2GB)")
-    print("   2. gemma2:2b   - Fastest (1.6GB)")
+    print("   2. gemma:2b   - Fastest (1.6GB)")
     print("   3. phi3:mini   - Good balance (2.3GB)")
     print("   4. Skip        - Use regex filtering only")
     
@@ -377,7 +376,7 @@ def ensure_guarder_model(model: str = "qwen2.5:3b", interactive: bool = True) ->
         
         models_map = {
             "1": "qwen2.5:3b",
-            "2": "gemma2:2b",
+            "2": "gemma:2b",
             "3": "phi3:mini",
         }
         
@@ -412,7 +411,7 @@ _last_summary: str = ""  # Track last summary for deduplication
 def quick_person_check(
     image_path,
     focus: str = "person",
-    model: str = "gemma2:2b",
+    model: str = "gemma:2b",
     timeout: int = 10,
 ) -> Tuple[bool, float]:
     """Quick check if person/object is in frame using small LLM.
@@ -474,7 +473,7 @@ Answer ONLY with: YES or NO"""
 def quick_change_check(
     current_summary: str,
     previous_summary: str,
-    model: str = "gemma2:2b",
+    model: str = "gemma:2b",
     timeout: int = 8,
 ) -> Tuple[bool, str]:
     """Quick check if there's a meaningful change between two states.
@@ -599,20 +598,14 @@ Examples:
 
 Respond with ONLY "NO_CHANGE" or a short summary:"""
     else:
-        prompt = f"""Summarize this camera detection in ONE short sentence (max 10 words).
+        # Simpler prompt for small models
+        prompt = f"""Summarize in max 8 words. Focus: {focus}.
 
-DETECTION: {response}
-TRACKING: {focus}
+Input: {response[:200]}
 
-Format: "{focus.title()}: [location], [action]"
-If no {focus}: "No {focus} visible"
+Output format: "{focus.title()}: [what they're doing]" or "No {focus} visible"
 
-Examples:
-- "Person: at desk, using computer"
-- "Person: walking left"
-- "No person visible"
-
-Respond with ONLY the summary:"""
+Output:"""
 
     try:
         resp = requests.post(
@@ -627,8 +620,78 @@ Respond with ONLY the summary:"""
         
         if resp.ok:
             summary = resp.json().get("response", "").strip()
+            
+            # Strip common LLM preambles (case-insensitive)
+            preambles = [
+                "sure, here is the summary:",
+                "sure, here's the summary:",
+                "sure, heres the summary:",
+                "sure, here is a summary:",
+                "sure, here's a summary:",
+                "sure, heres a summary:",
+                "sure! here is",
+                "sure! here's",
+                "here is the summary:",
+                "here's the summary:",
+                "heres the summary:",
+                "here is a short summary:",
+                "here's a short summary:",
+                "summary:",
+                "the summary is:",
+                "the current state is",
+                "based on the",
+                "i can see",
+                "in this image",
+            ]
+            summary_lower = summary.lower()
+            for preamble in preambles:
+                if summary_lower.startswith(preamble):
+                    summary = summary[len(preamble):].strip()
+                    break
+            
+            # Also strip "sure" patterns via regex - catch all variants
+            import re
+            # Strip "Sure. Here's..." "Sure, here is..." etc.
+            summary = re.sub(r'^sure[,!.\s]+(here\'?s?|heres|the)[\s\S]*?[:]\s*', '', summary, flags=re.IGNORECASE).strip()
+            summary = re.sub(r'^sure[,!.\s]+', '', summary, flags=re.IGNORECASE).strip()
+            # Strip "Here is/Here's..."
+            summary = re.sub(r'^here\'?s?\s+(is\s+)?(a\s+)?(the\s+)?(summary|description)[:\s]*', '', summary, flags=re.IGNORECASE).strip()
+            # Strip "The current state is..."
+            summary = re.sub(r'^the\s+(current\s+)?(state|situation)\s+(is|shows)[:\s]*', '', summary, flags=re.IGNORECASE).strip()
+            # Strip "Based on..."
+            summary = re.sub(r'^based\s+on[\s\S]*?[,:]', '', summary, flags=re.IGNORECASE).strip()
+            # Strip if it's just "you requested:" or similar
+            summary = re.sub(r'^(the\s+)?summary\s+(you\s+)?requested[:\s]*', '', summary, flags=re.IGNORECASE).strip()
+            
+            # Strip template patterns that shouldn't be in output
+            if '[' in summary and ']' in summary:
+                # Looks like template: [Activity] [position]
+                if any(t in summary.lower() for t in ['[activity]', '[position', '[direction', '[action]']):
+                    summary = ""  # Invalid template response
+            
+            # If summary is empty or just punctuation, it was garbage
+            if not summary or summary in ['.', ':', '-', '...']:
+                summary = ""
+            
+            # If focus is person but response doesn't mention person, use original response
+            # Don't add fake "Person:" prefix to non-person responses
+            if focus.lower() in ("person", "people", "human"):
+                person_words = ["person", "man", "woman", "someone", "human", "people", 
+                               "individual", "figure", "he", "she", "they"]
+                has_person_word = any(w in summary.lower() for w in person_words)
+                has_person_word_orig = any(w in response.lower() for w in person_words)
+                
+                if not has_person_word and not has_person_word_orig:
+                    # Model didn't see a person - return original truncated response
+                    # Don't fake "Person:" prefix
+                    summary = response[:60].strip() if response else ""
+            
             # Clean up the response
             summary = summary.replace('"', '').replace("'", "")
+            # Remove markdown formatting
+            summary = re.sub(r'\*\*([^*]+)\*\*', r'\1', summary)  # **bold** -> bold
+            summary = re.sub(r'\*([^*]+)\*', r'\1', summary)      # *italic* -> italic
+            summary = re.sub(r'^#+\s*', '', summary)              # # headers
             # Take only first line if multiple
             summary = summary.split('\n')[0].strip()
             # Limit length
@@ -655,14 +718,47 @@ Respond with ONLY the summary:"""
                         _last_summary = summary
                         return True, summary
                 
+                # Check for activity keywords that should NOT be filtered as "no change"
+                activity_keywords = ["walking", "moving", "standing", "running", "entering", "leaving", 
+                                     "approaching", "exiting", "got up", "sat down", "turned", "reached"]
+                if any(kw in response.lower() for kw in activity_keywords):
+                    # Activity detected in response - don't mark as no change
+                    # Re-summarize focusing on the activity
+                    for kw in activity_keywords:
+                        if kw in response.lower():
+                            summary = f"{focus.title()}: {kw}"
+                            _last_summary = summary
+                            return True, summary
+                
                 return False, _last_summary or "No change"
             
             # Determine if significant
             summary_lower = summary.lower()
-            is_noise = any(p in summary_lower for p in [
-                "no person", "no " + focus.lower(), "nothing", "unclear", 
-                "not visible", "empty", "no movement"
-            ])
+            
+            # Activity keywords - always significant
+            activity_keywords = ["walking", "moving", "standing", "running", "entering", "leaving", 
+                                 "approaching", "exiting", "got up", "sat down", "turned", "reached",
+                                 "working", "typing", "reading", "talking", "using", "sitting",
+                                 "looking", "holding", "reaching", "picking", "placing", "carrying"]
+            has_activity = any(kw in summary_lower for kw in activity_keywords)
+            
+            # Person-related keywords - also significant
+            person_keywords = ["person", "man", "woman", "someone", "human", "people", 
+                               "individual", "figure", "they", "he", "she"]
+            has_person = any(kw in summary_lower for kw in person_keywords)
+            
+            # Noise patterns - ONLY filter if explicitly negative
+            noise_patterns = [
+                "no person visible", "no one visible", "empty room", "nothing detected",
+                "unclear image", "cannot see", "not visible"
+            ]
+            is_explicit_noise = any(p in summary_lower for p in noise_patterns)
+            
+            # If we have person OR activity, it's significant
+            is_significant = (has_person or has_activity) and not is_explicit_noise
+            
+            # Legacy is_noise for backwards compatibility
+            is_noise = is_explicit_noise and not has_activity and not has_person
             
             # Update last summary for next comparison (always update if we got a real summary)
             if not is_noise and "no_change" not in summary.lower():
@@ -731,6 +827,40 @@ def is_significant_smart(
     
     if not response or not response.strip():
         return False, "No data"
+    
+    response_lower = response.lower().strip()
+    
+    # FAST PATH: Skip LLM for clear yes/no responses (saves 2-3 seconds!)
+    # These patterns are unambiguous and don't need LLM summarization
+    clear_positive = [
+        "yes, person visible", "yes, there is a person", "person visible",
+        "person detected", "person is", "there is a person", "yes person",
+        "a person is", "someone is", "man is", "woman is",
+    ]
+    clear_negative = [
+        "no person visible", "no person detected", "no one visible",
+        "no person", "no people", "empty room", "nobody visible",
+    ]
+    
+    # Check clear positive
+    for pattern in clear_positive:
+        if pattern in response_lower:
+            # Extract activity if present
+            if "standing" in response_lower:
+                return True, "Person standing"
+            elif "walking" in response_lower:
+                return True, "Person walking"
+            elif "sitting" in response_lower:
+                return True, "Person sitting"
+            elif "working" in response_lower:
+                return True, "Person working"
+            else:
+                return True, "Person visible"
+    
+    # Check clear negative
+    for pattern in clear_negative:
+        if response_lower.startswith(pattern) or f". {pattern}" in response_lower:
+            return True, "No person visible"  # Still significant - scene changed
     
     # Get guarder model from config if not specified
     if guarder_model is None:

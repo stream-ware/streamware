@@ -1,16 +1,45 @@
 # Media Processing Examples
 
-Image, video, audio, and **real-time stream** analysis with AI (LLaVA, Whisper).
+Image, video, audio, and **real-time stream** analysis with AI.
+
+## 🆕 Live Narrator (Optimized!)
+
+**Fast real-time video analysis** with YOLO detection, object tracking, and TTS.
+
+| Feature | Description |
+|---------|-------------|
+| **YOLO Detection** | ~10ms detection (auto-installed) |
+| **Object Tracking** | Persistent IDs across frames |
+| **Animal Detection** | Birds, cats, dogs, wildlife |
+| **FastCapture** | 0ms frame capture from buffer |
+| **TTS** | Real-time voice narration |
+
+### Quick Start
+```bash
+# Person tracking with voice
+sq live narrator --url "rtsp://camera/stream" --mode track --focus person --tts
+
+# Bird feeder monitoring
+sq live narrator --url "rtsp://birdcam/stream" --mode track --focus bird --tts
+
+# Pet camera
+sq live narrator --url "rtsp://petcam/stream" --mode track --focus pet --tts
+```
+
+See: [live_narrator_examples.sh](live_narrator_examples.sh)
+
+---
 
 ## 📁 Examples
 
 | File | Description |
 |------|-------------|
+| [live_narrator_examples.sh](live_narrator_examples.sh) | **NEW: Live Narrator with YOLO** |
 | [image_analysis.py](image_analysis.py) | Describe images with LLaVA |
 | [video_captioning.py](video_captioning.py) | Video file analysis (3 modes) |
 | [video_modes_demo.py](video_modes_demo.py) | Compare full/stream/diff modes |
-| [stream_analysis.py](stream_analysis.py) | **Real-time stream analysis** |
-| [screen_monitor.py](screen_monitor.py) | **Screen capture + AI analysis** |
+| [stream_analysis.py](stream_analysis.py) | Real-time stream analysis |
+| [screen_monitor.py](screen_monitor.py) | Screen capture + AI analysis |
 | [audio_transcription.py](audio_transcription.py) | Transcribe audio files |
 
 ---
@@ -305,14 +334,18 @@ choco install ffmpeg
 ### AI Models
 
 ```bash
-# LLaVA for image/video (required)
-ollama pull llava
+# Fast models (recommended for real-time)
+ollama pull moondream       # Fast vision (~1.5s) - RECOMMENDED
+ollama pull gemma:2b        # Fast guarder (~250ms)
 
-# Optional: larger model for better results
-ollama pull llava:13b
+# Or use install script:
+./install_fast_model.sh
 
-# Qwen for narrative generation
-ollama pull qwen2.5:14b
+# High quality models (slower)
+ollama pull llava:7b        # Good quality vision (~2-3s)
+ollama pull llava:13b       # Best quality (~4-5s)
+
+# YOLO is auto-installed on first use (ultralytics)
 ```
 
 ### Python Packages

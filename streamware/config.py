@@ -21,15 +21,16 @@ from typing import Any, Dict, List, Optional
 
 # Default configuration values
 DEFAULTS = {
-    # AI / LLM
-    "SQ_MODEL": "llava:7b",
+    # AI / LLM - balanced for accuracy
+    "SQ_MODEL": "llava:7b",            # Good vision model (accurate person detection)
     "SQ_OLLAMA_URL": "http://localhost:11434",
     "SQ_OPENAI_API_KEY": "",
     "SQ_ANTHROPIC_API_KEY": "",
     "SQ_LLM_PROVIDER": "ollama",
     "SQ_LLM_TIMEOUT": "30",
-    "SQ_GUARDER_MODEL": "gemma2:2b",   # Small model for response validation (fast)
+    "SQ_GUARDER_MODEL": "gemma:2b",   # Small model for response validation (fast)
     "SQ_USE_GUARDER": "true",          # LLM-based response filtering (default: on)
+    "SQ_FAST_CAPTURE": "true",         # Persistent RTSP connection (10x faster)
     
     # Audio / Voice
     "SQ_STT_PROVIDER": "google",
@@ -39,10 +40,10 @@ DEFAULTS = {
     "SQ_TTS_RATE": "150",        # TTS speech rate (approx. words per minute)
     
     # Stream Analysis
-    "SQ_STREAM_MODE": "diff",
-    "SQ_STREAM_INTERVAL": "5",
-    "SQ_STREAM_DURATION": "30",
-    "SQ_STREAM_FOCUS": "",
+    "SQ_STREAM_MODE": "track",         # track mode for intelligent movement detection
+    "SQ_STREAM_INTERVAL": "2",         # 2 seconds between frames (faster for tracking)
+    "SQ_STREAM_DURATION": "30",        # 1 minute default
+    "SQ_STREAM_FOCUS": "person",       # default focus on person tracking
     "SQ_STREAM_FRAMES_DIR": "",
     "SQ_RAMDISK_PATH": "/dev/shm/streamware",
     "SQ_RAMDISK_ENABLED": "true",
@@ -54,12 +55,20 @@ DEFAULTS = {
     
     # Detection Settings (descriptive)
     "SQ_SENSITIVITY": "medium",      # ultra, high, medium, low, minimal
-    "SQ_DETECT": "any",              # person, vehicle, motion, package, any
+    "SQ_DETECT": "any",              # person, vehicle, motion, package, animal, bird, any
     "SQ_SPEED": "normal",            # realtime, fast, normal, slow, thorough
-    "SQ_MOTION_THRESHOLD": "25",     # 0-100 (or use sensitivity preset)
+    
+    # Animal Detection
+    "SQ_ANIMAL_FOCUS": "all",        # all, bird, cat, dog, pet, wildlife
+    "SQ_MOTION_THRESHOLD": "15",     # 0-100 (lower = more sensitive, 15 is good for indoor)
     "SQ_MIN_REGION": "500",          # minimum region size in pixels
-    "SQ_MIN_CHANGE": "0.5",          # minimum change percent
+    "SQ_MIN_CHANGE": "0.0",          # minimum change percent (0.0 = always check, 0.1 = very sensitive)
     "SQ_FRAME_SCALE": "0.3",         # downscale factor for motion detection (0.1-1.0)
+    
+    # YOLO Detection (auto-installed on first use)
+    "SQ_USE_YOLO": "true",           # Use YOLO for detection (faster, more accurate)
+    "SQ_YOLO_MODEL": "yolov8n",      # YOLO model: yolov8n (fast), yolov8s, yolov8m, yolov8l, yolov8x (accurate)
+    "SQ_YOLO_CONFIDENCE": "0.25",    # Minimum confidence for YOLO detection
     
     # Network
     "SQ_NETWORK_SUBNET": "",

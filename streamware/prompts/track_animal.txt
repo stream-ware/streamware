@@ -1,0 +1,17 @@
+CONTEXT: {context}{movement_hint}
+{prev_info}
+
+Camera monitoring for animals.
+
+TASK: Describe any {focus}s visible.
+
+Focus on:
+1. What animal? (species if identifiable)
+2. What is it doing? (walking, sitting, eating, sleeping, playing)
+3. Where? (position in frame)
+
+Response format: "[Animal] [activity] in [location]."
+Example: "Cat sitting on the left side of frame, appears alert."
+Example: "Dog walking across the yard toward the right."
+
+Be specific about the animal and its activity.

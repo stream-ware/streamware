@@ -615,9 +615,16 @@ def check_ollama_model(model: str) -> Tuple[bool, str]:
             models = [m.get("name", "") for m in resp.json().get("models", [])]
             base_name = model.split(":")[0]
             
-            # Check exact or base match
+            # Check exact match first, then with :latest suffix
+            # Be precise - don't match gemma2 when looking for gemma
             for m in models:
-                if m == model or m == f"{model}:latest" or m.startswith(base_name):
+                # Exact match
+                if m == model or m == f"{model}:latest":
+                    return True, m
+            
+            # Fallback: check base name with colon (gemma: matches gemma:2b but not gemma2:2b)
+            for m in models:
+                if m.startswith(f"{base_name}:"):
                     return True, m
             
             return False, f"Model {model} not installed"
@@ -627,28 +634,29 @@ def check_ollama_model(model: str) -> Tuple[bool, str]:
         return False, f"Error: {e}"
 
 
-def install_ollama_model(model: str, interactive: bool = True) -> bool:
+def install_ollama_model(model: str, auto_install: bool = True, interactive: bool = True) -> bool:
     """Install Ollama model.
     
     Args:
-        model: Model name (e.g. "llava:7b", "gemma2:2b")
-        interactive: If True, ask user before installing
+        model: Model name (e.g. "llava:7b", "gemma:2b")
+        auto_install: If True, install without asking (default: True)
+        interactive: If True and auto_install is False, ask user before installing
         
     Returns:
         True if installed successfully
     """
     import subprocess
     
-    if interactive:
+    if not auto_install and interactive:
         print(f"\n⚠️  Model '{model}' not found.")
         try:
             response = input(f"   Install with 'ollama pull {model}'? [Y/n]: ").strip().lower()
-            if response and response not in ("y", "yes"):
+            if response and response not in ("y", "yes", ""):
                 return False
         except (EOFError, KeyboardInterrupt):
             return False
     
-    print(f"   Pulling {model}... (this may take a few minutes)")
+    print(f"   📦 Installing {model}... (this may take a few minutes)")
     
     try:
         result = subprocess.run(
@@ -675,12 +683,13 @@ def install_ollama_model(model: str, interactive: bool = True) -> bool:
         return False
 
 
-def ensure_ollama_model(model: str, interactive: bool = True) -> bool:
+def ensure_ollama_model(model: str, auto_install: bool = True, interactive: bool = True) -> bool:
     """Ensure Ollama model is available, install if not.
     
     Args:
         model: Model name
-        interactive: If True, prompt user
+        auto_install: If True, install automatically without asking
+        interactive: If True and auto_install is False, prompt user
         
     Returns:
         True if model is available
@@ -689,22 +698,24 @@ def ensure_ollama_model(model: str, interactive: bool = True) -> bool:
     if available:
         return True
     
-    return install_ollama_model(model, interactive)
+    return install_ollama_model(model, auto_install=auto_install, interactive=interactive)
 
 
 def run_startup_checks(
     vision_model: str = None,
     guarder_model: str = None,
     check_tts: bool = False,
-    interactive: bool = True
+    interactive: bool = True,
+    auto_install: bool = True
 ) -> dict:
     """Run all startup checks and install missing dependencies.
     
     Args:
-        vision_model: Vision LLM model (e.g. "llava:7b")
-        guarder_model: Guarder model (e.g. "gemma2:2b")
+        vision_model: Vision LLM model (e.g. "moondream", "llava:7b")
+        guarder_model: Guarder model (e.g. "gemma:2b")
         check_tts: Whether to check TTS availability
-        interactive: Whether to prompt for installation
+        interactive: Whether to prompt for installation (if auto_install=False)
+        auto_install: If True (default), automatically install missing models
         
     Returns:
         Dict with check results
@@ -761,29 +772,35 @@ def run_startup_checks(
     
     # 2. Check vision model
     if vision_model is None:
-        vision_model = config.get("SQ_MODEL", "llava:7b")
+        vision_model = config.get("SQ_MODEL", "moondream")
     
     vision_ok, vision_msg = check_ollama_model(vision_model)
     if vision_ok:
         print(f"   ✅ Vision model: {vision_msg}")
         results["vision_model"] = True
     else:
-        print(f"   ⚠️  Vision model: {vision_msg}")
-        if ensure_ollama_model(vision_model, interactive):
+        print(f"   ⚠️  Vision model '{vision_model}' not found")
+        if ensure_ollama_model(vision_model, auto_install=auto_install, interactive=interactive):
             results["vision_model"] = True
+            # Re-check to get actual model name
+            _, vision_msg = check_ollama_model(vision_model)
+            print(f"   ✅ Vision model: {vision_msg}")
     
     # 3. Check guarder model
     if guarder_model is None:
-        guarder_model = config.get("SQ_GUARDER_MODEL", "gemma2:2b")
+        guarder_model = config.get("SQ_GUARDER_MODEL", "gemma:2b")
     
     guarder_ok, guarder_msg = check_ollama_model(guarder_model)
     if guarder_ok:
         print(f"   ✅ Guarder model: {guarder_msg}")
         results["guarder_model"] = True
     else:
-        print(f"   ⚠️  Guarder model: {guarder_msg}")
-        if ensure_ollama_model(guarder_model, interactive):
+        print(f"   ⚠️  Guarder model '{guarder_model}' not found")
+        if ensure_ollama_model(guarder_model, auto_install=auto_install, interactive=interactive):
             results["guarder_model"] = True
+            # Re-check to get actual model name
+            _, guarder_msg = check_ollama_model(guarder_model)
+            print(f"   ✅ Guarder model: {guarder_msg}")
     
     # 4. Check TTS (optional) - actually test it works
     if check_tts:
@@ -803,6 +820,19 @@ def run_startup_checks(
             if ensure_tts_available(interactive):
                 results["tts"] = True
     
+    # 5. Check YOLO (optional but recommended for fast detection)
+    use_yolo = config.get("SQ_USE_YOLO", "true").lower() == "true"
+    if use_yolo:
+        yolo_ok, yolo_msg = check_yolo_available()
+        if yolo_ok:
+            print(f"   ✅ YOLO: {yolo_msg}")
+            results["yolo"] = True
+        else:
+            print(f"   ⚠️  YOLO: not installed (will auto-install on first use)")
+            if auto_install:
+                if ensure_yolo_available(verbose=True):
+                    results["yolo"] = True
+    
     # Summary
     results["all_ok"] = results["ollama"] and results["vision_model"]
     
@@ -812,6 +842,111 @@ def run_startup_checks(
         print("\n⚠️  Some dependencies missing. Features may be limited.")
     
     return results
+
+
+def check_yolo_available() -> Tuple[bool, str]:
+    """Check if YOLO (ultralytics) is available."""
+    try:
+        import ultralytics
+        return True, f"ultralytics {ultralytics.__version__}"
+    except ImportError:
+        return False, "not installed"
+
+
+def ensure_yolo_available(verbose: bool = True) -> bool:
+    """Install YOLO (ultralytics) if not available.
+    
+    Returns:
+        True if YOLO is available after install attempt
+    """
+    ok, msg = check_yolo_available()
+    if ok:
+        if verbose:
+            print(f"   ✅ YOLO: {msg}")
+        return True
+    
+    if verbose:
+        print("   📦 Installing YOLO (ultralytics)...")
+    
+    try:
+        import subprocess
+        import sys
+        subprocess.check_call(
+            [sys.executable, "-m", "pip", "install", "ultralytics", "-q"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        ok, msg = check_yolo_available()
+        if ok and verbose:
+            print(f"   ✅ YOLO: {msg}")
+        return ok
+    except Exception as e:
+        if verbose:
+            print(f"   ⚠️  YOLO installation failed: {e}")
+        return False
+
+
+def ensure_required_models(
+    vision_model: str = None,
+    guarder_model: str = None,
+    install_yolo: bool = True,
+    verbose: bool = True
+) -> bool:
+    """Ensure all required Ollama models are installed.
+    
+    This function is called automatically before running live narrator
+    and other AI features. It will install missing models without prompting.
+    
+    Args:
+        vision_model: Vision model (default: from config or 'moondream')
+        guarder_model: Guarder model (default: from config or 'gemma:2b')
+        install_yolo: Also install YOLO for fast detection
+        verbose: Print status messages
+        
+    Returns:
+        True if all models are available
+    """
+    from .config import config
+    
+    if vision_model is None:
+        vision_model = config.get("SQ_MODEL", "moondream")
+    if guarder_model is None:
+        guarder_model = config.get("SQ_GUARDER_MODEL", "gemma:2b")
+    
+    all_ok = True
+    
+    # Check and install vision model
+    vision_ok, vision_msg = check_ollama_model(vision_model)
+    if not vision_ok:
+        if verbose:
+            print(f"📦 Required model '{vision_model}' not found. Installing...")
+        if not install_ollama_model(vision_model, auto_install=True, interactive=False):
+            all_ok = False
+            if verbose:
+                print(f"❌ Failed to install {vision_model}")
+    elif verbose:
+        print(f"✅ Vision model: {vision_msg}")
+    
+    # Check and install guarder model
+    guarder_ok, guarder_msg = check_ollama_model(guarder_model)
+    if not guarder_ok:
+        if verbose:
+            print(f"📦 Required model '{guarder_model}' not found. Installing...")
+        if not install_ollama_model(guarder_model, auto_install=True, interactive=False):
+            all_ok = False
+            if verbose:
+                print(f"❌ Failed to install {guarder_model}")
+    elif verbose:
+        print(f"✅ Guarder model: {guarder_msg}")
+    
+    # Check and install YOLO
+    if install_yolo:
+        use_yolo = config.get("SQ_USE_YOLO", "true").lower() == "true"
+        if use_yolo:
+            yolo_ok = ensure_yolo_available(verbose=verbose)
+            # YOLO is optional, don't fail if not installed
+    
+    return all_ok
 
 
 def run_first_time_setup(interactive: bool = True) -> bool:

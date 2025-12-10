@@ -1,0 +1,5 @@
+Shorten this to max 6 words:
+
+{response}
+
+Reply with ONLY the short description (no markdown, no quotes):

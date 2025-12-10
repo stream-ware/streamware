@@ -110,13 +110,19 @@ def get_optimal_size_for_model(model_name: str) -> int:
 
 
 class DescriptionCache:
-    """Cache for similar frame descriptions to avoid redundant LLM calls."""
+    """Cache for similar frame descriptions to avoid redundant LLM calls.
     
-    def __init__(self, max_size: int = 100, similarity_threshold: float = 0.95):
+    NOTE: In track mode, cache should be disabled or very short-lived
+    because we need to detect movement changes, not just static scenes.
+    """
+    
+    def __init__(self, max_size: int = 100, similarity_threshold: float = 0.95, ttl_seconds: float = 5.0):
         self.max_size = max_size
         self.similarity_threshold = similarity_threshold
+        self.ttl_seconds = ttl_seconds  # Cache entries expire after this time
         self._cache: dict = {}  # hash -> (description, timestamp)
         self._image_hashes: list = []  # LRU order
+        self._enabled = True  # Can be disabled for track mode
     
     def _compute_hash(self, image_path: Path) -> str:
         """Compute perceptual hash of image."""
@@ -138,13 +144,36 @@ class DescriptionCache:
             return None
     
     def get(self, image_path: Path) -> Optional[str]:
-        """Get cached description if similar image exists."""
+        """Get cached description if similar image exists and not expired."""
+        if not self._enabled:
+            return None
+        
         img_hash = self._compute_hash(image_path)
         if img_hash and img_hash in self._cache:
-            desc, _ = self._cache[img_hash]
+            desc, timestamp = self._cache[img_hash]
+            
+            # Check TTL
+            import time
+            if time.time() - timestamp > self.ttl_seconds:
+                # Expired, remove from cache
+                del self._cache[img_hash]
+                if img_hash in self._image_hashes:
+                    self._image_hashes.remove(img_hash)
+                logger.debug(f"Cache expired for {image_path.name}")
+                return None
+            
             logger.debug(f"Cache hit for {image_path.name}")
             return desc
         return None
+    
+    def disable(self):
+        """Disable cache (for track mode)."""
+        self._enabled = False
+        self.clear()
+    
+    def enable(self):
+        """Enable cache."""
+        self._enabled = True
     
     def put(self, image_path: Path, description: str):
         """Cache description for image."""

@@ -1,0 +1,20 @@
+CONTEXT: {context}{movement_hint}
+{prev_info}
+
+Bird feeder / garden camera image.
+
+TASK: Describe any birds visible.
+
+Focus on:
+1. How many birds? (count them)
+2. What are they doing? (eating, perching, flying, landing)
+3. Where in the frame? (feeder, branch, ground, flying)
+4. Any notable features? (color, size)
+
+Response format: "[Count] bird(s) [activity] at [location]."
+Examples:
+- "2 birds eating at the feeder. One small brown, one larger blue."
+- "Bird flying toward feeder from left."
+- "No birds currently visible, feeder is empty."
+
+Be specific about count and activity.
