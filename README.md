@@ -20,6 +20,12 @@
 ## ⚡ What Can You Do?
 
 ```bash
+# 🎥 Real-time motion detection with SVG overlay (NEW!)
+sq visualize --url "rtsp://camera/stream" --port 8080
+
+# 📡 Publish motion events to MQTT (NEW!)
+sq mqtt --url "rtsp://camera/stream" --broker localhost
+
 # 🤖 AI: Convert natural language to SQL
 sq llm "Get all users older than 30" --to-sql
 
@@ -62,6 +68,7 @@ sq get api.example.com/users | sq transform --json | sq file save users.json
 
 | Category | Features |
 |----------|----------|
+| 🎥 **Visualizer** | Real-time motion detection, SVG overlay, DSL metadata, MQTT |
 | 🤖 **AI/LLM** | OpenAI, Ollama, Groq, Anthropic, Gemini, DeepSeek, Mistral |
 | 🎤 **Voice** | Speech-to-text, text-to-speech, voice commands |
 | 🖥️ **Automation** | Mouse, keyboard, screenshots, AI-powered clicking |

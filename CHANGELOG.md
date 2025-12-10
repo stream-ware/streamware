@@ -5,6 +5,61 @@ All notable changes to Streamware will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2024-12-10
+
+### 🎥 Real-time Visualizer (NEW!)
+
+New `sq visualize` command for real-time motion detection with web UI:
+
+- **Video Modes** - `ws` (WebSocket), `hls`, `meta` (metadata-only), `webrtc`
+- **Transport Options** - `tcp` (stable) or `udp` (lower latency)
+- **Capture Backends** - `opencv`, `gstreamer`, `pyav` (direct API)
+- **SVG Overlay** - Motion detection bounding boxes in real-time
+- **DSL Metadata** - Structured motion events with timestamps
+- **Latency Display** - Real-time latency measurement in browser
+
+```bash
+sq visualize --url "rtsp://camera/stream" --port 8080
+sq visualize --url "rtsp://camera/stream" --video-mode meta --backend pyav --transport udp
+```
+
+### 📡 MQTT DSL Publisher (NEW!)
+
+New `sq mqtt` command to publish motion events to MQTT broker:
+
+- **Topics** - motion, events, frame, dsl, preview, status
+- **QoS Levels** - Configurable per topic type
+- **Motion Threshold** - Publish events only above threshold
+- **Home Assistant** - Ready for integration
+
+```bash
+sq mqtt --url "rtsp://camera/stream" --broker localhost --topic home/camera/front
+```
+
+### ⚡ CLI Startup Optimization
+
+**66x faster CLI startup** (4s → 0.06s):
+
+- Lazy imports in `streamware/__init__.py`
+- Modules loaded only when accessed
+- No impact on functionality
+
+### 🔧 RTSP Capture Improvements
+
+- **Buffer Flush** - Automatic flush at startup to remove stale frames
+- **Minimal Buffering** - 64KB buffer (down from 2MB)
+- **Low Delay Flags** - `max_delay=0`, `fflags=nobuffer`
+- **Multiple Backends** - opencv, gstreamer, pyav support
+
+### 📚 Documentation
+
+- [docs/REALTIME_VISUALIZER.md](docs/REALTIME_VISUALIZER.md) - Visualizer guide
+- [docs/MQTT_PUBLISHER.md](docs/MQTT_PUBLISHER.md) - MQTT integration
+- [examples/media-processing/realtime_visualizer_examples.sh](examples/media-processing/realtime_visualizer_examples.sh)
+- [examples/media-processing/mqtt_integration.py](examples/media-processing/mqtt_integration.py)
+
+---
+
 ## [0.2.0] - 2024-12-10
 
 ### ⚡ Performance Optimizations

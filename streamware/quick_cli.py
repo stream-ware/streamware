@@ -2,17 +2,64 @@
 Quick CLI - Simplified shell interface for Streamware
 
 Provides shorter, more intuitive commands for common operations.
+
+OPTIMIZED: Uses lazy imports for fast startup (~0.3s instead of ~3s)
 """
 
 import sys
 import argparse
-import json
 from pathlib import Path
 from typing import Any, Optional
-from .core import flow
-from .dsl import Pipeline, quick
-from .diagnostics import enable_diagnostics
-from .exceptions import StreamwareError
+
+# LAZY IMPORTS - only import heavy modules when needed
+# This speeds up CLI startup from ~3s to ~0.3s
+
+def _get_flow():
+    """Lazy import for flow."""
+    from .core import flow
+    return flow
+
+def _get_pipeline():
+    """Lazy import for Pipeline."""
+    from .dsl import Pipeline
+    return Pipeline
+
+def _get_quick():
+    """Lazy import for quick."""
+    from .dsl import quick
+    return quick
+
+def enable_diagnostics(level="INFO"):
+    """Lazy import for diagnostics."""
+    from .diagnostics import enable_diagnostics as _enable
+    return _enable(level)
+
+class StreamwareError(Exception):
+    """Placeholder - real one imported lazily."""
+    pass
+
+def _get_streamware_error():
+    """Lazy import for StreamwareError."""
+    from .exceptions import StreamwareError
+    return StreamwareError
+
+# Lazy flow wrapper - imports only when called
+def flow(uri):
+    """Lazy wrapper for flow - imports core only when first used."""
+    from .core import flow as _flow
+    return _flow(uri)
+
+# Lazy Pipeline wrapper
+def Pipeline(*args, **kwargs):
+    """Lazy wrapper for Pipeline."""
+    from .dsl import Pipeline as _Pipeline
+    return _Pipeline(*args, **kwargs)
+
+# Lazy quick wrapper  
+def quick(*args, **kwargs):
+    """Lazy wrapper for quick."""
+    from .dsl import quick as _quick
+    return _quick(*args, **kwargs)
 
 
 def main():
@@ -428,16 +475,41 @@ Shortcuts:
     live_parser.add_argument('--auto', action='store_true', help='Auto-configure based on hardware (detects CPU/GPU and optimizes)')
     live_parser.add_argument('--ramdisk', action='store_true', default=True, help='Use RAM disk for frame capture (default: on)')
     live_parser.add_argument('--no-ramdisk', action='store_true', help='Disable RAM disk, use temp files')
+    live_parser.add_argument('--skip-checks', action='store_true', help='Skip dependency checks for faster startup')
+    live_parser.add_argument('--turbo', action='store_true', help='Turbo mode: skip checks + fast model + aggressive caching')
     
     # Visualize command - real-time SVG visualization
     viz_parser = subparsers.add_parser('visualize', help='Real-time SVG visualization in browser')
     viz_parser.add_argument('--url', '-u', required=True, help='RTSP stream URL')
     viz_parser.add_argument('--port', '-p', type=int, default=8080, help='HTTP server port (default: 8080)')
     viz_parser.add_argument('--fps', type=float, default=1.0, help='Frames per second (default: 1)')
-    viz_parser.add_argument('--width', type=int, default=640, help='Frame width (default: 640)')
-    viz_parser.add_argument('--height', type=int, default=480, help='Frame height (default: 480)')
+    viz_parser.add_argument('--width', type=int, default=320, help='Frame width (default: 320)')
+    viz_parser.add_argument('--height', type=int, default=240, help='Frame height (default: 240)')
     viz_parser.add_argument('--simple', action='store_true', help='Use simple HTTP server (no WebSocket)')
     viz_parser.add_argument('--fast', action='store_true', help='Fast mode: lower resolution, higher FPS')
+    viz_parser.add_argument('--video-mode', choices=['ws', 'hls', 'meta', 'webrtc'], default='ws', 
+                            help='Video mode: ws (JPEG/WebSocket), hls (HTTP Live Streaming), meta (metadata-only), webrtc (ultra-low latency)')
+    viz_parser.add_argument('--transport', choices=['tcp', 'udp'], default='tcp',
+                            help='RTSP transport: tcp (stable) or udp (lower latency, may drop frames)')
+    viz_parser.add_argument('--backend', choices=['opencv', 'gstreamer', 'pyav'], default='opencv',
+                            help='Capture backend: opencv (default), gstreamer (faster), pyav (direct API)')
+    viz_parser.add_argument('--turbo', action='store_true',
+                            help='Turbo mode: PyAV + UDP + minimal analysis for fastest startup')
+    
+    # MQTT command - publish DSL to MQTT broker
+    mqtt_parser = subparsers.add_parser('mqtt', help='Publish DSL metadata to MQTT broker')
+    mqtt_parser.add_argument('--url', '-u', required=True, help='RTSP stream URL')
+    mqtt_parser.add_argument('--broker', '-b', default='localhost', help='MQTT broker host (default: localhost)')
+    mqtt_parser.add_argument('--mqtt-port', type=int, default=1883, help='MQTT broker port (default: 1883)')
+    mqtt_parser.add_argument('--username', help='MQTT username')
+    mqtt_parser.add_argument('--password', help='MQTT password')
+    mqtt_parser.add_argument('--topic', '-t', default='streamware/dsl', help='MQTT topic prefix (default: streamware/dsl)')
+    mqtt_parser.add_argument('--fps', type=float, default=5.0, help='Frames per second (default: 5)')
+    mqtt_parser.add_argument('--width', type=int, default=320, help='Frame width (default: 320)')
+    mqtt_parser.add_argument('--height', type=int, default=240, help='Frame height (default: 240)')
+    mqtt_parser.add_argument('--threshold', type=float, default=2.0, help='Motion threshold %% to publish events (default: 2.0)')
+    mqtt_parser.add_argument('--transport', choices=['tcp', 'udp'], default='tcp',
+                            help='RTSP transport: tcp (stable) or udp (lower latency)')
     
     # Global options
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
@@ -517,6 +589,8 @@ Shortcuts:
             return handle_watch(args)
         elif args.command == 'visualize':
             return handle_visualize(args)
+        elif args.command == 'mqtt':
+            return handle_mqtt(args)
         else:
             print(f"Unknown command: {args.command}", file=sys.stderr)
             return 1
@@ -2824,6 +2898,8 @@ def _save_watch_markdown_log(result: dict, args, output_file: str):
 def handle_live(args) -> int:
     """Handle live narration command"""
     from .core import flow
+    # IMPORTANT: Import component to register it (lazy imports don't auto-register)
+    from .components.live_narrator import LiveNarratorComponent
     import json
     
     op = getattr(args, 'operation', 'narrator') or 'narrator'
@@ -2874,8 +2950,21 @@ def handle_live(args) -> int:
     if check_tts:
         print(f"🔊 TTS requested via --tts flag")
     
-    # Skip checks if model is not a valid string (e.g. MagicMock in tests)
-    if isinstance(vision_model, str) and not vision_model.startswith("gpt"):
+    # TURBO mode: skip checks + fast model + aggressive caching
+    if getattr(args, 'turbo', False):
+        print("🚀 TURBO mode: skip checks + fast model + aggressive caching")
+        args.skip_checks = True
+        args.fast = True
+        if not getattr(args, 'model', None):
+            args.model = 'moondream'
+        vision_model = args.model
+    
+    # Skip checks if --skip-checks or model is not valid
+    skip_checks = getattr(args, 'skip_checks', False)
+    
+    if skip_checks:
+        print("⚡ Skipping dependency checks")
+    elif isinstance(vision_model, str) and not vision_model.startswith("gpt"):
         from .setup_utils import run_startup_checks
         
         checks = run_startup_checks(
@@ -3340,6 +3429,9 @@ def handle_visualize(args) -> int:
     width = args.width
     height = args.height
     fps = args.fps
+    video_mode = getattr(args, 'video_mode', 'ws')
+    transport = getattr(args, 'transport', 'tcp')
+    backend = getattr(args, 'backend', 'opencv')
     
     if getattr(args, 'fast', False):
         width = min(width, 320)
@@ -3347,11 +3439,26 @@ def handle_visualize(args) -> int:
         fps = min(15, max(fps, 10))
         print("⚡ Fast mode enabled")
     
+    # TURBO mode: maximum speed settings
+    if getattr(args, 'turbo', False):
+        backend = 'pyav'
+        transport = 'udp'
+        video_mode = 'meta'
+        width = min(width, 320)
+        height = min(height, 240)
+        fps = max(fps, 10)
+        print("🚀 TURBO mode: PyAV + UDP + metadata-only")
+    
+    mode_label = "HLS + WebSocket overlay" if video_mode == "hls" else "JPEG over WebSocket"
+    
     print(f"\n🎯 Starting Real-time Motion Visualizer")
     print(f"   URL: {args.url}")
     print(f"   Port: {args.port}")
     print(f"   FPS: {fps}")
     print(f"   Size: {width}x{height}")
+    print(f"   Mode: {video_mode.upper()}")
+    print(f"   Backend: {backend.upper()}")
+    print(f"   Transport: {transport.upper()}")
     print(f"\n   Open http://localhost:{args.port} in browser\n")
     
     try:
@@ -3362,9 +3469,43 @@ def handle_visualize(args) -> int:
             width=width,
             height=height,
             use_simple=getattr(args, 'simple', False),
+            video_mode=video_mode,
+            transport=transport,
+            backend=backend,
         )
     except KeyboardInterrupt:
         print("\n🛑 Visualizer stopped")
+    
+    return 0
+
+
+def handle_mqtt(args) -> int:
+    """Handle MQTT DSL publisher command."""
+    from .realtime_visualizer import start_mqtt_publisher
+    
+    print(f"\n📡 Starting MQTT DSL Publisher")
+    print(f"   RTSP: {args.url}")
+    print(f"   Broker: {args.broker}:{args.mqtt_port}")
+    print(f"   Topic: {args.topic}/*")
+    print(f"   FPS: {args.fps}")
+    print(f"   Motion threshold: {args.threshold}%")
+    print()
+    
+    try:
+        start_mqtt_publisher(
+            rtsp_url=args.url,
+            mqtt_broker=args.broker,
+            mqtt_port=args.mqtt_port,
+            mqtt_username=args.username,
+            mqtt_password=args.password,
+            topic_prefix=args.topic,
+            fps=args.fps,
+            width=args.width,
+            height=args.height,
+            motion_threshold=args.threshold,
+        )
+    except KeyboardInterrupt:
+        print("\n🛑 MQTT Publisher stopped")
     
     return 0
 

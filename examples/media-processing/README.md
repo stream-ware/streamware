@@ -2,7 +2,34 @@
 
 Image, video, audio, and **real-time stream** analysis with AI.
 
-## 🆕 Live Narrator (Optimized!)
+## 🎥 Real-time Visualizer (NEW!)
+
+**Motion detection with SVG overlays and DSL metadata streaming**
+
+```bash
+# Basic usage - open http://localhost:8080
+sq visualize --url "rtsp://camera/stream" --port 8080
+
+# Lowest latency (PyAV + UDP + metadata mode)
+sq visualize --url "rtsp://camera/stream" --port 8080 \
+  --video-mode meta --fps 10 --transport udp --backend pyav
+
+# MQTT integration
+sq mqtt --url "rtsp://camera/stream" --broker localhost
+```
+
+| Option | Values | Description |
+|--------|--------|-------------|
+| `--video-mode` | ws, hls, meta, webrtc | Video streaming mode |
+| `--transport` | tcp, udp | RTSP transport |
+| `--backend` | opencv, gstreamer, pyav | Capture backend |
+| `--fps` | 1-30 | Analysis FPS |
+
+See: [realtime_visualizer_examples.sh](realtime_visualizer_examples.sh), [mqtt_integration.py](mqtt_integration.py)
+
+---
+
+## 🎯 Live Narrator (Optimized!)
 
 **Fast real-time video analysis** with YOLO detection, object tracking, and TTS.
 
@@ -34,7 +61,9 @@ See: [live_narrator_examples.sh](live_narrator_examples.sh)
 
 | File | Description |
 |------|-------------|
-| [live_narrator_examples.sh](live_narrator_examples.sh) | **NEW: Live Narrator with YOLO** |
+| [realtime_visualizer_examples.sh](realtime_visualizer_examples.sh) | **NEW: Motion detection + SVG overlay** |
+| [mqtt_integration.py](mqtt_integration.py) | **NEW: MQTT DSL publisher** |
+| [live_narrator_examples.sh](live_narrator_examples.sh) | Live Narrator with YOLO |
 | [image_analysis.py](image_analysis.py) | Describe images with LLaVA |
 | [video_captioning.py](video_captioning.py) | Video file analysis (3 modes) |
 | [video_modes_demo.py](video_modes_demo.py) | Compare full/stream/diff modes |

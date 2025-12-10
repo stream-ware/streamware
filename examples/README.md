@@ -2,7 +2,34 @@
 
 This directory contains example scripts demonstrating various features and usage patterns of the Streamware framework.
 
-## 🎯 Live Narrator (NEW - Recommended!)
+## 🎥 Real-time Visualizer (NEW!)
+
+**Motion detection with SVG overlays and DSL metadata streaming**
+
+```bash
+# Basic usage - open http://localhost:8080
+sq visualize --url "rtsp://camera/stream" --port 8080
+
+# Lowest latency configuration
+sq visualize --url "rtsp://camera/stream" --port 8080 \
+  --video-mode meta --fps 10 --transport udp --backend pyav
+
+# MQTT integration - publish to broker
+sq mqtt --url "rtsp://camera/stream" --broker localhost
+```
+
+| Mode | Latency | Use Case |
+|------|---------|----------|
+| `--video-mode ws` | ~100ms | Full video (default) |
+| `--video-mode meta` | ~50ms | Metadata + 1 FPS preview |
+| `--backend pyav` | ~50ms | Direct API, no subprocess |
+| `--transport udp` | ~50ms | Lower latency |
+
+See: [media-processing/realtime_visualizer_examples.sh](media-processing/realtime_visualizer_examples.sh)
+
+---
+
+## 🎯 Live Narrator (Recommended!)
 
 **Real-time video analysis with YOLO + Vision LLM + TTS**
 
@@ -28,7 +55,7 @@ See: [media-processing/live_narrator_examples.sh](media-processing/live_narrator
 
 | Project | Description | Examples |
 |---------|-------------|----------|
-| [media-processing/](media-processing/) | **Live Narrator, YOLO, TTS** | `live_narrator_examples.sh`, `video_captioning.py` |
+| [media-processing/](media-processing/) | **Visualizer, MQTT, Live Narrator** | `realtime_visualizer_examples.sh`, `mqtt_integration.py` |
 | [llm-ai/](llm-ai/) | AI text processing, code generation | `text_to_sql.py`, `chat_assistant.py` |
 | [voice-control/](voice-control/) | Voice commands, STT/TTS | `voice_keyboard.py`, `voice_mouse.py` |
 | [automation/](automation/) | Desktop automation | `mouse_control.py`, `keyboard_control.py` |
@@ -39,8 +66,15 @@ See: [media-processing/live_narrator_examples.sh](media-processing/live_narrator
 ## 🚀 Quick Start
 
 ```bash
-# Live Narrator (RECOMMENDED - real-time video with TTS)
-sq live narrator --url "rtsp://camera/stream" --mode track --focus person --tts --verbose
+# Real-time Visualizer (NEW - motion detection with SVG overlay)
+sq visualize --url "rtsp://camera/stream" --port 8080
+sq visualize --url "rtsp://camera/stream" --port 8080 --video-mode meta --backend pyav
+
+# MQTT Publisher (NEW - publish DSL to broker)
+sq mqtt --url "rtsp://camera/stream" --broker localhost
+
+# Live Narrator (real-time video with TTS)
+sq live narrator --url "rtsp://camera/stream" --mode track --focus person --tts
 
 # LLM/AI
 python examples/llm-ai/text_to_sql.py "Get all users"
@@ -48,7 +82,6 @@ python examples/llm-ai/chat_assistant.py --provider ollama/qwen2.5:14b
 
 # Voice Control
 python examples/voice-control/voice_keyboard.py --interactive
-python examples/voice-control/voice_mouse.py "click on button OK"
 
 # Automation
 python examples/automation/mouse_control.py 100 200
@@ -58,11 +91,6 @@ python examples/communication/slack_bot.py general "Hello!"
 
 # Data Pipelines
 python examples/data-pipelines/api_to_database.py
-
-# Media - Video Analysis (3 modes!)
-python examples/media-processing/video_captioning.py video.mp4              # full mode
-python examples/media-processing/video_captioning.py video.mp4 --mode stream # frame-by-frame
-python examples/media-processing/video_captioning.py video.mp4 --mode diff   # changes
 ```
 
 ## 🎬 Video Analysis Modes
