@@ -748,19 +748,31 @@ class LiveNarratorComponent(Component):
         frame_num = 0
         current_interval = self.interval
         
+        print(f"\n🎬 Starting narrator loop (duration={self.duration}s, interval={self.interval}s)", flush=True)
+        
         while time.time() - start_time < self.duration and self._running:
             frame_num += 1
+            elapsed = time.time() - start_time
+            
+            if self.verbose or frame_num <= 3:
+                print(f"🔄 Frame #{frame_num} (elapsed={elapsed:.1f}s)", flush=True)
+            
             tlog.start_frame(frame_num)
             
             # Capture frame - use FastCapture if available (10x faster)
             tlog.start("capture")
             if fast_capture and fast_capture.is_running:
                 # Get pre-buffered frame from FastCapture
-                frame_info = fast_capture.get_frame(timeout=3.0)
+                if self.verbose:
+                    print(f"   📷 Getting frame from FastCapture (queue={fast_capture._frame_queue.qsize()})...", flush=True)
+                frame_info = fast_capture.get_frame(timeout=5.0)
                 if frame_info:
                     frame_path = frame_info.path
                     tlog.end("capture", f"fast={frame_info.capture_time_ms:.0f}ms")
+                    if self.verbose:
+                        print(f"   ✅ Got frame: {frame_path}", flush=True)
                 else:
+                    print(f"   ⚠️ FastCapture timeout, using fallback", flush=True)
                     frame_path = self._capture_frame(frame_num)
                     tlog.end("capture", "fallback")
             else:
@@ -768,6 +780,7 @@ class LiveNarratorComponent(Component):
                 tlog.end("capture")
             
             if not frame_path or not frame_path.exists():
+                print(f"   ❌ Frame capture failed", flush=True)
                 tlog.end_frame("capture_failed")
                 time.sleep(current_interval)
                 continue
@@ -1674,43 +1687,18 @@ class LiveNarratorComponent(Component):
                     except KeyError:
                         pass  # Fall through to default
                 
-                # Clear prompt for person detection
-                return f"""Look at this security camera image carefully.
-
-Is there a PERSON visible? If yes, describe what they are doing and where they are.
-If NO person is visible, say "No person visible".
-
-Answer in 1 sentence.\""""
+                # Clear prompt for person detection (moondream-compatible)
+                return "Describe this image in one sentence. Focus on people - what they are doing and where."
             
             elif focus_obj in ("bird", "birds"):
-                # Try loading from file
+                # Load from file
                 file_prompt = get_prompt("track_bird")
                 if file_prompt:
                     try:
                         return file_prompt.format(**prompt_vars)
                     except KeyError:
                         pass
-                
-                return f"""CONTEXT: {context}{movement_hint}
-{prev_info}
-
-Bird feeder / garden camera image.
-
-TASK: Describe any birds visible.
-
-Focus on:
-1. How many birds? (count them)
-2. What are they doing? (eating, perching, flying, landing)
-3. Where in the frame? (feeder, branch, ground, flying)
-4. Any notable features? (color, size)
-
-Response format: "[Count] bird(s) [activity] at [location]."
-Examples:
-- "2 birds eating at the feeder. One small brown, one larger blue."
-- "Bird flying toward feeder from left."
-- "No birds currently visible, feeder is empty."
-
-Be specific about count and activity.\""""
+                return "Describe any birds in this image - count, activity, and location."
             
             elif focus_obj in ("animal", "cat", "dog", "pet", "wildlife"):
                 # Try loading from file

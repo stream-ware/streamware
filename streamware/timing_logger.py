@@ -379,6 +379,9 @@ class TimingLogger:
     
     def _write_frame(self, frame: FrameLog):
         """Write frame log to file."""
+        if not self.log_file:
+            return  # No log file configured, skip writing
+        
         with self._file_lock:
             # Write to Markdown
             with open(self.log_file, "a") as f:
@@ -429,6 +432,9 @@ class TimingLogger:
         """Write summary statistics."""
         if not self.enabled or not self.frames:
             return
+        
+        if not self.log_file:
+            return  # No log file configured
         
         total_frames = len(self.frames)
         avg_time = sum(f.total_ms for f in self.frames) / total_frames if total_frames else 0

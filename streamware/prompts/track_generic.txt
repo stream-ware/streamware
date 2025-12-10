@@ -1,0 +1,5 @@
+ANALYSIS: {context}{movement_hint}{prev_info}
+
+Tracking: {focus}
+Describe {focus}'s position, movement direction, and state.
+Format: "[State]. [Movement direction]."

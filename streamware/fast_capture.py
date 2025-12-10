@@ -281,6 +281,9 @@ class FastCapture:
         
         frame_interval = 1.0 / self.fps
         last_capture = 0
+        read_errors = 0
+        
+        print(f"📹 FastCapture loop started (interval={frame_interval:.2f}s)", flush=True)
         
         while not self._stop_event.is_set():
             try:
@@ -294,6 +297,15 @@ class FastCapture:
                 start = time.perf_counter()
                 ret, frame = self._cv_capture.read()
                 capture_ms = (time.perf_counter() - start) * 1000
+                
+                if not ret or frame is None:
+                    read_errors += 1
+                    if read_errors % 10 == 1:
+                        print(f"⚠️ FastCapture read error #{read_errors}", flush=True)
+                    time.sleep(0.1)
+                    continue
+                
+                read_errors = 0  # Reset on success
                 
                 if ret and frame is not None:
                     self._frame_num += 1

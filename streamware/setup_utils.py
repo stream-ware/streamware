@@ -772,7 +772,7 @@ def run_startup_checks(
     
     # 2. Check vision model
     if vision_model is None:
-        vision_model = config.get("SQ_MODEL", "moondream")
+        vision_model = config.get("SQ_MODEL", "llava:7b")
     
     vision_ok, vision_msg = check_ollama_model(vision_model)
     if vision_ok:
@@ -909,7 +909,7 @@ def ensure_required_models(
     from .config import config
     
     if vision_model is None:
-        vision_model = config.get("SQ_MODEL", "moondream")
+        vision_model = config.get("SQ_MODEL", "llava:7b")
     if guarder_model is None:
         guarder_model = config.get("SQ_GUARDER_MODEL", "gemma:2b")
     

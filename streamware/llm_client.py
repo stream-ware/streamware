@@ -236,9 +236,13 @@ class LLMClient:
                 
                 if response.ok:
                     data = response.json()
+                    resp_text = data.get("response", "").strip()
+                    # Debug: log if empty response
+                    if not resp_text:
+                        logger.warning(f"Ollama returned empty response. Raw data: {str(data)[:200]}")
                     return {
                         "success": True,
-                        "response": data.get("response", "").strip(),
+                        "response": resp_text,
                         "model": model,
                         "tokens_in": data.get("prompt_eval_count", 0),
                         "tokens_out": data.get("eval_count", 0),

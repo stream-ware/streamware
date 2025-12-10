@@ -2956,7 +2956,7 @@ def handle_live(args) -> int:
         args.skip_checks = True
         args.fast = True
         if not getattr(args, 'model', None):
-            args.model = 'moondream'
+            args.model = 'llava:7b'
         vision_model = args.model
     
     # Skip checks if --skip-checks or model is not valid
@@ -3017,13 +3017,14 @@ def handle_live(args) -> int:
     
     # Fast mode: use smaller model and aggressive optimization
     if getattr(args, 'fast', False):
-        print("⚡ Fast mode enabled: using moondream model, aggressive caching")
-        # Check if moondream is available, fallback to llava:7b
+        print("⚡ Fast mode enabled: using llava:7b model, aggressive caching")
+        # Use llava:7b as default fast vision model
         from .setup_utils import check_ollama_model
-        if check_ollama_model("moondream")[0]:
-            args.model = "moondream"
-        elif check_ollama_model("llava:7b")[0]:
-            args.model = "llava:7b"
+        if not getattr(args, 'model', None):
+            if check_ollama_model("llava:7b")[0]:
+                args.model = "llava:7b"
+            elif check_ollama_model("moondream")[0]:
+                args.model = "moondream"
         # Set aggressive optimization
         config.set("SQ_FAST_MODE", "true")
     
