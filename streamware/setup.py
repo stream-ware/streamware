@@ -8,7 +8,7 @@ import os
 import sys
 import requests
 import asyncio
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from .config import config
 
 def check_ollama() -> Tuple[bool, List[str], str]:
@@ -96,39 +96,280 @@ def run_setup(interactive: bool = True):
     else:
         print("❌ Ollama not detected")
     
-    # 2. Check Cloud Providers
+def select_provider_interactive(options: List[Dict]) -> Dict:
+    """Handle interactive provider selection"""
+    print("\nSelect AI Provider:")
+    for idx, opt in enumerate(options):
+        print(f"   {idx + 1}. {opt['name']}")
+        if opt['id'] == 'ollama':
+            preview = ", ".join(opt['models'][:3])
+            if len(opt['models']) > 3:
+                preview += "..."
+            print(f"      Available models: {preview}")
+    
+    while True:
+        try:
+            choice = input(f"\nChoose provider [1-{len(options)}] (default 1): ").strip()
+            if not choice:
+                return options[0]
+            idx = int(choice) - 1
+            if 0 <= idx < len(options):
+                return options[idx]
+        except ValueError:
+            pass
+        print("Invalid selection.")
+
+def select_model_interactive(provider_name: str, models: List[str], recommended: str = None) -> str:
+    """Handle interactive model selection"""
+    print(f"\nSelect model for {provider_name}:")
+    
+    # Sort: recommended first, then others
+    sorted_models = []
+    if recommended and recommended in models:
+        sorted_models.append(recommended)
+        
+    sorted_models.extend([m for m in models if m != recommended])
+    
+    for idx, m in enumerate(sorted_models):
+        marker = " (recommended)" if m == recommended else ""
+        print(f"   {idx + 1}. {m}{marker}")
+    
+    choice = input(f"\nChoose model [1-{len(models)}] (default 1): ").strip()
+    if choice:
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(sorted_models):
+                return sorted_models[idx]
+        except ValueError:
+            pass
+            
+    return sorted_models[0]
+
+def verify_environment() -> Dict[str, Any]:
+    """
+    Check environment readiness without modifying it.
+    Returns status dict.
+    """
+    status = {
+        "ollama": False,
+        "ollama_url": "",
+        "ollama_models": [],
+        "api_keys": {}
+    }
+    
+    # Check Ollama
+    running, models, url = check_ollama()
+    if running:
+        status["ollama"] = True
+        status["ollama_url"] = url
+        status["ollama_models"] = models
+        
+    # Check Keys
     providers = check_providers()
+    status["api_keys"] = providers
     
-    # If no local Ollama model, try to pick a cloud provider
-    if "SQ_LLM_PROVIDER" not in changes:
-        if providers["openai"]:
-            print("✅ OpenAI API Key detected")
-            changes["SQ_LLM_PROVIDER"] = "openai"
-            changes["SQ_MODEL"] = "gpt-4o"
-        elif providers["anthropic"]:
-            print("✅ Anthropic API Key detected")
-            changes["SQ_LLM_PROVIDER"] = "anthropic"
-            changes["SQ_MODEL"] = "claude-3-5-sonnet-latest"
-        elif providers["groq"]:
-            print("✅ Groq API Key detected")
-            changes["SQ_LLM_PROVIDER"] = "groq"
-            changes["SQ_MODEL"] = "llama3-70b-8192"
-        elif providers["gemini"]:
-            print("✅ Gemini API Key detected")
-            changes["SQ_LLM_PROVIDER"] = "gemini"
-            changes["SQ_MODEL"] = "gemini-2.0-flash"
+    return status
+
+def run_setup(interactive: bool = True, mode: str = "balance"):
+    """
+    Run the setup wizard.
     
-    # Report other found keys
-    for provider, found in providers.items():
+    Args:
+        interactive: If True, asks for confirmation.
+        mode: Configuration mode (eco, balance, performance)
+    """
+    # Detect non-interactive environment (CI, Docker, pipes)
+    if interactive and (not sys.stdin.isatty() or os.environ.get("CI") or os.environ.get("NON_INTERACTIVE")):
+        print("⚠️ Non-interactive environment detected. Switching to auto mode.")
+        interactive = False
+
+    print(f"🔍 Detecting environment (Mode: {mode})...")
+    
+    # Mode definitions
+    mode_config = {
+        "eco": {
+            "whisper": "tiny",
+            "ollama_vision": "llava:7b",
+            "ollama_chat": "llama3:8b", # or phi3
+            "desc": "Lightweight, low resource usage"
+        },
+        "balance": {
+            "whisper": "base",
+            "ollama_vision": "llava:13b",
+            "ollama_chat": "llama3",
+            "desc": "Good trade-off between speed and quality"
+        },
+        "performance": {
+            "whisper": "large",
+            "ollama_vision": "llava:34b", # or similar
+            "ollama_chat": "llama3:70b",
+            "desc": "Best quality, high resource usage"
+        }
+    }
+    
+    selected_config = mode_config.get(mode, mode_config["balance"])
+    
+    env_status = verify_environment()
+    changes = {}
+    
+    # 1. Report Ollama status
+    if env_status["ollama"]:
+        print(f"✅ Ollama detected at {env_status['ollama_url']}")
+    else:
+        print("❌ Ollama not detected")
+        
+    # 2. Report Cloud Keys
+    for provider, found in env_status["api_keys"].items():
         if found:
             print(f"✅ {provider.title()} API Key detected")
+            
+    # Gather all options
+    options = []
+    
+    # Add Ollama option if running
+    if env_status["ollama"] and env_status["ollama_models"]:
+        options.append({
+            "id": "ollama",
+            "name": "Ollama (Local)",
+            "models": env_status["ollama_models"],
+            "url": env_status["ollama_url"]
+        })
+        
+    # Add Cloud options if keys found
+    cloud_defaults = {
+        "openai": "gpt-4o",
+        "anthropic": "claude-3-5-sonnet-latest",
+        "groq": "llama3-70b-8192",
+        "gemini": "gemini-2.0-flash",
+        "deepseek": "deepseek-chat",
+        "mistral": "mistral-large-latest"
+    }
+    
+    for provider, found in env_status["api_keys"].items():
+        if found and provider in cloud_defaults:
+            options.append({
+                "id": provider,
+                "name": f"{provider.title()} (Cloud)", 
+                "model": cloud_defaults[provider]
+            })
 
-    # 4. Summary and Apply
-    if not changes:
+    # Auto-selection logic (if non-interactive or only one option)
+    selected_option = None
+    
+    if not options:
         print("\n⚠️ No AI providers detected.")
         print("   Please install Ollama or set OPENAI_API_KEY/ANTHROPIC_API_KEY.")
         return
 
+    if interactive and len(options) > 1:
+        selected_option = select_provider_interactive(options)
+    else:
+        # Default to first option (Ollama if available, or first cloud provider)
+        selected_option = options[0]
+
+    # Configure selected provider
+    changes["SQ_LLM_PROVIDER"] = selected_option["id"]
+    
+    if selected_option["id"] == "ollama":
+        changes["SQ_OLLAMA_URL"] = selected_option["url"]
+        
+        # Model selection for Ollama
+        models = selected_option["models"]
+        
+        # Smart model selection based on mode
+        preferred_vision = selected_config["ollama_vision"]
+        preferred_chat = selected_config["ollama_chat"]
+        
+        # Try to find best matching vision model
+        vision_models = [m for m in models if "vision" in m or "llava" in m or "bielik" in m]
+        
+        selected_model = None
+        
+        # 1. Try exact mode match (e.g. llava:13b)
+        if preferred_vision in models:
+            selected_model = preferred_vision
+        # 2. Try any vision model
+        elif vision_models:
+            selected_model = vision_models[0]
+        # 3. Try exact chat match
+        elif preferred_chat in models:
+            selected_model = preferred_chat
+        # 4. Fallback
+        else:
+            selected_model = models[0]
+        
+        if interactive and len(models) > 1:
+            selected_model = select_model_interactive("Ollama", models, recommended=selected_model)
+        
+        changes["SQ_MODEL"] = selected_model
+        
+        # Auto-pull recommendation if missing and mode is performance
+        if mode == "performance" and selected_model != preferred_vision and preferred_vision not in models:
+             print(f"\n💡 Tip: For performance mode, consider pulling: {preferred_vision}")
+             print(f"   Command: ollama pull {preferred_vision}")
+
+    else:
+        # Cloud provider default model
+        changes["SQ_MODEL"] = selected_option["model"]
+
+    # 3. Voice/Audio Configuration
+    if interactive:
+        print("\n🔊 Voice & Audio Configuration")
+        print("   Select Speech-to-Text (STT) provider:")
+        
+        stt_options = [
+            {"id": "google", "name": "Google Web Speech (Default, requires internet)", "desc": "Free, good quality, requires internet"},
+            {"id": "whisper_local", "name": f"OpenAI Whisper (Local) - {mode.title()} Mode", "desc": f"Uses '{selected_config['whisper']}' model"},
+            {"id": "whisper_api", "name": "OpenAI Whisper (API)", "desc": "Highest quality, paid, requires OPENAI_API_KEY"},
+        ]
+        
+        for idx, opt in enumerate(stt_options):
+            print(f"   {idx + 1}. {opt['name']}")
+            print(f"      {opt['desc']}")
+            
+        while True:
+            try:
+                choice = input(f"\nChoose STT [1-{len(stt_options)}] (default 1): ").strip()
+                if not choice:
+                    stt_choice = stt_options[0]
+                    break
+                idx = int(choice) - 1
+                if 0 <= idx < len(stt_options):
+                    stt_choice = stt_options[idx]
+                    break
+            except ValueError:
+                pass
+            print("Invalid selection.")
+            
+        changes["SQ_STT_PROVIDER"] = stt_choice["id"]
+        
+        if stt_choice["id"] == "whisper_local":
+            # Default to mode's preference
+            default_whisper = selected_config["whisper"]
+            
+            print("\n   Select Whisper Model Size:")
+            model_sizes = ["tiny", "base", "small", "medium", "large"]
+            print(f"   Available: {', '.join(model_sizes)}")
+            model_choice = input(f"   Enter model size (default {default_whisper}): ").strip()
+            
+            if not model_choice:
+                model_choice = default_whisper
+            if model_choice not in model_sizes:
+                model_choice = "base"
+            changes["SQ_WHISPER_MODEL"] = model_choice
+    else:
+        # Auto-configure voice based on mode
+        # If GPU available or high perf mode, prefer Whisper Local, otherwise Google
+        # For simplicity in auto-mode, stick to Google unless configured otherwise or performance mode
+        if mode in ["performance", "balance", "eco"]:
+            changes["SQ_STT_PROVIDER"] = "whisper_local"
+            changes["SQ_WHISPER_MODEL"] = selected_config["whisper"]
+        else:
+            changes["SQ_STT_PROVIDER"] = "google"
+
+    # 4. Summary and Apply
+
+    # 4. Summary and Apply
     print("\nProposed Configuration:")
     for key, value in changes.items():
         print(f"   {key} = {value}")
@@ -147,4 +388,8 @@ def run_setup(interactive: bool = True):
     print("\n✅ Configuration saved to .env")
 
 if __name__ == "__main__":
-    run_setup()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", default="balance", help="Configuration mode")
+    args = parser.parse_args()
+    run_setup(mode=args.mode)

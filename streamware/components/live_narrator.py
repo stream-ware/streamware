@@ -446,6 +446,9 @@ class LiveNarratorComponent(Component):
     
     def process(self, data: Any) -> Dict:
         """Process live narration"""
+        if not self.source:
+            raise ComponentError("Source URL is required for live narration (source param is empty)")
+            
         self._temp_dir = Path(tempfile.mkdtemp())
         self._running = True
         

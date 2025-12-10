@@ -29,6 +29,10 @@ DEFAULTS = {
     "SQ_LLM_PROVIDER": "ollama",
     "SQ_LLM_TIMEOUT": "30",
     
+    # Audio / Voice
+    "SQ_STT_PROVIDER": "google",
+    "SQ_WHISPER_MODEL": "base",
+    
     # Stream Analysis
     "SQ_STREAM_MODE": "diff",
     "SQ_STREAM_INTERVAL": "5",
@@ -109,6 +113,10 @@ CONFIG_CATEGORIES = {
         ("SQ_OPENAI_API_KEY", "OpenAI API Key", "API key for OpenAI GPT models"),
         ("SQ_ANTHROPIC_API_KEY", "Anthropic API Key", "API key for Claude models"),
         ("SQ_LLM_PROVIDER", "LLM Provider", "Default provider: ollama, openai, anthropic"),
+    ],
+    "Voice / Audio": [
+        ("SQ_STT_PROVIDER", "STT Provider", "Speech-to-text provider (google, whisper_local, whisper_api)"),
+        ("SQ_WHISPER_MODEL", "Whisper Model", "Model size for local Whisper (tiny, base, small, medium, large)"),
     ],
     "Stream Analysis": [
         ("SQ_STREAM_MODE", "Default Mode", "Analysis mode: full, stream, diff"),

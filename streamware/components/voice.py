@@ -63,6 +63,15 @@ class VoiceComponent(Component):
         self.output_file = uri.get_param("output")
         self.engine = uri.get_param("engine", "auto")
         
+        # Configuration from .env
+        from ..config import config
+        self.stt_provider = config.get("SQ_STT_PROVIDER", "google")
+        self.whisper_model = config.get("SQ_WHISPER_MODEL", "base")
+        
+        # Override if specified in URI
+        if uri.get_param("provider"):
+            self.stt_provider = uri.get_param("provider")
+        
         # Auto-install
         self.auto_install = uri.get_param("auto_install", True)
     
@@ -86,13 +95,37 @@ class VoiceComponent(Component):
     
     def _ensure_dependencies(self):
         """Ensure voice dependencies are installed"""
-        # Check for STT
+        # Check for STT basics
         try:
             import speech_recognition
         except ImportError:
-            logger.info("Installing speech_recognition...")
+            logger.info("Installing SpeechRecognition...")
             subprocess.run(["pip", "install", "SpeechRecognition"], check=True, capture_output=True)
-        
+            
+        # Check for PyAudio (needed for microphone)
+        try:
+            import pyaudio
+        except ImportError:
+            logger.info("Installing PyAudio...")
+            try:
+                subprocess.run(["pip", "install", "PyAudio"], check=True, capture_output=True)
+            except subprocess.CalledProcessError:
+                logger.warning("Failed to install PyAudio. Please install portaudio19-dev first.")
+
+        # Check for Whisper if selected
+        if self.stt_provider == "whisper_local":
+            try:
+                import whisper
+            except ImportError:
+                logger.info("Installing openai-whisper...")
+                subprocess.run(["pip", "install", "openai-whisper"], check=True, capture_output=True)
+                
+            try:
+                import sounddevice
+            except ImportError:
+                logger.info("Installing sounddevice...")
+                subprocess.run(["pip", "install", "sounddevice", "scipy"], check=True, capture_output=True)
+
         # Check for TTS
         try:
             import pyttsx3
@@ -102,6 +135,76 @@ class VoiceComponent(Component):
     
     def _listen(self, data: Any) -> Dict:
         """Listen for voice input (STT)"""
+        # Dispatch based on provider
+        if self.stt_provider == "whisper_local":
+            return self._listen_whisper(data)
+        elif self.stt_provider == "whisper_api":
+            return self._listen_whisper_api(data)
+        else:
+            return self._listen_google(data)
+
+    def _listen_whisper(self, data: Any) -> Dict:
+        """Listen using local Whisper model"""
+        try:
+            import whisper
+            import sounddevice as sd
+            import numpy as np
+            import scipy.io.wavfile as wav
+            
+            logger.info(f"Loading Whisper model: {self.whisper_model}...")
+            print(f"🧠 Loading Whisper ({self.whisper_model})...")
+            model = whisper.load_model(self.whisper_model)
+            
+            # Record audio
+            fs = 44100  # Sample rate
+            duration = 5  # seconds (simple fixed duration for now, or dynamic silence detection)
+            
+            logger.info("Listening (Whisper)...")
+            print("🎤 Listening (5s)...")
+            
+            # Record
+            recording = sd.rec(int(duration * fs), samplerate=fs, channels=1)
+            sd.wait()
+            
+            # Save to temp file
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+                temp_filename = tf.name
+                
+            # Convert to int16 for wav
+            data_int = (recording * 32767).astype(np.int16)
+            wav.write(temp_filename, fs, data_int)
+            
+            logger.info("Transcribing...")
+            print("📝 Transcribing...")
+            
+            # Transcribe
+            result = model.transcribe(temp_filename)
+            text = result["text"].strip()
+            
+            # Cleanup
+            os.remove(temp_filename)
+            
+            logger.info(f"Recognized: {text}")
+            return {
+                "success": True,
+                "text": text,
+                "language": result.get("language", "unknown"),
+                "provider": "whisper_local"
+            }
+            
+        except ImportError:
+            raise ComponentError("Whisper dependencies missing. Run setup or install openai-whisper sounddevice scipy")
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    def _listen_whisper_api(self, data: Any) -> Dict:
+        """Listen using OpenAI Whisper API"""
+        # Placeholder for API implementation (requires capturing audio then sending to API)
+        # For now fallback to Google or implement later
+        return self._listen_google(data)
+
+    def _listen_google(self, data: Any) -> Dict:
+        """Listen using Google Web Speech (Standard)"""
         try:
             import speech_recognition as sr
             
@@ -129,7 +232,8 @@ class VoiceComponent(Component):
                 return {
                     "success": True,
                     "text": text,
-                    "language": self.language
+                    "language": self.language,
+                    "provider": "google"
                 }
             except sr.UnknownValueError:
                 return {

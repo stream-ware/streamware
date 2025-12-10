@@ -42,6 +42,13 @@ RUN python -m streamware.setup
 # Set dummy key and verify detection
 RUN export OPENAI_API_KEY="sk-dummy" && python -m streamware.setup
 
+# Test CLI setup with mode
+RUN echo "Testing setup with mode eco..."
+RUN export OPENAI_API_KEY="sk-dummy" && streamware --setup --mode eco
+# Verify config (allow flexible whitespace)
+RUN cat .env
+RUN grep "SQ_WHISPER_MODEL.*tiny" .env
+
 # 3. Functional tests
 RUN echo "Running functional tests..."
 # Create a dummy test file

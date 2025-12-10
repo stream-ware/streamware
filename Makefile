@@ -35,6 +35,9 @@ setup-publish:
 test:
 	pytest tests/ -v --cov=streamware --cov-report=term-missing
 
+test-docker:
+	./test_docker_install.sh
+
 clean:
 	rm -rf build/ dist/ *.egg-info
 	find . -type d -name __pycache__ -exec rm -rf {} +

@@ -122,6 +122,13 @@ Examples:
     )
     
     parser.add_argument(
+        "--mode",
+        choices=["eco", "balance", "performance"],
+        default="balance",
+        help="Configuration mode (eco, balance, performance)"
+    )
+    
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 0.1.0"
@@ -140,7 +147,7 @@ Examples:
         
     if args.setup:
         from .setup import run_setup
-        run_setup()
+        run_setup(mode=args.mode)
         return 0
 
     if not args.uri:

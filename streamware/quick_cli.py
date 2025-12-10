@@ -144,7 +144,7 @@ Shortcuts:
     llm_parser.add_argument('--analyze', action='store_true', help='Analyze text')
     llm_parser.add_argument('--summarize', action='store_true', help='Summarize text')
     llm_parser.add_argument('--provider', choices=['openai', 'anthropic', 'ollama'], 
-                           default='openai', help='LLM provider')
+                           help='LLM provider (default: from config)')
     llm_parser.add_argument('--model', help='Model name')
     llm_parser.add_argument('--execute', action='store_true', help='Execute generated command')
     llm_parser.add_argument('--input', '-i', help='Input file')
@@ -734,11 +734,11 @@ def handle_llm(args) -> int:
         return 1
     
     # Build URI based on operation
-    provider = args.provider
+    provider_param = f"&provider={args.provider}" if args.provider else ""
     model_param = f"&model={args.model}" if args.model else ""
     
     if args.to_sql:
-        uri = f"llm://sql?prompt={prompt}&provider={provider}{model_param}"
+        uri = f"llm://sql?prompt={prompt}{provider_param}{model_param}"
         result = flow(uri).run()
         
         if not args.quiet:
@@ -752,7 +752,7 @@ def handle_llm(args) -> int:
             print(exec_result)
     
     elif args.to_sq:
-        uri = f"llm://streamware?prompt={prompt}&provider={provider}{model_param}"
+        uri = f"llm://streamware?prompt={prompt}{provider_param}{model_param}"
         result = flow(uri).run()
         
         if not args.quiet:
@@ -766,7 +766,7 @@ def handle_llm(args) -> int:
             subprocess.run(result, shell=True)
     
     elif args.to_bash:
-        uri = f"llm://convert?to=bash&prompt={prompt}&provider={provider}{model_param}"
+        uri = f"llm://convert?to=bash&prompt={prompt}{provider_param}{model_param}"
         result = flow(uri).run()
         
         if not args.quiet:
@@ -779,7 +779,7 @@ def handle_llm(args) -> int:
             subprocess.run(result, shell=True)
     
     elif args.analyze:
-        uri = f"llm://analyze?prompt={prompt}&provider={provider}{model_param}"
+        uri = f"llm://analyze?prompt={prompt}{provider_param}{model_param}"
         result = flow(uri).run()
         
         if isinstance(result, dict):
@@ -789,13 +789,13 @@ def handle_llm(args) -> int:
             print(result)
     
     elif args.summarize:
-        uri = f"llm://summarize?prompt={prompt}&provider={provider}{model_param}"
+        uri = f"llm://summarize?prompt={prompt}{provider_param}{model_param}"
         result = flow(uri).run()
         print(result)
     
     else:
         # Default: generate
-        uri = f"llm://generate?prompt={prompt}&provider={provider}{model_param}"
+        uri = f"llm://generate?prompt={prompt}{provider_param}{model_param}"
         result = flow(uri).run()
         print(result)
     
@@ -1898,19 +1898,9 @@ def handle_config(args) -> int:
     
     # Show configuration
     if args.show:
-        print("# Streamware Configuration")
-        print("# Source: .env + environment variables")
-        print("---")
-        for category, items in CONFIG_CATEGORIES.items():
-            print(f"\n# {category}")
-            for key, label, desc in items:
-                value = config.get(key, "")
-                # Mask sensitive values
-                if ("PASS" in key or "KEY" in key or "TOKEN" in key) and value:
-                    display_value = value[:3] + "***" + value[-2:] if len(value) > 5 else "***"
-                else:
-                    display_value = value or "(not set)"
-                print(f"{key}: {display_value}")
+        # Use the new diagnostic printer
+        from .diagnostics import print_active_configuration
+        print_active_configuration()
         return 0
     
     # Set value
@@ -2752,6 +2742,14 @@ def handle_live(args) -> int:
     
     op = getattr(args, 'operation', 'narrator') or 'narrator'
     url = args.url
+    
+    if not url:
+        print("❌ Error: --url parameter is required (and cannot be empty).", file=sys.stderr)
+        print("\nExamples:")
+        print("  sq live narrator --url rtsp://192.168.1.100/stream")
+        print("  sq live narrator --url /path/to/video.mp4")
+        return 1
+        
     mode = getattr(args, 'mode', 'full') or 'full'
     quiet = getattr(args, 'quiet', False)
     

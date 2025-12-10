@@ -343,3 +343,52 @@ def trace_message(
 ):
     """Convenience function to trace a message"""
     message_trace.add_trace(exchange_id, component, message, headers)
+
+
+def print_active_configuration():
+    """Print the currently active Streamware configuration"""
+    from .config import config
+    
+    # Reload to ensure we have latest from env
+    config.reload()
+    
+    provider = config.get("SQ_LLM_PROVIDER", "Not set (defaults to openai)")
+    model = config.get("SQ_MODEL", "Not set")
+    ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+    
+    console.print("\n[bold cyan]🔧 Streamware Active Configuration[/bold cyan]")
+    console.print("=" * 40)
+    
+    table = Table(show_header=False, box=None)
+    table.add_column("Key", style="yellow")
+    table.add_column("Value", style="green")
+    
+    table.add_row("LLM Provider", provider)
+    table.add_row("Model", model)
+    
+    if provider == "ollama":
+        table.add_row("Ollama URL", ollama_url)
+        
+    # Check keys presence (without showing them)
+    import os
+    keys = {
+        "OPENAI_API_KEY": "OpenAI",
+        "ANTHROPIC_API_KEY": "Anthropic",
+        "GROQ_API_KEY": "Groq",
+        "GEMINI_API_KEY": "Gemini"
+    }
+    
+    found_keys = []
+    for env_var, name in keys.items():
+        if os.environ.get(env_var) or config.get(f"SQ_{env_var}"):
+            found_keys.append(name)
+            
+    if found_keys:
+        table.add_row("Detected Keys", ", ".join(found_keys))
+    else:
+        table.add_row("Detected Keys", "[red]None[/red]")
+        
+    console.print(table)
+    console.print("\nTo change settings run: [bold]streamware setup[/bold]")
+    console.print("=" * 40)
+
