@@ -1,0 +1,17 @@
+Analyze this camera frame. Pre-analysis data available:
+
+MOTION DATA:
+{motion_context}
+
+Focus: {focus}
+
+Based on the motion data and visual analysis:
+
+RESPONSE FORMAT:
+SUBJECT: <main subject visible>
+LOCATION: <position>
+ACTION: <current action>
+ALERT: YES|NO
+REASON: <if alert, why>
+
+Be concise. Max 40 words total.

@@ -1,0 +1,12 @@
+Track the specified object in this frame.
+
+TRACKING: {focus}
+
+RESPONSE FORMAT:
+VISIBLE: YES|NO
+LOCATION: <position in frame>
+STATE: <current state/action>
+MOVEMENT: <direction if moving, else "stationary">
+
+If {focus} not visible: say "Target not visible."
+Keep response under 25 words.

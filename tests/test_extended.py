@@ -105,7 +105,7 @@ class TestVoiceConfig:
         config.set("SQ_STT_PROVIDER", "whisper_local")
         config.set("SQ_WHISPER_MODEL", "small")
         
-        uri = StreamwareURI.parse("voice://listen")
+        uri = StreamwareURI("voice://listen")
         component = VoiceComponent(uri)
         
         assert component.stt_provider == "whisper_local"
@@ -121,7 +121,7 @@ class TestLiveNarratorValidation:
         from streamware.components.live_narrator import LiveNarratorComponent
         from streamware.exceptions import ComponentError
         
-        uri = StreamwareURI.parse("live://narrator?source=")
+        uri = StreamwareURI("live://narrator?source=")
         component = LiveNarratorComponent(uri)
         
         with pytest.raises(ComponentError):
@@ -132,7 +132,7 @@ class TestLiveNarratorValidation:
         from streamware.uri import StreamwareURI
         from streamware.components.live_narrator import LiveNarratorComponent
         
-        uri = StreamwareURI.parse("live://narrator?source=rtsp://test/stream&duration=1")
+        uri = StreamwareURI("live://narrator?source=rtsp://test/stream&duration=1")
         component = LiveNarratorComponent(uri)
         
         # Should not raise on validation, only on actual capture
@@ -144,21 +144,23 @@ class TestLiveNarratorFramesDir:
     
     def test_frames_dir_initialized_and_directory_created(self, tmp_path, monkeypatch):
         """Test that frames_dir from URI is prepared in process()"""
+        import importlib
         from streamware.uri import StreamwareURI
         from streamware.components.live_narrator import LiveNarratorComponent
 
         frames_dir = tmp_path / "frames_out"
-        uri = StreamwareURI.parse(f"live://narrator?source=rtsp://test/stream&duration=1&frames_dir={frames_dir}")
+        uri = StreamwareURI(f"live://narrator?source=rtsp://test/stream&duration=1&frames_dir={frames_dir}")
 
         # Avoid running real narrator loop and ffmpeg
         def fake_run_narrator(self):
             return {"success": True}
 
         monkeypatch.setattr(LiveNarratorComponent, "_run_narrator", fake_run_narrator)
-        monkeypatch.setattr(
-            "streamware.components.live_narrator.tempfile.mkdtemp",
-            lambda: str(tmp_path / "tmp_frames"),
-        )
+
+        # Import the actual live_narrator module for patching (avoid attribute shadowing)
+        ln_mod = importlib.import_module(LiveNarratorComponent.__module__)
+        # Patch tempfile.mkdtemp used inside live_narrator module
+        monkeypatch.setattr(ln_mod.tempfile, "mkdtemp", lambda: str(tmp_path / "tmp_frames"))
 
         component = LiveNarratorComponent(uri)
         result = component.process(None)
@@ -170,6 +172,7 @@ class TestLiveNarratorFramesDir:
 
     def test_capture_frame_saves_copy_to_frames_dir(self, tmp_path, monkeypatch):
         """Test that _capture_frame writes a copy into frames_dir when configured"""
+        import importlib
         from streamware.uri import StreamwareURI
         from streamware.components.live_narrator import LiveNarratorComponent
 
@@ -178,7 +181,7 @@ class TestLiveNarratorFramesDir:
         temp_dir.mkdir()
         frames_dir.mkdir()
 
-        uri = StreamwareURI.parse("live://narrator?source=rtsp://test/stream&duration=1")
+        uri = StreamwareURI("live://narrator?source=rtsp://test/stream&duration=1")
         component = LiveNarratorComponent(uri)
 
         # Inject directories used by _capture_frame
@@ -190,7 +193,10 @@ class TestLiveNarratorFramesDir:
         def fake_run(cmd, check, capture_output, timeout):  # noqa: ARG001
             expected_output.write_bytes(b"testframe")
 
-        monkeypatch.setattr("streamware.components.live_narrator.subprocess.run", fake_run)
+        # Import the actual live_narrator module for patching
+        ln_mod = importlib.import_module(LiveNarratorComponent.__module__)
+        # Patch subprocess.run used inside live_narrator module
+        monkeypatch.setattr(ln_mod.subprocess, "run", fake_run)
 
         frame_path = component._capture_frame(1)
 
@@ -200,6 +206,105 @@ class TestLiveNarratorFramesDir:
         copied_path = frames_dir / expected_output.name
         assert copied_path.exists()
         assert copied_path.read_bytes() == expected_output.read_bytes()
+
+
+class TestFrameAnalyzerDownscaling:
+    """Tests for FrameAnalyzer downscaling and region coordinates"""
+
+    def test_frame_analyzer_uses_downscaled_prev_gray_and_rescaled_regions(self, tmp_path):
+        """FrameAnalyzer should analyze on downscaled frames but report regions in full resolution"""
+        from PIL import Image, ImageDraw
+        from streamware.components.live_narrator import FrameAnalyzer
+
+        width, height = 640, 480
+
+        # First frame: blank scene
+        img1 = Image.new("RGB", (width, height), "black")
+        frame1 = tmp_path / "frame1.jpg"
+        img1.save(frame1)
+
+        # Second frame: add a bright rectangle to induce motion
+        img2 = Image.new("RGB", (width, height), "black")
+        draw = ImageDraw.Draw(img2)
+        draw.rectangle([200, 150, 400, 350], fill="white")
+        frame2 = tmp_path / "frame2.jpg"
+        img2.save(frame2)
+
+        analyzer = FrameAnalyzer()
+
+        # Prime the analyzer with the first frame (no previous gray yet)
+        analysis1, annotated1 = analyzer.analyze(frame1)
+        assert annotated1 is not None
+        assert analysis1["has_motion"] is False
+
+        # Second frame should detect motion compared to previous
+        analysis2, annotated2 = analyzer.analyze(frame2)
+        assert annotated2 is not None
+        assert analysis2["has_motion"] is True
+
+        regions = analysis2["motion_regions"]
+        assert isinstance(regions, list)
+        assert regions  # at least one region detected
+
+        # Regions should be expressed in original image coordinates
+        for region in regions:
+            assert 0 <= region["x"] < width
+            assert 0 <= region["y"] < height
+            assert region["w"] > 0
+            assert region["h"] > 0
+            assert region["x"] + region["w"] <= width
+            assert region["y"] + region["h"] <= height
+
+        # Internal prev_gray buffer should be downscaled compared to original frame
+        prev_gray = analyzer._prev_gray
+        assert prev_gray.size[0] < width
+        assert prev_gray.size[1] < height
+
+
+class TestMotionDiffDownscaling:
+    """Tests for MotionDiffComponent downscaling and region rescaling"""
+
+    def test_compute_diff_downscaled_then_rescaled_regions(self, tmp_path):
+        """_compute_diff should work on downscaled frames but return regions in full resolution"""
+        from PIL import Image, ImageDraw
+        from streamware.uri import StreamwareURI
+        from streamware.components.motion_diff import MotionDiffComponent
+
+        width, height = 640, 480
+
+        # Previous frame: mostly dark
+        prev_img = Image.new("RGB", (width, height), "black")
+        prev_path = tmp_path / "prev.jpg"
+        prev_img.save(prev_path)
+
+        # Current frame: introduce a bright rectangle in the center
+        curr_img = Image.new("RGB", (width, height), "black")
+        draw = ImageDraw.Draw(curr_img)
+        draw.rectangle([100, 100, 300, 300], fill="white")
+        curr_path = tmp_path / "curr.jpg"
+        curr_img.save(curr_path)
+
+        uri = StreamwareURI("motion://analyze?source=dummy&scale=0.3")
+        component = MotionDiffComponent(uri)
+        component._temp_dir = tmp_path
+        component._prev_frame = prev_path
+
+        result = component._compute_diff(curr_path, frame_num=1)
+
+        # has_change may be a numpy.bool_, so use truthiness instead of identity check
+        assert result["has_change"]
+        regions = result["regions"]
+        assert isinstance(regions, list)
+        assert regions
+
+        # Regions should be within full-resolution bounds, not the downscaled size
+        for region in regions:
+            assert 0 <= region.x < width
+            assert 0 <= region.y < height
+            assert region.width > 0
+            assert region.height > 0
+            assert region.x + region.width <= width
+            assert region.y + region.height <= height
 
 
 class TestQuickCLILLM:
@@ -290,4 +395,202 @@ class TestLiveCLIValidation:
         assert rc == 1
         assert "Error: --url parameter is required" in captured.err
         mock_flow.assert_not_called()
+
+
+class TestMarkdownLogging:
+    """Tests for Markdown logging in quick CLI watch/live commands"""
+
+    @patch("streamware.quick_cli._save_watch_markdown_log")
+    @patch("streamware.quick_cli.flow")
+    def test_watch_log_md_uses_default_filename(self, mock_flow, mock_save):
+        """sq watch --log md without --file should write watch_log.md"""
+        from streamware.quick_cli import handle_watch
+
+        mock_flow.return_value.run.return_value = {
+            "significant_changes": 1,
+            "frames_analyzed": 10,
+            "timeline": [],
+        }
+
+        args = MagicMock()
+        args.url = "rtsp://test/stream"
+        args.sensitivity = "medium"
+        args.detect = "person"
+        args.speed = "normal"
+        args.when = "changes"
+        args.alert = "none"
+        args.duration = 60
+        args.file = None
+        args.log = "md"
+        args.yaml = False
+        args.json = False
+        args.table = False
+        args.html = False
+
+        rc = handle_watch(args)
+        assert rc == 0
+        mock_save.assert_called_once()
+        # Third arg is output_file
+        assert mock_save.call_args[0][2] == "watch_log.md"
+
+    @patch("streamware.quick_cli._save_live_markdown_log")
+    @patch("streamware.quick_cli.flow")
+    def test_live_log_md_uses_file_argument_when_provided(self, mock_flow, mock_save):
+        """sq live --log md --file logs.md should write to logs.md"""
+        from streamware.quick_cli import handle_live
+
+        mock_flow.return_value.run.return_value = {
+            "operation": "narrator",
+            "config": {"model": "llava:7b"},
+            "history": [],
+            "triggers": [],
+        }
+
+        args = MagicMock()
+        args.command = "live"
+        args.operation = "narrator"
+        args.url = "rtsp://test/stream"
+        args.mode = "full"
+        args.tts = False
+        args.duration = 10
+        args.analysis = "normal"
+        args.motion = "significant"
+        args.frames = "changed"
+        args.frames_dir = None
+        args.interval = None
+        args.threshold = None
+        args.trigger = None
+        args.focus = None
+        args.webhook = None
+        args.model = None
+        args.quiet = False
+        args.yaml = False
+        args.json = False
+        args.table = False
+        args.html = False
+        args.file = "logs.md"
+        args.log = "md"
+
+        rc = handle_live(args)
+        assert rc == 0
+        mock_save.assert_called_once()
+        # Second arg is output_file
+        assert mock_save.call_args[0][1] == "logs.md"
+
+
+class TestPromptsModule:
+    """Tests for prompts module"""
+
+    def test_get_prompt_returns_string(self):
+        """get_prompt should return a string"""
+        from streamware.prompts import get_prompt
+
+        # Should return prompt from file
+        prompt = get_prompt("stream_diff")
+        assert isinstance(prompt, str)
+        assert len(prompt) > 0
+
+    def test_render_prompt_substitutes_variables(self):
+        """render_prompt should substitute variables"""
+        from streamware.prompts import render_prompt
+
+        result = render_prompt(
+            "stream_focus",
+            focus="person",
+            custom_prompt=""
+        )
+        assert "person" in result
+
+    def test_list_prompts_returns_dict(self):
+        """list_prompts should return dict of available prompts"""
+        from streamware.prompts import list_prompts
+
+        prompts = list_prompts()
+        assert isinstance(prompts, dict)
+        assert "stream_diff" in prompts
+        assert "trigger_check" in prompts
+
+    def test_missing_prompt_returns_empty(self):
+        """Missing prompt should return empty string"""
+        from streamware.prompts import get_prompt
+
+        result = get_prompt("nonexistent_prompt_xyz")
+        assert result == ""
+
+    def test_missing_prompt_with_default(self):
+        """Missing prompt with default should return default"""
+        from streamware.prompts import get_prompt
+
+        result = get_prompt("nonexistent_prompt_xyz", default="fallback")
+        assert result == "fallback"
+
+
+class TestImageOptimization:
+    """Tests for image optimization module"""
+
+    def test_optimize_config_defaults(self):
+        """OptimizeConfig should have sensible defaults"""
+        from streamware.image_optimize import OptimizeConfig
+
+        config = OptimizeConfig()
+        assert config.max_size == 512
+        assert config.quality == 65
+        assert config.posterize_colors == 0
+        assert config.grayscale is False
+        assert config.sharpen is True
+
+    def test_presets_exist(self):
+        """All standard presets should be defined"""
+        from streamware.image_optimize import PRESETS
+
+        assert "fast" in PRESETS
+        assert "balanced" in PRESETS
+        assert "quality" in PRESETS
+        assert "minimal" in PRESETS
+
+        # fast should have smaller max_size than quality
+        assert PRESETS["fast"].max_size < PRESETS["quality"].max_size
+
+    def test_prepare_image_returns_path(self, tmp_path):
+        """prepare_image_for_llm should return a Path"""
+        from streamware.image_optimize import prepare_image_for_llm
+
+        # Create a simple test image
+        try:
+            from PIL import Image
+        except ImportError:
+            pytest.skip("PIL not installed")
+
+        test_img = tmp_path / "test.jpg"
+        img = Image.new("RGB", (1920, 1080), color="red")
+        img.save(test_img, "JPEG")
+
+        result = prepare_image_for_llm(test_img, preset="fast")
+        assert result.exists()
+
+        # Should be smaller than original
+        result_img = Image.open(result)
+        assert max(result_img.size) <= 384  # fast preset max_size
+
+    def test_prepare_image_base64(self, tmp_path):
+        """prepare_image_for_llm_base64 should return valid base64"""
+        from streamware.image_optimize import prepare_image_for_llm_base64
+        import base64
+
+        try:
+            from PIL import Image
+        except ImportError:
+            pytest.skip("PIL not installed")
+
+        test_img = tmp_path / "test.jpg"
+        img = Image.new("RGB", (800, 600), color="blue")
+        img.save(test_img, "JPEG")
+
+        result = prepare_image_for_llm_base64(test_img, preset="balanced")
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+        # Should be valid base64
+        decoded = base64.b64decode(result)
+        assert len(decoded) > 0
 

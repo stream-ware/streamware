@@ -1,0 +1,13 @@
+Analyze this cropped region from a security camera.
+Focus on: {focus}
+
+This region showed pixel changes. Describe SPECIFICALLY what you see:
+
+RESPONSE FORMAT:
+OBJECT: <what is visible>
+POSITION: <where in frame>
+ACTION: <what it's doing>
+CONFIDENCE: HIGH|MEDIUM|LOW
+
+If it's a person, describe: head position, arm position, body orientation.
+Keep response under 50 words.

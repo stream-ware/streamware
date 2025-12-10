@@ -1,0 +1,12 @@
+Analyze this screenshot and find the '{target}' button or element.
+
+Give me the EXACT pixel coordinates (x, y) of the CENTER of this element.
+
+RESPONSE FORMAT (strict):
+FOUND: YES|NO
+X: <number>
+Y: <number>
+ELEMENT: <brief description of what you found>
+
+If multiple matches, pick the most prominent one.
+If not found, set X and Y to 0.

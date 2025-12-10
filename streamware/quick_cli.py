@@ -385,7 +385,8 @@ Shortcuts:
                               choices=['none', 'log', 'sound', 'speak', 'slack', 'telegram'],
                               default='none', help='How to alert')
     watch_parser.add_argument('--duration', type=int, default=60, help='Duration in seconds')
-    watch_parser.add_argument('--file', '-o', help='Save report to file')
+    watch_parser.add_argument('--file', '-o', help='Save report to file (HTML or Markdown)')
+    watch_parser.add_argument('--log', choices=['md'], help='Generate Markdown log (md)')
     
     # Live narrator command (TTS, triggers)
     live_parser = subparsers.add_parser('live', help='Live narration with TTS and triggers', parents=[format_parser])
@@ -409,7 +410,8 @@ Shortcuts:
     live_parser.add_argument('--threshold', type=int, help='Change threshold 0-100 (or use sensitivity)')
     live_parser.add_argument('--model', default='llava:7b', help='AI model (default: llava:7b)')
     live_parser.add_argument('--webhook', help='Webhook URL for alerts')
-    live_parser.add_argument('--file', '-o', help='Save HTML report to file')
+    live_parser.add_argument('--file', '-o', help='Save report to file (HTML or Markdown)')
+    live_parser.add_argument('--log', choices=['md'], help='Generate Markdown log (md)')
     live_parser.add_argument('--frames-dir', help='Directory to save captured frames (e.g. ./frames)')
     
     # Global options
@@ -2578,9 +2580,15 @@ def handle_watch(args) -> int:
         else:
             _print_watch_yaml(result, args)
         
-        # Save report
+        # Save HTML report or Markdown log
+        log_format = getattr(args, 'log', None)
         if getattr(args, 'file', None):
-            _save_watch_report(result, args)
+            if log_format == 'md':
+                _save_watch_markdown_log(result, args, args.file)
+            else:
+                _save_watch_report(result, args)
+        elif log_format == 'md':
+            _save_watch_markdown_log(result, args, "watch_log.md")
         
         return 0
         
@@ -2736,6 +2744,56 @@ def _save_watch_report(result: dict, args):
     print(f"📄 Report saved: {output_path}")
 
 
+def _save_watch_markdown_log(result: dict, args, output_file: str):
+    """Save watch result as Markdown log (configuration + change events)."""
+    from pathlib import Path
+    from datetime import datetime
+
+    output_path = Path(output_file).expanduser()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    changes = result.get("significant_changes", 0)
+    frames = result.get("frames_analyzed", 0)
+    timeline = result.get("timeline", [])
+
+    lines = []
+    lines.append(f"# Watch Log: {args.detect}")
+    lines.append("")
+    lines.append(f"- **Source**: `{args.url}`")
+    lines.append(f"- **Sensitivity**: `{args.sensitivity}`")
+    lines.append(f"- **Speed**: `{args.speed}`")
+    lines.append(f"- **Duration**: `{args.duration}s`")
+    lines.append(f"- **Generated**: {datetime.now().isoformat(timespec='seconds')}")
+    lines.append("")
+    lines.append(f"- **Frames analyzed**: `{frames}`")
+    lines.append(f"- **Significant changes**: `{changes}`")
+    lines.append("")
+
+    if timeline:
+        lines.append("## Events")
+        for entry in timeline:
+            if entry.get("type") != "change":
+                continue
+            ts = entry.get("timestamp", "")
+            change_pct = entry.get("change_percent", 0)
+            regions = len(entry.get("regions", []))
+            lines.append(f"- **Time**: `{ts}`  ")
+            lines.append(f"  - **Change**: `{change_pct:.1f}%` in `{regions}` region(s)")
+            analyses = entry.get("region_analyses", [])
+            if analyses:
+                first = analyses[0]
+                desc = first.get("analysis") or first.get("description", "")
+                if desc:
+                    short = desc.replace("\n", " ").strip()[:200]
+                    lines.append(f"  - **AI**: {short}...")
+            lines.append("")
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines).rstrip() + "\n")
+
+    print(f"📄 Markdown log saved: {output_path}")
+
+
 def handle_live(args) -> int:
     """Handle live narration command"""
     from .core import flow
@@ -2811,9 +2869,15 @@ def handle_live(args) -> int:
         else:
             _print_live_yaml(result, mode)
         
-        # Save report if requested
+        # Save HTML report or Markdown log if requested
+        log_format = getattr(args, 'log', None)
         if getattr(args, 'file', None):
-            _save_live_report(result, args.file, mode, url)
+            if log_format == 'md':
+                _save_live_markdown_log(result, args.file, mode, url)
+            else:
+                _save_live_report(result, args.file, mode, url)
+        elif log_format == 'md':
+            _save_live_markdown_log(result, 'live_log.md', mode, url)
         
         return 0
         
@@ -2992,6 +3056,58 @@ def _save_live_report(result: dict, output_file: str, mode: str, source: str):
         f.write(html)
     
     print(f"📄 Report saved: {output_path}")
+
+
+def _save_live_markdown_log(result: dict, output_file: str, mode: str, source: str):
+    """Save live narrator result as Markdown log."""
+    from pathlib import Path
+    from datetime import datetime
+
+    output_path = Path(output_file).expanduser()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    op = result.get("operation", "narrator")
+    config = result.get("config", {})
+    history = result.get("history", [])
+    triggers = result.get("triggers", [])
+
+    lines = []
+    lines.append(f"# Live Narrator Log ({op}, {mode} mode)")
+    lines.append("")
+    lines.append(f"- **Source**: `{source}`")
+    lines.append(f"- **Model**: `{config.get('model', 'unknown')}`")
+    lines.append(f"- **Mode**: `{config.get('mode', mode)}`")
+    lines.append(f"- **Focus**: `{config.get('focus', 'general')}`")
+    lines.append(f"- **Interval**: `{config.get('interval', 3)}s`")
+    lines.append(f"- **Generated**: {datetime.now().isoformat(timespec='seconds')}")
+    lines.append("")
+
+    if triggers:
+        lines.append("- **Triggers**:")
+        for t in triggers:
+            lines.append(f"  - `{t}`")
+        lines.append("")
+
+    if history:
+        lines.append("## Timeline")
+        for entry in history:
+            ts = entry.get("timestamp", "")
+            desc = entry.get("description", "")
+            triggered = entry.get("triggered", False)
+            matches = entry.get("matches", [])
+            prefix = "🔴" if triggered else "📝"
+            short = desc.replace("\n", " ").strip()[:220]
+            lines.append(f"- {prefix} **{ts}**  ")
+            lines.append(f"  - {short}...")
+            if matches:
+                joined = ", ".join(matches)
+                lines.append(f"  - **Matches**: {joined}")
+            lines.append("")
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines).rstrip() + "\n")
+
+    print(f"📄 Markdown log saved: {output_path}")
 
 
 def _print_live_yaml(result: dict, mode: str = "full"):

@@ -47,9 +47,10 @@ DEFAULTS = {
     "SQ_SENSITIVITY": "medium",      # ultra, high, medium, low, minimal
     "SQ_DETECT": "any",              # person, vehicle, motion, package, any
     "SQ_SPEED": "normal",            # realtime, fast, normal, slow, thorough
-    "SQ_MOTION_THRESHOLD": "15",     # 0-100 (or use sensitivity preset)
-    "SQ_MIN_REGION": "100",          # minimum region size
+    "SQ_MOTION_THRESHOLD": "25",     # 0-100 (or use sensitivity preset)
+    "SQ_MIN_REGION": "500",          # minimum region size in pixels
     "SQ_MIN_CHANGE": "0.5",          # minimum change percent
+    "SQ_FRAME_SCALE": "0.3",         # downscale factor for motion detection (0.1-1.0)
     
     # Network
     "SQ_NETWORK_SUBNET": "",
@@ -60,6 +61,13 @@ DEFAULTS = {
     "SQ_RTSP_USER": "admin",
     "SQ_RTSP_PASS": "admin",
     "SQ_RTSP_PORT": "554",
+    
+    # Image Optimization (for LLM vision processing)
+    "SQ_IMAGE_PRESET": "balanced",  # fast, balanced, quality, minimal
+    "SQ_IMAGE_MAX_SIZE": "512",     # max dimension in pixels
+    "SQ_IMAGE_QUALITY": "65",       # JPEG quality 1-100
+    "SQ_IMAGE_POSTERIZE": "0",      # 0=off, 8-256=color count
+    "SQ_IMAGE_GRAYSCALE": "false",  # convert to grayscale
     
     # Output
     "SQ_OUTPUT_FORMAT": "yaml",

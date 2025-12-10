@@ -66,8 +66,9 @@ class FrameAnalyzer:
         
         img = Image.open(frame_path)
 
-        # Downscale for faster numerical analysis
-        scale_factor = 0.3
+        # Downscale for faster numerical analysis (configurable via SQ_FRAME_SCALE)
+        from ..config import config
+        scale_factor = float(config.get("SQ_FRAME_SCALE", "0.3"))
         try:
             if img.width > 0 and img.height > 0:
                 small_size = (
@@ -698,8 +699,18 @@ class LiveNarratorComponent(Component):
                     time.sleep(self.interval)
                     continue
             
-            # Ask LLM about triggers specifically
-            description = self._check_triggers_with_llm(frame_path)
+            # Optional advanced analysis for region-based cropping
+            analysis: Dict = {}
+            if self.use_advanced:
+                try:
+                    analysis, _ = self._frame_analyzer.analyze(frame_path)
+                    self._last_analysis = analysis
+                except Exception as e:  # pragma: no cover - best effort
+                    logger.debug(f"Frame analysis in watch mode failed: {e}")
+                    analysis = {}
+
+            # Ask LLM about triggers specifically, using cropped frame if possible
+            description = self._check_triggers_with_llm(frame_path, analysis)
             
             if description:
                 ts = datetime.now().strftime("%H:%M:%S")
@@ -831,14 +842,77 @@ class LiveNarratorComponent(Component):
         except Exception as e:
             logger.debug(f"Change computation: {e}")
             return 100  # Assume change on error
+
+    def _crop_to_motion_regions(self, frame_path: Path, analysis: Dict) -> Path:
+        """Return cropped frame focusing on motion regions, or original frame if none.
+
+        Uses motion_regions from FrameAnalyzer (in original image coordinates) to
+        compute a bounding box with small margin. This reduces the area sent to
+        the vision LLM and focuses it on where changes occurred.
+        """
+        regions = analysis.get("motion_regions") or []
+        if not regions:
+            return frame_path
+
+        try:
+            from PIL import Image
+        except ImportError:
+            return frame_path
+
+        try:
+            img = Image.open(frame_path)
+            width, height = img.size
+
+            xs: List[int] = []
+            ys: List[int] = []
+            xe: List[int] = []
+            ye: List[int] = []
+
+            for region in regions:
+                x = max(0, int(region.get("x", 0)))
+                y = max(0, int(region.get("y", 0)))
+                w = max(0, int(region.get("w", 0)))
+                h = max(0, int(region.get("h", 0)))
+                if w <= 0 or h <= 0:
+                    continue
+                xs.append(x)
+                ys.append(y)
+                xe.append(x + w)
+                ye.append(y + h)
+
+            if not xs:
+                return frame_path
+
+            margin = 20
+            x1 = max(0, min(xs) - margin)
+            y1 = max(0, min(ys) - margin)
+            x2 = min(width, max(xe) + margin)
+            y2 = min(height, max(ye) + margin)
+
+            if x2 <= x1 or y2 <= y1:
+                return frame_path
+
+            cropped = img.crop((x1, y1, x2, y2))
+
+            # Save cropped frame into component temp directory so it is cleaned up
+            if not self._temp_dir:
+                return frame_path
+            crop_path = self._temp_dir / f"crop_{frame_path.name}"
+            cropped.save(crop_path, quality=90)
+            return crop_path
+
+        except Exception as e:
+            logger.debug(f"Motion crop failed: {e}")
+            return frame_path
     
     def _describe_frame(self, frame_path: Path, prev_frame_path: Path = None) -> str:
         """Get AI description of frame based on mode"""
         try:
             import requests
             
-            with open(frame_path, "rb") as f:
-                image_data = base64.b64encode(f.read()).decode()
+            # Optimize image before sending to LLM
+            from ..image_optimize import prepare_image_for_llm_base64
+            image_data = prepare_image_for_llm_base64(frame_path, preset="balanced")
             
             # Build prompt based on mode
             if self.mode == "diff" and self._prev_description:
@@ -877,8 +951,12 @@ class LiveNarratorComponent(Component):
         try:
             import requests
             
-            with open(frame_path, "rb") as f:
-                image_data = base64.b64encode(f.read()).decode()
+            # Crop to motion regions if available to focus LLM on changes
+            crop_path = self._crop_to_motion_regions(frame_path, analysis or {})
+
+            # Optimize image before sending to LLM (use fast preset since already cropped)
+            from ..image_optimize import prepare_image_for_llm_base64
+            image_data = prepare_image_for_llm_base64(crop_path, preset="fast")
             
             # Build context-aware prompt
             prompt = self._build_advanced_prompt(analysis)
@@ -1024,29 +1102,36 @@ If NO: Say "No person visible"."""
 If YES: describe location and state.
 If NO: say "No {self.focus} visible"."""
     
-    def _check_triggers_with_llm(self, frame_path: Path) -> Optional[str]:
-        """Check if any triggers match using LLM"""
+    def _check_triggers_with_llm(self, frame_path: Path, analysis: Optional[Dict] = None) -> Optional[str]:
+        """Check if any triggers match using LLM.
+
+        If motion analysis data is available, crop the frame to motion regions
+        before sending to the vision model so it focuses on areas where
+        something is happening.
+        """
         try:
             import requests
             
-            with open(frame_path, "rb") as f:
-                image_data = base64.b64encode(f.read()).decode()
+            # If no analysis provided but advanced mode is enabled, compute it
+            if analysis is None and self.use_advanced:
+                try:
+                    analysis, _ = self._frame_analyzer.analyze(frame_path)
+                except Exception as e:  # pragma: no cover - best effort
+                    logger.debug(f"Trigger analysis failed, using full frame: {e}")
+                    analysis = {}
+
+            crop_path = self._crop_to_motion_regions(frame_path, analysis or {})
+
+            # Optimize image before sending to LLM (fast preset for trigger checks)
+            from ..image_optimize import prepare_image_for_llm_base64
+            image_data = prepare_image_for_llm_base64(crop_path, preset="fast")
+            
+            from ..prompts import render_prompt
             
             conditions = [t.condition for t in self.triggers]
             conditions_text = "\n".join(f"- {c}" for c in conditions)
             
-            prompt = f"""Look at this image and check if ANY of these conditions are met:
-
-{conditions_text}
-
-If YES to any condition:
-- Say which condition(s) are met
-- Briefly describe what you see that matches
-
-If NO conditions are met:
-- Reply with just: NO
-
-Be accurate - only confirm if you're confident."""
+            prompt = render_prompt("trigger_check", conditions=conditions_text)
 
             response = requests.post(
                 f"{self.ollama_url}/api/generate",

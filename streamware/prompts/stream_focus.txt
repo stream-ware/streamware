@@ -1,0 +1,10 @@
+Describe this frame focusing on: {focus}
+
+RESPONSE FORMAT:
+PRESENT: YES|NO
+COUNT: <number>
+LOCATIONS: <brief list>
+ACTIONS: <what they are doing>
+
+Be concise. No unnecessary description.
+{custom_prompt}

@@ -129,6 +129,12 @@ Examples:
     )
     
     parser.add_argument(
+        "--check",
+        choices=["camera", "tts", "ollama", "all"],
+        help="Run diagnostic check (camera, tts, ollama, all)"
+    )
+    
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 0.1.0"
@@ -154,6 +160,9 @@ Examples:
         else:
             run_setup(mode=args.mode)
         return 0
+
+    if args.check:
+        return run_diagnostics(args.check, args.uri)
 
     if not args.uri:
         parser.print_help()
@@ -357,6 +366,204 @@ MimeType=x-scheme-handler/stream;
     except Exception as e:
         print(f"Error installing protocol handler: {e}")
         print("You may need to run with sudo or manually configure the handler")
+
+
+def run_diagnostics(check_type: str, url: str = None) -> int:
+    """Run diagnostic checks for camera, TTS, or Ollama.
+    
+    Args:
+        check_type: One of 'camera', 'tts', 'ollama', 'all'
+        url: Optional URL for camera check (RTSP/file)
+    
+    Returns:
+        0 if all checks pass, 1 otherwise
+    """
+    from .config import config
+    import subprocess
+    import tempfile
+    
+    results = {}
+    all_ok = True
+    
+    print("\n🔍 Streamware Diagnostics")
+    print("=" * 50)
+    
+    # --- CAMERA CHECK ---
+    if check_type in ("camera", "all"):
+        print("\n📷 Camera / RTSP Check:")
+        
+        # Get URL from arg or config
+        camera_url = url
+        if not camera_url:
+            # Try to build from config
+            user = config.get("SQ_RTSP_USER", "admin")
+            passwd = config.get("SQ_RTSP_PASS", "admin")
+            port = config.get("SQ_RTSP_PORT", "554")
+            print(f"   No URL provided. Use: streamware --check camera <rtsp://...>")
+            results["camera_url"] = "⚠️  NOT PROVIDED"
+        else:
+            results["camera_url"] = camera_url[:50] + "..." if len(camera_url) > 50 else camera_url
+            
+            # Test ffmpeg capture
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tf:
+                    temp_path = tf.name
+                
+                cmd = [
+                    "ffmpeg", "-y", "-rtsp_transport", "tcp",
+                    "-i", camera_url,
+                    "-frames:v", "1", "-q:v", "2",
+                    temp_path
+                ]
+                result = subprocess.run(cmd, capture_output=True, timeout=15)
+                
+                if result.returncode == 0:
+                    import os
+                    size = os.path.getsize(temp_path)
+                    results["ffmpeg_capture"] = f"✅ OK ({size} bytes)"
+                    os.unlink(temp_path)
+                else:
+                    results["ffmpeg_capture"] = f"❌ FAILED (exit {result.returncode})"
+                    all_ok = False
+            except subprocess.TimeoutExpired:
+                results["ffmpeg_capture"] = "❌ TIMEOUT"
+                all_ok = False
+            except FileNotFoundError:
+                results["ffmpeg_capture"] = "❌ ffmpeg NOT FOUND"
+                all_ok = False
+            except Exception as e:
+                results["ffmpeg_capture"] = f"❌ ERROR: {e}"
+                all_ok = False
+        
+        for key, val in results.items():
+            if key.startswith("camera") or key.startswith("ffmpeg"):
+                print(f"   {key}: {val}")
+    
+    # --- OLLAMA CHECK ---
+    if check_type in ("ollama", "camera", "all"):
+        print("\n🤖 Ollama / LLM Check:")
+        
+        ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+        model = config.get("SQ_MODEL", "llava:7b")
+        
+        results["ollama_url"] = ollama_url
+        results["model"] = model
+        
+        try:
+            import requests
+            
+            # Test connection
+            resp = requests.get(f"{ollama_url}/api/tags", timeout=5)
+            if resp.ok:
+                tags = resp.json()
+                models = [m.get("name", "") for m in tags.get("models", [])]
+                results["ollama_connection"] = "✅ OK"
+                
+                # Check if model is available
+                if any(model in m for m in models):
+                    results["model_available"] = f"✅ {model} found"
+                else:
+                    results["model_available"] = f"⚠️  {model} not found. Available: {', '.join(models[:3])}"
+            else:
+                results["ollama_connection"] = f"❌ HTTP {resp.status_code}"
+                all_ok = False
+        except requests.exceptions.ConnectionError:
+            results["ollama_connection"] = "❌ CONNECTION REFUSED"
+            all_ok = False
+        except requests.exceptions.Timeout:
+            results["ollama_connection"] = "❌ TIMEOUT"
+            all_ok = False
+        except Exception as e:
+            results["ollama_connection"] = f"❌ ERROR: {e}"
+            all_ok = False
+        
+        for key, val in results.items():
+            if key.startswith("ollama") or key.startswith("model"):
+                print(f"   {key}: {val}")
+    
+    # --- TTS CHECK ---
+    if check_type in ("tts", "all"):
+        print("\n🔊 TTS / Voice Check:")
+        
+        tts_engine = config.get("SQ_TTS_ENGINE", "auto")
+        tts_voice = config.get("SQ_TTS_VOICE", "")
+        tts_rate = config.get("SQ_TTS_RATE", "150")
+        
+        results["tts_engine"] = tts_engine
+        results["tts_voice"] = tts_voice or "(default)"
+        results["tts_rate"] = tts_rate
+        
+        # Try to speak a test message
+        test_text = "Streamware TTS test"
+        tts_ok = False
+        engine_used = None
+        
+        # Try pyttsx3
+        if tts_engine in ("auto", "pyttsx3"):
+            try:
+                import pyttsx3
+                engine = pyttsx3.init()
+                engine.say(test_text)
+                engine.runAndWait()
+                tts_ok = True
+                engine_used = "pyttsx3"
+            except Exception as e:
+                pass
+        
+        # Try espeak
+        if not tts_ok and tts_engine in ("auto", "espeak"):
+            try:
+                result = subprocess.run(["espeak", test_text], capture_output=True, timeout=5)
+                if result.returncode == 0:
+                    tts_ok = True
+                    engine_used = "espeak"
+            except Exception:
+                pass
+        
+        # Try pico2wave + aplay (pico)
+        if not tts_ok and tts_engine in ("auto", "pico"):
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
+                    temp_wav = tf.name
+                result = subprocess.run(["pico2wave", "-w", temp_wav, test_text], capture_output=True, timeout=5)
+                if result.returncode == 0:
+                    subprocess.run(["aplay", temp_wav], capture_output=True, timeout=5)
+                    tts_ok = True
+                    engine_used = "pico"
+                import os
+                os.unlink(temp_wav)
+            except Exception:
+                pass
+        
+        # Try macOS say
+        if not tts_ok and tts_engine in ("auto", "say"):
+            try:
+                result = subprocess.run(["say", test_text], capture_output=True, timeout=5)
+                if result.returncode == 0:
+                    tts_ok = True
+                    engine_used = "say"
+            except Exception:
+                pass
+        
+        if tts_ok:
+            results["tts_test"] = f"✅ OK (using {engine_used})"
+        else:
+            results["tts_test"] = "❌ NO WORKING TTS ENGINE"
+            all_ok = False
+        
+        for key, val in results.items():
+            if key.startswith("tts"):
+                print(f"   {key}: {val}")
+    
+    # --- SUMMARY ---
+    print("\n" + "=" * 50)
+    if all_ok:
+        print("✅ All checks passed!")
+    else:
+        print("⚠️  Some checks failed. Review output above.")
+    print()
+    
+    return 0 if all_ok else 1
 
 
 if __name__ == "__main__":

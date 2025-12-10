@@ -98,6 +98,47 @@ streamware --setup tts
 
 The setup will detect available LLM providers (Ollama, OpenAI, Anthropic), configure models, and write configuration to your `.env` file.
 
+### 🔍 Diagnostics
+
+Verify your setup with built-in diagnostic checks:
+
+```bash
+# Check camera/RTSP connectivity + Ollama
+streamware --check camera "rtsp://admin:pass@192.168.1.100:554/stream"
+
+# Check TTS engine (will speak a test message)
+streamware --check tts
+
+# Check Ollama connection and model availability
+streamware --check ollama
+
+# Run all checks
+streamware --check all "rtsp://camera/live"
+```
+
+Example output:
+```
+🔍 Streamware Diagnostics
+==================================================
+
+📷 Camera / RTSP Check:
+   camera_url: rtsp://admin:pass@192.168.1.100:554/stream
+   ffmpeg_capture: ✅ OK (45231 bytes)
+
+🤖 Ollama / LLM Check:
+   ollama_url: http://localhost:11434
+   model: llava:7b
+   ollama_connection: ✅ OK
+   model_available: ✅ llava:7b found
+
+🔊 TTS / Voice Check:
+   tts_engine: auto
+   tts_test: ✅ OK (using espeak)
+
+==================================================
+✅ All checks passed!
+```
+
 ### System Dependencies (optional but recommended)
 
 ```bash
@@ -219,6 +260,54 @@ sq media describe_video --file video.mp4
 sq media transcribe --file audio.mp3
 ```
 
+### ⚡ Image Optimization for LLM
+
+Streamware automatically optimizes images before sending to vision LLMs to reduce latency and API costs:
+
+| Preset | Max Size | Quality | Colors | Use Case |
+|--------|----------|---------|--------|----------|
+| `fast` | 384px | 55% | 32 | Real-time monitoring, low latency |
+| `balanced` | 512px | 65% | full | Default, good quality/speed balance |
+| `quality` | 768px | 75% | full | Detailed analysis, accuracy priority |
+| `minimal` | 256px | 50% | 16+grayscale | Extreme speed, basic detection |
+
+Configure in `.env`:
+
+```ini
+# Use preset
+SQ_IMAGE_PRESET=fast
+
+# Or custom settings
+SQ_IMAGE_MAX_SIZE=512      # max dimension in pixels
+SQ_IMAGE_QUALITY=65        # JPEG quality 1-100
+SQ_IMAGE_POSTERIZE=0       # 0=off, 8-256=reduce colors
+SQ_IMAGE_GRAYSCALE=false   # convert to grayscale
+```
+
+**Optimization pipeline:**
+1. **Crop to motion region** – only send changed area to LLM
+2. **Downscale** – reduce to max 384-768px (configurable)
+3. **JPEG compression** – quality 55-75% (minimal visual loss)
+4. **Optional posterization** – reduce colors for faster processing
+5. **Sharpening** – preserve edges after downscaling
+
+### 📊 Logging & Reports
+
+```bash
+# Real-time logs in terminal
+sq live narrator --url "rtsp://..." --mode diff --tts
+
+# Save to file while watching
+sq live narrator --url "rtsp://..." --mode diff 2>&1 | tee live.log
+
+# Generate Markdown summary after run
+sq watch --url "rtsp://..." --detect person --log md
+# -> watch_log.md
+
+sq live narrator --url "rtsp://..." --log md --file logs/live.md
+# -> logs/live.md
+```
+
 ### 🔄 Data Pipelines
 
 ```bash
@@ -231,6 +320,32 @@ sq file read data.csv | sq transform --csv --json | sq file save data.json
 # PostgreSQL
 sq postgres "SELECT * FROM users" --json
 ```
+
+### 📝 Custom Prompts
+
+All LLM prompts are stored in `streamware/prompts/*.txt` and can be customized:
+
+```bash
+# List available prompts
+ls streamware/prompts/
+# stream_diff.txt, trigger_check.txt, motion_region.txt, ...
+
+# Edit a prompt
+nano streamware/prompts/stream_diff.txt
+```
+
+Override via environment:
+```bash
+export SQ_PROMPT_STREAM_DIFF="Your custom prompt template with {variables}..."
+```
+
+Available prompts:
+- `stream_diff` – frame comparison for sq stream
+- `stream_focus` – focused object detection
+- `trigger_check` – trigger condition checking
+- `motion_region` – motion region analysis
+- `tracking_detect` – object tracking
+- `live_narrator_*` – live narration modes
 
 ---
 

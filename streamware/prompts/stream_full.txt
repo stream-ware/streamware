@@ -1,0 +1,11 @@
+Analyze this security camera frame:
+{focus_prompt}
+
+Report:
+1. PEOPLE: Count, positions, actions (sitting/standing/walking/running)
+2. OBJECTS: Vehicles, packages, animals visible
+3. ACTIVITY: What is happening right now
+4. ANOMALY: Anything unusual or suspicious
+
+Be concise and specific. Use counts and positions.
+{custom_prompt}

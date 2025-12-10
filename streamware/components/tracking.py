@@ -409,27 +409,13 @@ class TrackingComponent(Component):
         """Analyze frame for objects"""
         timestamp = time.strftime("%H:%M:%S")
         
+        from ..prompts import render_prompt
+        
         objects_str = ", ".join(self.objects)
         if focus_target:
             objects_str = focus_target
         
-        prompt = f"""Analyze this security camera frame for object detection and tracking.
-
-DETECT: {objects_str}
-
-For EACH detected object, provide:
-1. TYPE: person/vehicle/animal/etc.
-2. POSITION: approximate x,y coordinates (0-100 scale, top-left origin)
-3. DESCRIPTION: brief identifying features (clothing, color, size)
-4. ACTION: what they are doing (walking, standing, sitting, moving left/right)
-
-FORMAT your response as:
-OBJECT 1: [type] at position ([x],[y]) - [description] - [action]
-OBJECT 2: [type] at position ([x],[y]) - [description] - [action]
-...
-
-If no objects detected, say "NO OBJECTS DETECTED"
-Count the total number of each object type."""
+        prompt = render_prompt("tracking_detect", objects=objects_str)
 
         description = self._call_vision_model(frame_path, prompt)
         
@@ -569,13 +555,13 @@ Count the total number of each object type."""
         return summary
     
     def _call_vision_model(self, image_path: Path, prompt: str) -> str:
-        """Call vision model for analysis"""
+        """Call vision model for analysis with optimized image"""
         try:
             import requests
-            import base64
             
-            with open(image_path, "rb") as f:
-                image_data = base64.b64encode(f.read()).decode()
+            # Optimize image before sending to LLM
+            from ..image_optimize import prepare_image_for_llm_base64
+            image_data = prepare_image_for_llm_base64(image_path, preset="balanced")
             
             ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
             timeout = int(config.get("SQ_LLM_TIMEOUT", "60"))

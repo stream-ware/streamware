@@ -1,0 +1,10 @@
+Based on these detected changes in a video, write a brief summary of what happens:
+
+{changes_text}
+
+Create a coherent narrative that:
+1. Identifies the main subject/action
+2. Describes the progression of events
+3. Notes any significant changes
+
+Keep summary under 100 words.

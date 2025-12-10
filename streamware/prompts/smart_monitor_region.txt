@@ -1,0 +1,12 @@
+Analyze this cropped region from a security camera.
+This region showed {change_percent}% pixel change from previous frame.
+
+Focus: {focus}
+
+RESPONSE FORMAT:
+DETECTED: <what you see>
+CONFIDENCE: HIGH|MEDIUM|LOW
+ACTION: <what is happening>
+ALERT_WORTHY: YES|NO
+
+Keep response under 30 words.

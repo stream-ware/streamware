@@ -87,18 +87,23 @@ class MotionDiffComponent(Component):
         
         self.source = uri.get_param("source", uri.get_param("url", ""))
         
-        # Diff sensitivity (0-100, lower = more sensitive)
-        self.threshold = int(uri.get_param("threshold", "25"))
+        # Use config defaults if not specified in URI
+        threshold_default = config.get("SQ_MOTION_THRESHOLD", "25")
+        min_region_default = config.get("SQ_MIN_REGION", "500")
+        scale_default = config.get("SQ_FRAME_SCALE", "0.3")
         
-        # Minimum region size to report (pixels) - lowered for better sensitivity
-        self.min_region = int(uri.get_param("min_region", "100"))
+        # Diff sensitivity (0-100, lower = more sensitive)
+        self.threshold = int(uri.get_param("threshold", threshold_default))
+        
+        # Minimum region size to report (pixels)
+        self.min_region = int(uri.get_param("min_region", min_region_default))
         
         # Grid size for region detection
         self.grid_size = int(uri.get_param("grid", "8"))  # 8x8 grid
         
         # Optional downscaling factor for diff analysis (0 < scale <= 1)
         try:
-            self.scale = float(uri.get_param("scale", "0.3"))
+            self.scale = float(uri.get_param("scale", scale_default))
         except ValueError:
             self.scale = 0.3
         if self.scale <= 0 or self.scale > 1:
@@ -531,17 +536,9 @@ class MotionDiffComponent(Component):
             region_path = self._temp_dir / f"region_{region.x}_{region.y}.jpg"
             cropped.save(region_path, quality=90)
             
-            # Analyze with LLM
-            prompt = f"""Analyze this cropped region from a security camera.
-Focus on: {self.focus}
-
-This region showed pixel changes. Describe SPECIFICALLY what you see:
-1. What object/person is in this region?
-2. What is their current pose/position?
-3. What action are they doing (e.g., sitting, standing, raising hands, walking)?
-
-Be very specific about body position and movement.
-If it's a person, describe: head position, arm position, body orientation."""
+            # Analyze with LLM using external prompt
+            from ..prompts import render_prompt
+            prompt = render_prompt("motion_region", focus=self.focus)
             
             return self._call_vision_model(region_path, prompt)
             
@@ -565,12 +562,15 @@ If it's a person, describe: head position, arm position, body orientation."""
         return " | ".join(summaries)
     
     def _call_vision_model(self, image_path: Path, prompt: str) -> str:
-        """Call vision model for analysis"""
+        """Call vision model for analysis with optimized image"""
         try:
             import requests
             
-            with open(image_path, "rb") as f:
-                image_data = base64.b64encode(f.read()).decode()
+            # Optimize image before sending to LLM
+            from ..image_optimize import prepare_image_for_llm_base64
+            
+            # Use fast preset for motion analysis (already cropped to region)
+            image_data = prepare_image_for_llm_base64(image_path, preset="fast")
             
             ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
             timeout = int(config.get("SQ_LLM_TIMEOUT", "60"))

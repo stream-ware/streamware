@@ -1,0 +1,11 @@
+Analyze this video frame in detail:
+
+1. SUBJECTS: Who/what is visible? Describe appearance, position, actions.
+2. SETTING: Where is this? Describe environment, lighting, colors.
+3. OBJECTS: List all visible objects and their positions.
+4. MOOD: What is the overall tone/atmosphere?
+5. ACTION: What is happening in this moment?
+
+Timestamp: {timestamp}
+
+Be thorough but concise. Use bullet points.

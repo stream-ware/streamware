@@ -348,6 +348,8 @@ class StreamComponent(Component):
     
     def _analyze_frame(self, frame_path: Path, frame_num: int, prev_description: str = None) -> Dict:
         """Analyze frame with AI"""
+        from ..prompts import render_prompt
+        
         timestamp = time.strftime("%H:%M:%S")
         
         # Build focus-specific prompt
@@ -356,41 +358,29 @@ class StreamComponent(Component):
         
         if self.mode == "diff" and prev_description:
             # Diff mode - detect changes with focus
-            prompt = f"""You are a security camera AI analyzing video frames for changes.
-{focus_prompt}
-
-PREVIOUS STATE: {prev_description[:400]}
-
-CURRENT FRAME: Analyze and compare.
-
-DETECTION RULES ({self.sensitivity} sensitivity):
-{sensitivity_guide}
-
-RESPOND IN THIS FORMAT:
-- If {self._focus_target()} detected: "ALERT: [what happened]"
-- If minor background changes only: "No significant changes."
-- Be SPECIFIC about positions, counts, and actions.
-
-{self.prompt}"""
+            prompt = render_prompt(
+                "stream_diff",
+                focus_prompt=focus_prompt,
+                prev_description=prev_description[:400],
+                sensitivity=self.sensitivity,
+                sensitivity_guide=sensitivity_guide,
+                custom_prompt=self.prompt or ""
+            )
         elif self.mode == "stream":
             # Stream mode - detailed analysis
-            prompt = f"""Analyze this security camera frame:
-{focus_prompt}
-
-Report:
-1. PEOPLE: Count, positions, actions (sitting/standing/walking/running)
-2. OBJECTS: Vehicles, packages, animals visible
-3. ACTIVITY: What is happening right now
-4. ANOMALY: Anything unusual or suspicious
-
-Be concise and specific. Use counts and positions.
-{self.prompt}"""
+            prompt = render_prompt(
+                "stream_full",
+                focus_prompt=focus_prompt,
+                custom_prompt=self.prompt or ""
+            )
         else:
             # Full mode - general description with focus
             if self.focus:
-                prompt = f"""Describe this frame focusing on: {self.focus}
-Count and locate all instances. Describe their actions.
-{self.prompt}"""
+                prompt = render_prompt(
+                    "stream_focus",
+                    focus=self.focus,
+                    custom_prompt=self.prompt or ""
+                )
             else:
                 prompt = f"Describe what you see in this frame. {self.prompt}"
         
@@ -508,13 +498,16 @@ Count and locate all instances. Describe their actions.
         return f"activity ({', '.join(focuses)})"
     
     def _call_llava(self, image_path: Path, prompt: str) -> str:
-        """Call LLaVA for image analysis"""
+        """Call LLaVA for image analysis with optimized image"""
         try:
             import requests
-            import base64
             
-            with open(image_path, "rb") as f:
-                image_data = base64.b64encode(f.read()).decode()
+            # Optimize image before sending to LLM
+            from ..image_optimize import prepare_image_for_llm_base64
+            
+            # Use "fast" preset for real-time analysis, "balanced" for quality
+            preset = "fast" if self.sensitivity == "low" else "balanced"
+            image_data = prepare_image_for_llm_base64(image_path, preset=preset)
             
             ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
             timeout = int(config.get("SQ_LLM_TIMEOUT", "60"))

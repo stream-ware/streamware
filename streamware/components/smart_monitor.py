@@ -566,22 +566,17 @@ class SmartMonitorComponent(Component):
         """Call AI model to analyze region"""
         try:
             import requests
+            from ..prompts import render_prompt
+            from ..image_optimize import prepare_image_for_llm_base64
             
-            with open(region_path, "rb") as f:
-                image_data = base64.b64encode(f.read()).decode()
+            # Optimize image before sending
+            image_data = prepare_image_for_llm_base64(region_path, preset="fast")
             
-            prompt = f"""Analyze this cropped region from a security camera.
-This region showed {region['change_percent']}% pixel change from previous frame.
-
-Focus: {self.focus}
-
-Describe SPECIFICALLY:
-1. What object/person is visible?
-2. Their exact pose/position (head, arms, body orientation)?
-3. What action are they doing RIGHT NOW?
-4. Any movement direction?
-
-Be precise about body positions. This is for motion change detection."""
+            prompt = render_prompt(
+                "smart_monitor_region",
+                change_percent=region['change_percent'],
+                focus=self.focus
+            )
 
             ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
             

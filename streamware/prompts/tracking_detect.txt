@@ -1,0 +1,17 @@
+Analyze this security camera frame for object detection and tracking.
+
+DETECT: {objects}
+
+For EACH detected object, report:
+- Type (person/vehicle/animal/etc)
+- Position in frame (left/center/right, top/middle/bottom)
+- Size estimate (small/medium/large relative to frame)
+- Action/state (standing/walking/moving/parked)
+- Direction of movement if moving (left/right/toward/away)
+
+RESPONSE FORMAT:
+OBJECT_1: type=person, pos=center-bottom, size=medium, state=walking, direction=right
+OBJECT_2: type=vehicle, pos=left-top, size=large, state=parked, direction=none
+
+If no {objects} detected, say "NO OBJECTS DETECTED"
+Count the total number of each object type.

@@ -1,0 +1,16 @@
+Convert this task to automation actions:
+
+Task: {task}
+
+Available actions:
+- click(x, y) - click at coordinates
+- type(text) - type text
+- press(key) - press key (enter, tab, escape, etc)
+- hotkey(keys) - press key combination (ctrl+s, alt+f4, etc)
+- wait(seconds) - wait for N seconds
+- screenshot(path) - take screenshot
+
+Return a JSON list of actions:
+[{{"action": "click", "x": 100, "y": 200}}, {{"action": "type", "text": "hello"}}]
+
+Only return valid JSON, no explanation.

@@ -1,0 +1,12 @@
+Given this list of network devices:
+
+{devices_json}
+
+I'm looking for: {query}
+
+Recommend the most likely matching devices. For each recommendation explain:
+1. Why this device matches
+2. How confident you are (high/medium/low)
+3. Suggested next steps
+
+If no good matches, suggest alternative approaches.

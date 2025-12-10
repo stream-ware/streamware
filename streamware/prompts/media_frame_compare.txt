@@ -1,0 +1,12 @@
+Compare this frame with the previous description and identify CHANGES:
+
+PREVIOUS: {prev_description}
+
+Report ONLY what is DIFFERENT:
+- New elements that appeared
+- Elements that disappeared
+- Position changes
+- Action changes
+- Lighting/mood changes
+
+If nothing significant changed, say "SAME AS PREVIOUS"

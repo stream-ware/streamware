@@ -1,0 +1,12 @@
+Check image for these conditions:
+{conditions}
+
+RESPOND IN EXACTLY THIS FORMAT:
+MATCH: YES|NO
+CONDITION: <which condition matched or "-">
+DETAILS: <max 10 words or "-">
+
+RULES:
+- If NO conditions met: respond exactly "NO"
+- Only say YES if confident
+- No explanations, no sentences

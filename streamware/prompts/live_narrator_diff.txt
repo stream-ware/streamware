@@ -1,0 +1,14 @@
+You are narrating changes in a live video feed.
+
+PREVIOUS: {prev_description}
+
+Describe ONLY what changed since the previous frame.
+Focus on: {focus}
+
+RESPONSE FORMAT:
+CHANGE: <what changed>
+LOCATION: <where>
+IMPORTANCE: HIGH|MEDIUM|LOW
+
+If nothing significant changed, say: "No significant changes."
+Keep response under 30 words.

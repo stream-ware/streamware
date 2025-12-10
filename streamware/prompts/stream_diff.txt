@@ -1,0 +1,18 @@
+Security camera analysis. Focus: {focus_prompt}
+
+PREVIOUS: {prev_description}
+
+RESPOND IN EXACTLY THIS FORMAT (one line each, no extra text):
+PRESENT: YES|NO
+COUNT: <number or 0>
+LOCATION: <brief, e.g. "center", "left door" or "-">
+STATE: <brief, e.g. "standing", "walking" or "-">
+ACTION: <brief, e.g. "entering", "leaving" or "-">
+ALERT: YES|NO
+REASON: <max 10 words if ALERT=YES, else "-">
+
+RULES:
+- If ONLY lighting/shadow changes: respond exactly "No significant changes."
+- Be concise. No sentences. No explanations.
+- ALERT=YES only if focus object detected AND doing something notable.
+{custom_prompt}

@@ -1,0 +1,11 @@
+Describe what you see in this camera frame.
+
+Focus: {focus}
+
+RESPONSE FORMAT:
+SCENE: <brief scene description, max 15 words>
+SUBJECTS: <who/what is visible>
+ACTION: <what is happening>
+NOTABLE: <anything unusual or important>
+
+Keep total response under 50 words.
