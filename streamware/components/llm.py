@@ -118,7 +118,20 @@ class LLMComponent(Component):
         self.operation = uri.operation or "generate"
         
         # Parse provider in LiteLLM format: "provider/model" or just "provider"
-        provider_param = uri.get_param("provider", os.environ.get("LLM_PROVIDER", "openai/gpt-4o-mini"))
+        from ..config import config
+        default_provider = config.get("SQ_LLM_PROVIDER", "openai")
+        default_model = config.get("SQ_MODEL", "gpt-4o-mini")
+        
+        provider_param = uri.get_param("provider")
+        if not provider_param:
+            # Construct from config if not in URI
+            if default_provider == "openai" and default_model:
+                provider_param = f"openai/{default_model}"
+            elif default_provider == "ollama" and default_model:
+                provider_param = f"ollama/{default_model}"
+            else:
+                provider_param = f"{default_provider}/{default_model}"
+                
         self.provider, self.model = self._parse_provider(provider_param)
         
         # Override model if explicitly specified
@@ -131,7 +144,7 @@ class LLMComponent(Component):
         
         # Custom base URL (for proxies, local deployments)
         self.base_url = uri.get_param("base_url", os.environ.get(f"{self.provider.upper()}_BASE_URL"))
-        self.ollama_url = uri.get_param("ollama_url", os.environ.get("OLLAMA_URL", "http://localhost:11434"))
+        self.ollama_url = uri.get_param("ollama_url", config.get("SQ_OLLAMA_URL", "http://localhost:11434"))
         
         # Parameters
         self.prompt = uri.get_param("prompt")

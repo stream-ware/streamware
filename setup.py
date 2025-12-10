@@ -3,7 +3,7 @@
 Setup script for Streamware - backwards compatibility with pip < 21.3
 """
 
-from setuptools import setup
+from setuptools import setup, find_packages
 
 # Read the contents of README file
 from pathlib import Path
@@ -24,10 +24,7 @@ setup(
         "Source": "https://github.com/softreck/streamware",
         "Tracker": "https://github.com/softreck/streamware/issues",
     },
-    packages=[
-        "streamware",
-        "streamware.components",
-    ],
+    packages=find_packages(),
     python_requires=">=3.8",
     install_requires=[
         "aiohttp>=3.9.0",

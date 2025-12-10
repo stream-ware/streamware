@@ -33,6 +33,12 @@ class Pipeline:
         self._flow = None
         self._data = None
         
+    def configure(self, key: str, value: str) -> 'Pipeline':
+        """Set configuration value"""
+        from .config import config
+        config.set(key, value)
+        return self
+        
     # HTTP Methods
     def http_get(self, url: str, **params) -> 'Pipeline':
         """HTTP GET request"""
@@ -272,6 +278,18 @@ def http_get(url: str):
 # 4. SHORTCUTS - Quick Operations
 # ============================================================================
 
+def configure(**kwargs):
+    """
+    Set configuration values
+    
+    Example:
+        configure(SQ_MODEL="llama3", SQ_DEBUG="true")
+    """
+    from .config import config
+    for key, value in kwargs.items():
+        config.set(key, str(value))
+
+
 def quick(source: str) -> 'QuickPipeline':
     """
     Quick pipeline builder
@@ -447,6 +465,7 @@ __all__ = [
     'PipelineBuilder',
     
     # Functions
+    'configure',
     'compose',
     'quick',
     'read_file',

@@ -1,0 +1,59 @@
+# Dockerfile for testing clean installation
+FROM python:3.11-slim
+
+# Install system dependencies needed for building/runtime
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy source
+COPY . .
+
+# 1. Build the package (wheel)
+RUN pip install build && python -m build
+
+# 2. Simulate fresh install in a new directory/environment
+# We create a virtualenv to be sure
+RUN python -m venv /venv
+ENV PATH="/venv/bin:$PATH"
+
+# 3. Install from the built wheel
+RUN pip install dist/*.whl
+
+# 4. Verification steps
+# Check if CLI is available
+RUN streamware --version
+RUN sq --help
+
+# Check if setup command works (dry run or check imports)
+RUN python -c "from streamware.setup import run_setup; print('Setup module imported')"
+
+# Check if DSL works
+RUN python -c "from streamware.dsl import Pipeline; print('DSL imported')"
+
+
+# 2. Check setup
+RUN echo "Running non-interactive setup test..."
+# Simulate no keys/ollama
+RUN python -m streamware.setup
+# Set dummy key and verify detection
+RUN export OPENAI_API_KEY="sk-dummy" && python -m streamware.setup
+
+# 3. Functional tests
+RUN echo "Running functional tests..."
+# Create a dummy test file
+RUN echo '{"items": [1, 2, 3]}' > test_input.json
+
+# Test CLI pipeline
+RUN streamware "file://read?path=test_input.json" --pipe "transform://jsonpath?query=$.items[*]" --output test_output.txt
+RUN cat test_output.txt
+
+# Test DSL script
+RUN echo 'from streamware.dsl import quick; quick("file://read?path=test_input.json").save("dsl_output.json")' > test_script.py
+RUN python test_script.py
+RUN cat dsl_output.json
+
+CMD ["echo", "✅ Streamware installation and functional tests passed!"]

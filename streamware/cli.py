@@ -116,6 +116,12 @@ Examples:
     )
     
     parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Run auto-configuration wizard"
+    )
+    
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 0.1.0"
@@ -132,6 +138,11 @@ Examples:
         install_protocol_handler()
         return 0
         
+    if args.setup:
+        from .setup import run_setup
+        run_setup()
+        return 0
+
     if not args.uri:
         parser.print_help()
         return 1

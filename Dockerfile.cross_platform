@@ -1,0 +1,71 @@
+
+# -----------------------------------------------------------------------------
+# Ubuntu / Debian Test
+# -----------------------------------------------------------------------------
+FROM python:3.10-slim as ubuntu_test
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y \
+    git curl gcc build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY . .
+
+# Build and install
+RUN pip install build && python -m build
+RUN pip install dist/*.whl
+
+# 1. Test Setup with NO Ollama (expect failure/warning)
+RUN python -m streamware.setup
+
+# 2. Test Setup WITH Mock Ollama
+# Start mock server in background, run setup, verify config
+RUN nohup python3 tests/mock_ollama.py > /dev/null 2>&1 & \
+    sleep 2 && \
+    python -m streamware.setup && \
+    grep "SQ_LLM_PROVIDER=ollama" .env && \
+    grep "SQ_MODEL=llava:13b" .env && \
+    echo "✅ Ubuntu: Ollama detection passed"
+
+# -----------------------------------------------------------------------------
+# Fedora / RHEL Test
+# -----------------------------------------------------------------------------
+FROM fedora:39 as fedora_test
+
+RUN dnf install -y python3 python3-pip git gcc make && dnf clean all
+
+WORKDIR /app
+COPY . .
+
+# Build and install (ignore root warning)
+RUN pip3 install build && python3 -m build
+RUN pip3 install dist/*.whl --no-warn-script-location
+
+# Test with Mock Ollama
+RUN nohup python3 tests/mock_ollama.py > /dev/null 2>&1 & \
+    sleep 2 && \
+    python3 -m streamware.setup && \
+    grep "SQ_LLM_PROVIDER=ollama" .env && \
+    echo "✅ Fedora: Ollama detection passed"
+
+# -----------------------------------------------------------------------------
+# Alpine Test (Lightweight/Edge case)
+# -----------------------------------------------------------------------------
+FROM python:3.11-alpine as alpine_test
+
+# Install build deps for some packages (psutil, etc if needed)
+RUN apk add --no-cache git gcc musl-dev linux-headers curl
+
+WORKDIR /app
+COPY . .
+
+RUN pip install build && python -m build
+RUN pip install dist/*.whl
+
+# Test with Mock Ollama
+RUN nohup python3 tests/mock_ollama.py > /dev/null 2>&1 & \
+    sleep 2 && \
+    python -m streamware.setup && \
+    grep "SQ_LLM_PROVIDER=ollama" .env && \
+    echo "✅ Alpine: Ollama detection passed"

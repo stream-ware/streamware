@@ -82,6 +82,15 @@ pip install streamware[all]
 pip install streamware[llm,voice,automation]
 ```
 
+### 🛠️ Auto-Configuration
+
+After installation, run the setup wizard to automatically detect your environment (Ollama, API keys, etc.):
+
+```bash
+streamware --setup
+```
+This will detect available LLM providers (Ollama, OpenAI, Anthropic) and configure the best available models for you.
+
 ### System Dependencies (optional but recommended)
 
 ```bash
@@ -193,6 +202,10 @@ sq postgres "SELECT * FROM users" --json
 ### Simple Pipeline
 ```python
 from streamware import flow
+from streamware.dsl import configure
+
+# Configure environment (optional)
+configure(SQ_MODEL="llama3", SQ_DEBUG="true")
 
 # Basic data transformation pipeline
 result = (
@@ -200,6 +213,19 @@ result = (
     | "transform://jsonpath?query=$.items[*]"
     | "file://write?path=/tmp/output.json"
 ).run()
+```
+
+### Fluent DSL with Configuration
+```python
+from streamware.dsl import Pipeline
+
+# Configure and run in one chain
+Pipeline() \
+    .configure("SQ_MODEL", "gpt-4-vision") \
+    .http_get("https://api.example.com/data") \
+    .to_json() \
+    .save("output.json") \
+    .run()
 ```
 
 ### Streaming Pipeline
