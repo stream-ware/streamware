@@ -413,6 +413,8 @@ Shortcuts:
     live_parser.add_argument('--file', '-o', help='Save report to file (HTML or Markdown)')
     live_parser.add_argument('--log', choices=['md'], help='Generate Markdown log (md)')
     live_parser.add_argument('--frames-dir', help='Directory to save captured frames (e.g. ./frames)')
+    live_parser.add_argument('--lite', action='store_true', help='Lite mode: no images in memory (faster, less RAM)')
+    live_parser.add_argument('--quiet', '-q', action='store_true', help='Quiet mode: minimal output')
     
     # Global options
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
@@ -2663,8 +2665,8 @@ def _print_watch_yaml(result: dict, args):
                 # Show AI analysis if available
                 analyses = entry.get("region_analyses", [])
                 if analyses:
-                    desc = analyses[0].get("description", "")[:100]
-                    print(f"    description: \"{desc}...\"")
+                    desc = analyses[0].get("description", "")
+                    print(f"    description: \"{desc}\"")
 
 
 def _save_watch_report(result: dict, args):
@@ -2808,6 +2810,13 @@ def handle_live(args) -> int:
         print("  sq live narrator --url rtsp://192.168.1.100/stream")
         print("  sq live narrator --url /path/to/video.mp4")
         return 1
+    
+    # Check TTS if enabled
+    if getattr(args, 'tts', False):
+        from .setup_utils import ensure_tts_available
+        if not ensure_tts_available(interactive=True):
+            print("⚠️  TTS not available, continuing without voice output.")
+            args.tts = False
         
     mode = getattr(args, 'mode', 'full') or 'full'
     quiet = getattr(args, 'quiet', False)
@@ -3144,7 +3153,7 @@ def _print_live_yaml(result: dict, mode: str = "full"):
             for alert in alerts:
                 print(f"  - time: \"{alert.get('timestamp')}\"")
                 print(f"    frame: {alert.get('frame')}")
-                print(f"    description: \"{alert.get('description', '')[:150]}...\"")
+                print(f"    description: \"{alert.get('description', '')}\"")
     else:
         print(f"tts: {result.get('tts_enabled', False)}")
         print(f"duration: {result.get('duration', 0)}s")
@@ -3159,7 +3168,7 @@ def _print_live_yaml(result: dict, mode: str = "full"):
             for entry in history[-10:]:  # Last 10
                 triggered = "🔴 " if entry.get("triggered") else ""
                 print(f"  - time: \"{entry.get('timestamp', '')[:19]}\"")
-                print(f"    {triggered}description: \"{entry.get('description', '')[:100]}...\"")
+                print(f"    {triggered}description: \"{entry.get('description', '')}\"")
                 if entry.get("matches"):
                     print(f"    matches: {entry.get('matches')}")
 

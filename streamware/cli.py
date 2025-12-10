@@ -368,6 +368,13 @@ MimeType=x-scheme-handler/stream;
         print("You may need to run with sudo or manually configure the handler")
 
 
+def _update_env_file(key: str, value: str):
+    """Update or add a key in .env file."""
+    from .setup_utils import update_env_file
+    if update_env_file(key, value):
+        print(f"   Updated .env: {key}={value}")
+
+
 def run_diagnostics(check_type: str, url: str = None) -> int:
     """Run diagnostic checks for camera, TTS, or Ollama.
     
@@ -421,7 +428,8 @@ def run_diagnostics(check_type: str, url: str = None) -> int:
                     import os
                     size = os.path.getsize(temp_path)
                     results["ffmpeg_capture"] = f"✅ OK ({size} bytes)"
-                    os.unlink(temp_path)
+                    # Keep temp_path for vision test, will be cleaned up later
+                    results["_temp_frame"] = temp_path
                 else:
                     results["ffmpeg_capture"] = f"❌ FAILED (exit {result.returncode})"
                     all_ok = False
@@ -480,76 +488,84 @@ def run_diagnostics(check_type: str, url: str = None) -> int:
         for key, val in results.items():
             if key.startswith("ollama") or key.startswith("model"):
                 print(f"   {key}: {val}")
+        
+        # Test vision with captured frame (if available)
+        temp_frame = results.get("_temp_frame")
+        if temp_frame and results.get("ollama_connection", "").startswith("✅"):
+            print("\n👁️ Vision Test:")
+            try:
+                import base64
+                with open(temp_frame, "rb") as f:
+                    image_data = base64.b64encode(f.read()).decode()
+                
+                vision_prompt = "Is there a person visible? Answer only: YES or NO"
+                resp = requests.post(
+                    f"{ollama_url}/api/generate",
+                    json={
+                        "model": model,
+                        "prompt": vision_prompt,
+                        "images": [image_data],
+                        "stream": False
+                    },
+                    timeout=30
+                )
+                
+                if resp.ok:
+                    answer = resp.json().get("response", "")[:50]
+                    results["ollama_vision"] = f"✅ OK - {answer.strip()}"
+                else:
+                    results["ollama_vision"] = f"❌ HTTP {resp.status_code}"
+                    all_ok = False
+            except requests.exceptions.Timeout:
+                results["ollama_vision"] = "❌ TIMEOUT (vision model too slow)"
+                all_ok = False
+            except Exception as e:
+                results["ollama_vision"] = f"❌ ERROR: {e}"
+                all_ok = False
+            finally:
+                # Cleanup temp frame
+                try:
+                    import os
+                    os.unlink(temp_frame)
+                except Exception:
+                    pass
+            
+            print(f"   ollama_vision: {results.get('ollama_vision', 'N/A')}")
     
     # --- TTS CHECK ---
     if check_type in ("tts", "all"):
         print("\n🔊 TTS / Voice Check:")
         
+        from .setup_utils import check_tts_available, ensure_tts_available
+        
         tts_engine = config.get("SQ_TTS_ENGINE", "auto")
-        tts_voice = config.get("SQ_TTS_VOICE", "")
-        tts_rate = config.get("SQ_TTS_RATE", "150")
-        
         results["tts_engine"] = tts_engine
-        results["tts_voice"] = tts_voice or "(default)"
-        results["tts_rate"] = tts_rate
+        results["tts_voice"] = config.get("SQ_TTS_VOICE", "") or "(default)"
+        results["tts_rate"] = config.get("SQ_TTS_RATE", "150")
         
-        # Try to speak a test message
-        test_text = "Streamware TTS test"
-        tts_ok = False
-        engine_used = None
+        # Check and install if needed
+        available, engine_used = check_tts_available()
         
-        # Try pyttsx3
-        if tts_engine in ("auto", "pyttsx3"):
-            try:
-                import pyttsx3
-                engine = pyttsx3.init()
-                engine.say(test_text)
-                engine.runAndWait()
-                tts_ok = True
-                engine_used = "pyttsx3"
-            except Exception as e:
-                pass
-        
-        # Try espeak
-        if not tts_ok and tts_engine in ("auto", "espeak"):
-            try:
-                result = subprocess.run(["espeak", test_text], capture_output=True, timeout=5)
-                if result.returncode == 0:
-                    tts_ok = True
-                    engine_used = "espeak"
-            except Exception:
-                pass
-        
-        # Try pico2wave + aplay (pico)
-        if not tts_ok and tts_engine in ("auto", "pico"):
-            try:
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
-                    temp_wav = tf.name
-                result = subprocess.run(["pico2wave", "-w", temp_wav, test_text], capture_output=True, timeout=5)
-                if result.returncode == 0:
-                    subprocess.run(["aplay", temp_wav], capture_output=True, timeout=5)
-                    tts_ok = True
-                    engine_used = "pico"
-                import os
-                os.unlink(temp_wav)
-            except Exception:
-                pass
-        
-        # Try macOS say
-        if not tts_ok and tts_engine in ("auto", "say"):
-            try:
-                result = subprocess.run(["say", test_text], capture_output=True, timeout=5)
-                if result.returncode == 0:
-                    tts_ok = True
-                    engine_used = "say"
-            except Exception:
-                pass
-        
-        if tts_ok:
-            results["tts_test"] = f"✅ OK (using {engine_used})"
+        if available:
+            # Test speaking
+            from .tts import speak
+            success = speak("Streamware TTS test", block=True)
+            if success:
+                results["tts_test"] = f"✅ OK (using {engine_used})"
+            else:
+                results["tts_test"] = f"⚠️  {engine_used} found but failed"
+                all_ok = False
         else:
             results["tts_test"] = "❌ NO WORKING TTS ENGINE"
             all_ok = False
+            
+            # Offer to install
+            if ensure_tts_available(interactive=True):
+                available, engine_used = check_tts_available()
+                if available:
+                    results["tts_test"] = f"✅ {engine_used} installed"
+                    _update_env_file("SQ_TTS_ENGINE", engine_used)
+                    all_ok = True
         
         for key, val in results.items():
             if key.startswith("tts"):

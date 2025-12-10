@@ -1,11 +1,9 @@
-Describe what you see in this camera frame.
-
 Focus: {focus}
 
-RESPONSE FORMAT:
-SCENE: <brief scene description, max 15 words>
-SUBJECTS: <who/what is visible>
-ACTION: <what is happening>
-NOTABLE: <anything unusual or important>
+RESPOND EXACTLY (one line each):
+PRESENT: YES|NO
+SUBJECT: <person|vehicle|animal|object|none>
+LOCATION: <brief, e.g. center, by door>
+ACTION: <1-3 words, e.g. sitting, walking left>
 
-Keep total response under 50 words.
+NO sentences. NO explanations. Max 4 lines.

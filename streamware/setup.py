@@ -364,7 +364,9 @@ def run_setup(interactive: bool = True, mode: str = "balance"):
 
         tts_options = [
             {"id": "pyttsx3", "name": "pyttsx3 (cross-platform, recommended)"},
-            {"id": "espeak", "name": "espeak (Linux CLI)"},
+            {"id": "espeak", "name": "espeak (Linux CLI, lightweight)"},
+            {"id": "pico", "name": "pico (Linux, better quality) - apt install libttspico-utils"},
+            {"id": "festival", "name": "festival (Linux, full-featured) - apt install festival"},
             {"id": "say", "name": "say (macOS built-in)"},
             {"id": "powershell", "name": "PowerShell (Windows built-in)"},
             {"id": "auto", "name": "auto (let Streamware choose based on OS)"},
@@ -461,7 +463,9 @@ def run_setup_tts(interactive: bool = True):
 
         tts_options = [
             {"id": "pyttsx3", "name": "pyttsx3 (cross-platform, recommended)"},
-            {"id": "espeak", "name": "espeak (Linux CLI)"},
+            {"id": "espeak", "name": "espeak (Linux CLI, lightweight)"},
+            {"id": "pico", "name": "pico (Linux, better quality) - apt install libttspico-utils"},
+            {"id": "festival", "name": "festival (Linux, full-featured) - apt install festival"},
             {"id": "say", "name": "say (macOS built-in)"},
             {"id": "powershell", "name": "PowerShell (Windows built-in)"},
             {"id": "auto", "name": "auto (let Streamware choose based on OS)"},

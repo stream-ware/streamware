@@ -1,13 +1,10 @@
-Analyze this cropped region from a security camera.
-Focus on: {focus}
+Motion region analysis. Focus: {focus}
 
-This region showed pixel changes. Describe SPECIFICALLY what you see:
-
-RESPONSE FORMAT:
-OBJECT: <what is visible>
-POSITION: <where in frame>
-ACTION: <what it's doing>
+RESPOND IN EXACTLY THIS FORMAT:
+OBJECT: <type: person|vehicle|animal|other|none>
+PRESENT: YES|NO
+POSITION: <left|center|right>-<top|middle|bottom>
+ACTION: <1-3 words, e.g. "walking left", "standing">
 CONFIDENCE: HIGH|MEDIUM|LOW
 
-If it's a person, describe: head position, arm position, body orientation.
-Keep response under 50 words.
+No sentences. No explanations. Max 5 lines total.

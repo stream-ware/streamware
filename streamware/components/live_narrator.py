@@ -386,10 +386,11 @@ class LiveNarratorComponent(Component):
                 return val.lower() in ("true", "1", "yes")
             return default
         
-        # TTS settings
+        # TTS settings (use config defaults, can be overridden via URI)
         self.tts_enabled = str_to_bool(uri.get_param("tts", "false"))
-        self.tts_engine = uri.get_param("tts_engine", "espeak")
-        self.tts_rate = int(uri.get_param("tts_rate", "150"))
+        self.tts_engine = uri.get_param("tts_engine", config.get("SQ_TTS_ENGINE", "auto"))
+        self.tts_voice = uri.get_param("tts_voice", config.get("SQ_TTS_VOICE", ""))
+        self.tts_rate = int(uri.get_param("tts_rate", config.get("SQ_TTS_RATE", "150")))
         
         # Get defaults from config
         default_model = config.get("SQ_MODEL", "llava:7b")
@@ -537,11 +538,25 @@ class LiveNarratorComponent(Component):
                 frame_analysis, annotated_frame = self._frame_analyzer.analyze(frame_path)
                 self._last_analysis = frame_analysis
                 
-                # Skip if no motion and not first frame
-                if frame_num > 1 and not frame_analysis.get("has_motion", True):
+                motion_pct = frame_analysis.get("motion_percent", 0)
+                has_motion = frame_analysis.get("has_motion", True)
+                
+                # Skip LLM completely if no motion detected (save API calls)
+                if frame_num > 1 and not has_motion:
                     if not self.quiet:
-                        print(f"   Frame {frame_num}: No motion detected")
+                        ts = datetime.now().strftime("%H:%M:%S")
+                        print(f"⚪ [{ts}] No motion (skipping LLM)")
                     self._prev_frame = frame_path
+                    time.sleep(self.interval)
+                    continue
+                
+                # Very low motion - respond without LLM call
+                if motion_pct < 0.5 and frame_num > 1:
+                    description = "No significant motion"
+                    self._prev_frame = frame_path
+                    if not self.quiet:
+                        ts = datetime.now().strftime("%H:%M:%S")
+                        print(f"⚪ [{ts}] {description}")
                     time.sleep(self.interval)
                     continue
             else:
@@ -553,7 +568,7 @@ class LiveNarratorComponent(Component):
                         time.sleep(self.interval)
                         continue
             
-            # Get AI description with analysis context
+            # Get AI description with analysis context (only when motion detected)
             description = self._describe_frame_advanced(
                 annotated_frame or frame_path, 
                 frame_analysis
@@ -949,31 +964,20 @@ class LiveNarratorComponent(Component):
     def _describe_frame_advanced(self, frame_path: Path, analysis: Dict) -> str:
         """Get AI description with preprocessed analysis context"""
         try:
-            import requests
+            from ..llm_client import get_client
             
             # Crop to motion regions if available to focus LLM on changes
             crop_path = self._crop_to_motion_regions(frame_path, analysis or {})
-
-            # Optimize image before sending to LLM (use fast preset since already cropped)
-            from ..image_optimize import prepare_image_for_llm_base64
-            image_data = prepare_image_for_llm_base64(crop_path, preset="fast")
             
             # Build context-aware prompt
             prompt = self._build_advanced_prompt(analysis)
             
-            response = requests.post(
-                f"{self.ollama_url}/api/generate",
-                json={
-                    "model": self.model,
-                    "prompt": prompt,
-                    "images": [image_data],
-                    "stream": False
-                },
-                timeout=self.llm_timeout
-            )
+            # Use centralized LLM client
+            client = get_client()
+            result = client.analyze_image(crop_path, prompt, model=self.model)
             
-            if response.ok:
-                desc = response.json().get("response", "").strip()
+            if result.get("success"):
+                desc = result.get("response", "").strip()
                 self._prev_description = desc
                 return desc
             return ""
@@ -1064,43 +1068,19 @@ Be concise (2-3 sentences)."""
     
     def _build_full_prompt(self) -> str:
         """Build prompt for full description mode"""
-        focus_text = f"Focus on: {self.focus}. " if self.focus else ""
-        return f"""{focus_text}Describe what you see in this image concisely.
-Include:
-- People present and what they're doing
-- Objects and their positions
-- Any movement or activity
-- Anything unusual or notable
-
-Be specific and brief (2-3 sentences max)."""
+        from ..prompts import render_prompt
+        return render_prompt("live_narrator_full", focus=self.focus or "general scene")
 
     def _build_diff_prompt(self) -> str:
         """Build prompt for diff mode - only describe changes"""
-        focus_text = f"Focus on changes related to: {self.focus}. " if self.focus else ""
-        return f"""{focus_text}Previous scene: "{self._prev_description[:200]}"
-
-Describe ONLY what has CHANGED since the previous description.
-- If nothing changed, say "No changes"
-- If person moved, describe the movement
-- If new object appeared/disappeared, mention it
-- Ignore minor lighting changes
-
-Be very brief - only mention actual changes."""
+        from ..prompts import render_prompt
+        prev = self._prev_description[:150] if self._prev_description else "none"
+        return render_prompt("live_narrator_diff", focus=self.focus or "any", prev_description=prev)
 
     def _build_track_prompt(self) -> str:
         """Build prompt for tracking specific object (e.g., person)"""
-        prev_info = f' Previous: "{self._prev_description[:60]}"' if self._prev_description else ""
-        
-        if self.focus.lower() in ("person", "people", "human"):
-            return f"""Is there a person in this image? Look carefully at all areas including people sitting at desks.{prev_info}
-
-If YES: Describe where the person is and what they are doing.
-If NO: Say "No person visible"."""
-        else:
-            return f"""Is there {self.focus} in this image?{prev_info}
-
-If YES: describe location and state.
-If NO: say "No {self.focus} visible"."""
+        from ..prompts import render_prompt
+        return render_prompt("live_narrator_track", focus=self.focus)
     
     def _check_triggers_with_llm(self, frame_path: Path, analysis: Optional[Dict] = None) -> Optional[str]:
         """Check if any triggers match using LLM.
@@ -1172,29 +1152,10 @@ If NO: say "No {self.focus} visible"."""
         return len(matches) > 0, matches
     
     def _speak(self, text: str):
-        """Speak text using TTS"""
+        """Speak text using unified TTS module."""
         try:
-            # Clean text for TTS
-            text = text.replace('"', '').replace("'", "")
-            text = ' '.join(text.split())[:500]  # Limit length
-            
-            if self.tts_engine == "espeak":
-                cmd = ["espeak", "-s", str(self.tts_rate), text]
-            elif self.tts_engine == "pico":
-                cmd = ["pico2wave", "-w", "/tmp/tts.wav", text]
-                subprocess.run(cmd, capture_output=True, timeout=10)
-                cmd = ["aplay", "/tmp/tts.wav"]
-            elif self.tts_engine == "festival":
-                cmd = ["festival", "--tts"]
-                subprocess.run(cmd, input=text.encode(), capture_output=True, timeout=30)
-                return
-            else:
-                # Fallback to espeak
-                cmd = ["espeak", "-s", str(self.tts_rate), text]
-            
-            # Run async to not block
-            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            
+            from ..tts import speak
+            speak(text, engine=self.tts_engine, rate=self.tts_rate, voice=self.tts_voice)
         except Exception as e:
             logger.warning(f"TTS failed: {e}")
     

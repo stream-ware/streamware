@@ -1,12 +1,10 @@
-Track the specified object in this frame.
+Track: {focus}
 
-TRACKING: {focus}
-
-RESPONSE FORMAT:
+RESPOND EXACTLY (one line each, no extra text):
 VISIBLE: YES|NO
-LOCATION: <position in frame>
-STATE: <current state/action>
-MOVEMENT: <direction if moving, else "stationary">
+LOCATION: <e.g. center, left-bottom, door>
+STATE: <e.g. standing, walking, sitting>
+MOVEMENT: <e.g. toward camera, left, stationary>
 
-If {focus} not visible: say "Target not visible."
-Keep response under 25 words.
+If not visible: respond only "VISIBLE: NO"
+NO explanations. NO sentences. Max 4 lines total.
