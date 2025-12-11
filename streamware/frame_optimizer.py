@@ -53,10 +53,20 @@ class FrameStats:
 @dataclass
 class OptimizerConfig:
     """Configuration for frame optimizer."""
-    # Adaptive interval settings
+    # Adaptive interval settings (read from .env or use defaults)
     min_interval: float = 1.0      # Minimum interval (high activity)
     max_interval: float = 10.0     # Maximum interval (no activity)
     base_interval: float = 3.0     # Default interval
+    
+    @classmethod
+    def from_env(cls) -> "OptimizerConfig":
+        """Create config from environment variables."""
+        from .config import config
+        return cls(
+            min_interval=float(config.get("SQ_MIN_INTERVAL", "0.5")),
+            max_interval=float(config.get("SQ_MAX_INTERVAL", "3.0")),
+            base_interval=float(config.get("SQ_BASE_INTERVAL", "1.0")),
+        )
     
     # Motion thresholds
     high_motion_threshold: float = 10.0   # Above this = high activity
@@ -489,5 +499,8 @@ def get_optimizer(config: OptimizerConfig = None) -> FrameOptimizer:
     """Get or create frame optimizer."""
     global _optimizer
     if _optimizer is None or config is not None:
+        # Use from_env() to load settings from .env if no config provided
+        if config is None:
+            config = OptimizerConfig.from_env()
         _optimizer = FrameOptimizer(config)
     return _optimizer

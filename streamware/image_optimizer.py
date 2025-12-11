@@ -15,7 +15,7 @@ Usage:
 
 import logging
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 
 from .config import config
 

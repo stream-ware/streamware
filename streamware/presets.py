@@ -603,3 +603,214 @@ def security_watch(url: str, alert: str = "slack") -> Dict:
     from .core import flow
     params = build_uri_params(sensitivity="high", detect="intrusion", speed="fast", alert=alert)
     return flow(f"watch://stream?source={url}&{params}").run()
+
+
+# ============================================================================
+# MODE PRESETS - Complete configurations for different use cases
+# ============================================================================
+
+MODE_PRESETS: Dict[str, Dict[str, Any]] = {
+    # -------------------------------------------------------------------------
+    # TRACK MODE - Fast object tracking with movement detection
+    # Uses: YOLO for detection, ByteTrack for tracking, minimal LLM
+    # -------------------------------------------------------------------------
+    "track": {
+        "description": "Fast object tracking with position and movement",
+        "use_yolo": True,
+        "use_llm": False,           # YOLO handles detection, skip LLM when confident
+        "yolo_skip_threshold": 0.3,  # Lower = more YOLO, less LLM
+        "use_guarder": False,
+        "interval": 1.0,            # Fast response
+        "output": ["position", "direction", "entering", "exiting"],
+        "tts_messages": {
+            "detected": "{focus} detected",
+            "entering_left": "{focus} entering from left",
+            "entering_right": "{focus} entering from right",
+            "moving_left": "{focus} moving left",
+            "moving_right": "{focus} moving right",
+            "approaching": "{focus} approaching",
+            "moving_away": "{focus} moving away",
+            "exiting_left": "{focus} exiting left",
+            "exiting_right": "{focus} exiting right",
+            "left_frame": "{focus} left the frame",
+        },
+        "fps_target": 2.0,
+    },
+    
+    # -------------------------------------------------------------------------
+    # DESCRIBE MODE - Detailed scene description using LLM
+    # Uses: LLM (llava) for rich descriptions
+    # -------------------------------------------------------------------------
+    "describe": {
+        "description": "Detailed scene description using vision LLM",
+        "use_yolo": True,           # Pre-filter with YOLO
+        "use_llm": True,            # Always use LLM for descriptions
+        "yolo_skip_threshold": 1.0,  # Never skip LLM
+        "use_guarder": True,        # Filter verbose responses
+        "model": "llava:7b",        # Detailed model
+        "interval": 5.0,            # Slower, more detailed
+        "prompt_style": "detailed",
+        "output": ["scene", "objects", "activities", "atmosphere"],
+        "tts_messages": {
+            "scene": "Scene: {description}",
+        },
+        "fps_target": 0.2,
+    },
+    
+    # -------------------------------------------------------------------------
+    # SECURITY MODE - Alert on intrusions and suspicious activity
+    # Uses: YOLO + LLM for verification
+    # -------------------------------------------------------------------------
+    "security": {
+        "description": "Security monitoring with intrusion alerts",
+        "use_yolo": True,
+        "use_llm": True,            # LLM verifies YOLO detections
+        "yolo_skip_threshold": 0.7,  # Verify uncertain detections
+        "use_guarder": True,        # Filter false alarms
+        "model": "llava:7b",
+        "interval": 2.0,
+        "sensitivity": "high",
+        "triggers": ["person", "vehicle", "intrusion", "movement"],
+        "output": ["alert_level", "threat", "location"],
+        "tts_messages": {
+            "alert": "ALERT: {description}",
+            "person": "Person detected in restricted area",
+            "vehicle": "Vehicle approaching",
+            "clear": "Area clear",
+        },
+        "fps_target": 1.0,
+    },
+    
+    # -------------------------------------------------------------------------
+    # COUNT MODE - Count objects (people, vehicles, etc.)
+    # Uses: YOLO for accurate counting
+    # -------------------------------------------------------------------------
+    "count": {
+        "description": "Count objects in frame",
+        "use_yolo": True,
+        "use_llm": False,           # YOLO is accurate for counting
+        "yolo_skip_threshold": 0.2,
+        "use_guarder": False,
+        "interval": 2.0,
+        "output": ["count", "classes", "changes"],
+        "tts_messages": {
+            "count": "{count} {focus}s visible",
+            "increase": "{focus} count increased to {count}",
+            "decrease": "{focus} count decreased to {count}",
+            "none": "No {focus}s visible",
+        },
+        "fps_target": 1.0,
+    },
+    
+    # -------------------------------------------------------------------------
+    # ACTIVITY MODE - Describe what people are doing
+    # Uses: LLM for activity recognition
+    # -------------------------------------------------------------------------
+    "activity": {
+        "description": "Describe activities and actions",
+        "use_yolo": True,           # Detect people first
+        "use_llm": True,            # LLM describes activities
+        "yolo_skip_threshold": 0.8,  # Only call LLM when person detected
+        "use_guarder": True,
+        "model": "llava:7b",
+        "interval": 3.0,
+        "focus": "person",
+        "prompt_style": "activity",
+        "output": ["action", "posture", "interaction"],
+        "tts_messages": {
+            "activity": "{focus}: {action}",
+            "idle": "{focus} standing still",
+            "working": "{focus} working at desk",
+            "walking": "{focus} walking",
+            "running": "{focus} running",
+        },
+        "fps_target": 0.5,
+    },
+    
+    # -------------------------------------------------------------------------
+    # PATROL MODE - Periodic monitoring even without motion
+    # Uses: Periodic LLM checks
+    # -------------------------------------------------------------------------
+    "patrol": {
+        "description": "Periodic monitoring regardless of motion",
+        "use_yolo": True,
+        "use_llm": True,
+        "yolo_skip_threshold": 0.5,
+        "use_guarder": True,
+        "model": "llava:7b",
+        "interval": 10.0,           # Check every 10 seconds
+        "force_periodic": True,     # Check even without motion
+        "periodic_seconds": 10,
+        "output": ["status", "changes", "summary"],
+        "tts_messages": {
+            "patrol": "Patrol check: {status}",
+            "all_clear": "All clear",
+            "change": "Change detected: {description}",
+        },
+        "fps_target": 0.1,
+    },
+    
+    # -------------------------------------------------------------------------
+    # FAST MODE - Maximum speed, minimal processing
+    # Uses: YOLO only, no LLM
+    # -------------------------------------------------------------------------
+    "fast": {
+        "description": "Maximum speed detection without LLM",
+        "use_yolo": True,
+        "use_llm": False,
+        "yolo_skip_threshold": 0.0,  # Always use YOLO result
+        "use_guarder": False,
+        "interval": 0.5,
+        "output": ["detection", "confidence"],
+        "tts_messages": {
+            "detected": "{focus} detected",
+            "gone": "No {focus}",
+        },
+        "fps_target": 5.0,
+    },
+    
+    # -------------------------------------------------------------------------
+    # ACCURATE MODE - Maximum accuracy with LLM verification
+    # Uses: YOLO + LLM + Guarder
+    # -------------------------------------------------------------------------
+    "accurate": {
+        "description": "Maximum accuracy with LLM verification",
+        "use_yolo": True,
+        "use_llm": True,
+        "yolo_skip_threshold": 1.0,  # Always use LLM
+        "use_guarder": True,
+        "model": "llava:7b",
+        "interval": 5.0,
+        "output": ["detailed_description", "confidence", "verification"],
+        "tts_messages": {
+            "verified": "Verified: {description}",
+        },
+        "fps_target": 0.2,
+    },
+}
+
+
+def get_mode_preset(mode: str) -> Dict[str, Any]:
+    """Get configuration for a specific mode."""
+    return MODE_PRESETS.get(mode, MODE_PRESETS["track"])
+
+
+def get_mode_env_overrides(mode: str) -> Dict[str, str]:
+    """Get .env overrides for a mode."""
+    preset = get_mode_preset(mode)
+    return {
+        "SQ_YOLO_SKIP_LLM_THRESHOLD": str(preset.get("yolo_skip_threshold", 0.5)),
+        "SQ_USE_GUARDER": str(preset.get("use_guarder", False)).lower(),
+        "SQ_STREAM_INTERVAL": str(preset.get("interval", 2.0)),
+        "SQ_MODEL": preset.get("model", "llava:7b"),
+    }
+
+
+def list_modes() -> str:
+    """List all available modes with descriptions."""
+    lines = ["Available modes:\n"]
+    for name, preset in MODE_PRESETS.items():
+        fps = preset.get("fps_target", 1.0)
+        use_llm = "LLM" if preset.get("use_llm") else "YOLO only"
+        lines.append(f"  {name:12} - {preset['description']} ({use_llm}, ~{fps} FPS)")
+    return "\n".join(lines)

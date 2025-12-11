@@ -43,14 +43,15 @@ DEFAULTS = {
     
     # Stream Analysis
     "SQ_STREAM_MODE": "track",         # track mode for intelligent movement detection
-    "SQ_STREAM_INTERVAL": "2",         # 2 seconds between frames (faster for tracking)
-    "SQ_STREAM_DURATION": "30",        # 1 minute default
+    "SQ_STREAM_FPS": "1.0",            # Target FPS for detection (1 = 1 frame/sec)
+    # SQ_STREAM_INTERVAL is auto-calculated: 1/SQ_STREAM_FPS
+    "SQ_STREAM_DURATION": "30",        # 30 seconds default
     "SQ_STREAM_FOCUS": "person",       # default focus on person tracking
     "SQ_STREAM_FRAMES_DIR": "",
     "SQ_RAMDISK_PATH": "/dev/shm/streamware",
     "SQ_RAMDISK_ENABLED": "true",
     "SQ_RAMDISK_SIZE_MB": "512",
-    "SQ_CAPTURE_FPS": "0.5",
+    "SQ_CAPTURE_FPS": "2.0",           # Capture buffer FPS (should be > SQ_STREAM_FPS)
     "SQ_USE_CACHE": "true",
     
     # Detection Settings (descriptive)
@@ -73,10 +74,18 @@ DEFAULTS = {
     # Advanced Detection Thresholds
     "SQ_YOLO_CONFIDENCE_THRESHOLD": "0.15",     # YOLO detection confidence threshold (lower for better sensitivity)
     "SQ_YOLO_CONFIDENCE_THRESHOLD_HIGH": "0.3", # Higher threshold for reducing false positives
+    "SQ_YOLO_SKIP_LLM_THRESHOLD": "0.5",        # Skip LLM if YOLO confidence >= this (speeds up 10x)
+    "SQ_LLM_CACHE_TTL": "30",                  # Cache LLM descriptions per track_id (seconds)
     "SQ_HOG_CONFIDENCE_THRESHOLD": "0.85",      # HOG person detection confidence threshold
-    "SQ_TRACK_PERIODIC_INTERVAL": "2",          # Check every N frames in track mode (more frequent)
-    "SQ_TRACK_SKIP_INTERVAL": "3",              # Skip LLM check interval in track mode
-    "SQ_SKIP_INTERVAL": "5",                    # Skip LLM check interval in other modes
+    # Time-based intervals (auto-calculated from FPS)
+    # These define TIME in seconds, frames count is calculated from FPS
+    "SQ_PERIODIC_CHECK_SECONDS": "5",           # Force check every N seconds even without motion
+    "SQ_TRACK_PERIODIC_SECONDS": "2",           # Force check every N seconds in track mode
+    "SQ_SKIP_AFTER_NO_TARGET_SECONDS": "10",    # After no target, skip for N seconds
+    # Legacy frame-based (deprecated, use time-based above)
+    "SQ_TRACK_PERIODIC_INTERVAL": "2",          # [DEPRECATED] Check every N frames in track mode
+    "SQ_TRACK_SKIP_INTERVAL": "3",              # [DEPRECATED] Skip LLM check interval in track mode
+    "SQ_SKIP_INTERVAL": "5",                    # [DEPRECATED] Skip LLM check interval in other modes
     "SQ_CONSECUTIVE_NO_TARGET_SKIP": "5",       # Skip every Nth frame when no target detected
     
     # Motion Detection Parameters
@@ -151,6 +160,11 @@ DEFAULTS = {
     "SQ_TRACK_BUFFER": "90",               # Frames before deleting lost track (~3 sec at 30fps)
     "SQ_TRACK_ACTIVATION_THRESHOLD": "0.25", # Min confidence for new tracks
     "SQ_TRACK_MATCHING_THRESHOLD": "0.8",   # IoU threshold for track matching
+    
+    # Object Re-Identification (ReID)
+    "SQ_USE_REID": "false",                # Enable ReID for same object across frames
+    "SQ_REID_THRESHOLD": "0.4",            # Max feature distance for ReID matching
+    "SQ_REID_GALLERY_SIZE": "10",          # Feature gallery size per track
     
     # YOLO Detection (auto-installed on first use)
     "SQ_USE_YOLO": "true",           # Use YOLO for detection (faster, more accurate)
@@ -364,6 +378,22 @@ class Config:
     
     def get(self, key: str, default: Any = None) -> str:
         """Get configuration value"""
+        # Auto-calculate SQ_STREAM_INTERVAL from SQ_STREAM_FPS
+        if key == "SQ_STREAM_INTERVAL":
+            # Check if explicitly set first
+            explicit = self._config.get("SQ_STREAM_INTERVAL")
+            if explicit:
+                return explicit
+            # Calculate from FPS: interval = 1/FPS
+            fps_str = self._config.get("SQ_STREAM_FPS", DEFAULTS.get("SQ_STREAM_FPS", "1.0"))
+            try:
+                fps = float(fps_str)
+                if fps > 0:
+                    return str(1.0 / fps)
+            except ValueError:
+                pass
+            return default or "1.0"
+        
         return self._config.get(key, default or DEFAULTS.get(key, ""))
     
     def get_bool(self, key: str, default: bool = False) -> bool:

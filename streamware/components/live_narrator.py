@@ -437,8 +437,10 @@ class LiveNarratorComponent(Component):
         self.motion_mode = motion
         self.frames_mode = frames_mode
         
-        # Analysis settings (use preset or explicit values)
-        self.interval = float(uri.get_param("interval", str(preset["interval"])))
+        # Analysis settings (use preset or explicit values, config overrides preset)
+        config_interval = config.get("SQ_STREAM_INTERVAL")
+        default_interval = config_interval if config_interval else str(preset["interval"])
+        self.interval = float(uri.get_param("interval", default_interval))
         self.duration = int(uri.get_param("duration", default_duration))
         self.model = uri.get_param("model", default_model)
         self.focus = preset["focus"] if preset["focus"] != "general" else focus_param
@@ -513,8 +515,9 @@ class LiveNarratorComponent(Component):
         self._last_analysis = {}
         # Last spoken short summary for diff-only TTS mode
         self._last_tts_summary = ""
-        self._track_labels: Dict[int, Dict[str, Any]] = {}
+        self._track_labels: Dict[int, Dict[str, Any]] = {}  # {track_id: {label, last_summary, llm_description, llm_timestamp}}
         self._last_dsl_tts = ""
+        self._llm_cache_ttl = float(config.get("SQ_LLM_CACHE_TTL", "30"))  # Cache LLM descriptions per track_id
         
         # Movement tracking state (for smart track mode)
         self._position_history: List[Dict] = []  # [{x, y, timestamp, regions}]
@@ -917,12 +920,37 @@ class LiveNarratorComponent(Component):
             return object_type
         entry = self._track_labels.get(track_id)
         if entry is None:
-            entry = {"label": object_type or "object", "last_summary": "", "last_state": ""}
+            entry = {"label": object_type or "object", "last_summary": "", "last_state": "", 
+                     "llm_description": "", "llm_timestamp": 0}
             self._track_labels[track_id] = entry
         else:
             if object_type and object_type.lower() != entry["label"].lower():
                 entry["label"] = object_type
         return entry["label"]
+
+    def _get_cached_llm_description(self, track_id: int) -> Optional[str]:
+        """Get cached LLM description for a track_id if still valid."""
+        if track_id is None:
+            return None
+        entry = self._track_labels.get(track_id)
+        if entry and entry.get("llm_description"):
+            # Check if cache is still valid
+            age = time.time() - entry.get("llm_timestamp", 0)
+            if age < self._llm_cache_ttl:
+                logger.debug(f"Track #{track_id}: Using cached LLM description (age={age:.1f}s)")
+                return entry["llm_description"]
+        return None
+
+    def _cache_llm_description(self, track_id: int, description: str) -> None:
+        """Cache LLM description for a track_id."""
+        if track_id is None:
+            return
+        if track_id not in self._track_labels:
+            self._track_labels[track_id] = {"label": "object", "last_summary": "", "last_state": "",
+                                            "llm_description": "", "llm_timestamp": 0}
+        self._track_labels[track_id]["llm_description"] = description
+        self._track_labels[track_id]["llm_timestamp"] = time.time()
+        logger.debug(f"Track #{track_id}: Cached LLM description: {description[:50]}...")
 
     def _narrate_tracker_movement(self, movement_data: Dict) -> None:
         if not self.tts_enabled:
@@ -1231,13 +1259,19 @@ class LiveNarratorComponent(Component):
         next_frame_future = None
         
         # Initialize frame optimizer for intelligent processing
+        # Intervals are calculated from SQ_STREAM_FPS for consistency
+        stream_fps = float(config.get("SQ_STREAM_FPS", "1.0"))
+        base_interval = 1.0 / stream_fps if stream_fps > 0 else 1.0
+        min_interval = base_interval / 2  # Can go 2x faster when high motion
+        max_interval = base_interval      # Never slower than target FPS
+        
         opt_config = OptimizerConfig(
-            base_interval=self.interval,
-            min_interval=max(1.0, self.interval / 3),
-            max_interval=min(15.0, self.interval * 3),
+            base_interval=base_interval,
+            min_interval=min_interval,
+            max_interval=max_interval,
             use_local_detection=True,
             slow_processing_threshold=float(config.get("SQ_SLOW_PROCESSING_THRESHOLD", "1.0")),
-            throttle_interval=float(config.get("SQ_THROTTLE_INTERVAL", "5.0")),
+            throttle_interval=base_interval,
         )
         optimizer = get_optimizer(opt_config)
         
@@ -1610,6 +1644,36 @@ class LiveNarratorComponent(Component):
                         time.sleep(self.interval)
                         continue
             
+            # OPTIMIZATION: Skip LLM entirely if YOLO says no target for known classes
+            # YOLO can detect: person, car, bicycle, dog, cat, etc. (80 COCO classes)
+            yolo_known_classes = ["person", "car", "bicycle", "motorcycle", "bus", "truck", 
+                                  "dog", "cat", "bird", "horse", "sheep", "cow", "vehicle", "animal"]
+            focus_is_yolo_known = any(c in (self.focus or "").lower() for c in yolo_known_classes)
+            
+            if focus_is_yolo_known and detection and not detection.has_target and detection.detection_method in ("yolo", "yolo_animal"):
+                # YOLO confidently says no target - skip LLM
+                description = f"No {self.focus} visible"
+                if not self.quiet:
+                    ts = datetime.now().strftime("%H:%M:%S")
+                    print(f"⚪ [{ts}] YOLO: {description} (skipping LLM)", flush=True)
+                
+                tlog.log_decision(frame_num, "yolo_skip_llm", "skipped", 
+                                 f"YOLO says no {self.focus}, skipping LLM")
+                
+                # Still log and potentially speak
+                if self.tts_enabled and self.tts_mode == "diff":
+                    from ..response_filter import format_for_tts
+                    tts_text = format_for_tts(description)
+                    if tts_text and tts_text != getattr(self, '_last_tts_summary', ''):
+                        self._speak(tts_text)
+                        self._last_tts_summary = tts_text
+                
+                tlog.increment_frame_count(skipped=False)
+                tlog.end_frame(f"yolo_no_{self.focus}")
+                self._prev_frame = frame_path
+                time.sleep(current_interval)
+                continue
+            
             # Optimize image for LLM (reduces transfer time) - can run in parallel
             tlog.start("image_optimize")
             try:
@@ -1622,7 +1686,8 @@ class LiveNarratorComponent(Component):
                     return optimize_for_llm(
                         annotated_frame or frame_path,
                         max_size=optimal_size,
-                        quality=75
+                        quality=75,
+                        image_data=frame_data
                     )
                 
                 opt_future = parallel.submit_optimize(do_optimize)
@@ -1634,13 +1699,28 @@ class LiveNarratorComponent(Component):
                 
                 tlog.end("image_optimize", f"size={optimal_size}")
                 
-                # Check cache first (but disable in track mode - we need fresh descriptions)
+                # Check cache first
                 cache = get_description_cache()
                 
-                # Disable cache in track mode - movement changes need fresh analysis
-                use_cache = self.mode != "track"
+                # In track mode, use track_id based caching instead of file-based
+                # This allows reusing LLM descriptions for the same object
+                cached_desc = None
+                active_track_id = None
                 
-                cached_desc = cache.get(optimized_path) if use_cache else None
+                if self.mode == "track" and detection and detection.detections:
+                    # Get track_id from first detection (ByteTrack assigns IDs)
+                    first_det = detection.detections[0] if detection.detections else {}
+                    active_track_id = first_det.get("track_id") or first_det.get("id")
+                    
+                    if active_track_id:
+                        cached_desc = self._get_cached_llm_description(active_track_id)
+                        if cached_desc:
+                            tlog.log_decision(frame_num, "cache", "track_hit", 
+                                            f"Track #{active_track_id}: {cached_desc[:40]}")
+                
+                # Fall back to file-based cache for non-track mode
+                if not cached_desc and self.mode != "track":
+                    cached_desc = cache.get(optimized_path)
                 if cached_desc:
                     tlog.log_decision(frame_num, "cache", "hit", f"Using cached: {cached_desc[:40]}")
                     description = cached_desc
@@ -1687,9 +1767,14 @@ class LiveNarratorComponent(Component):
                         )
                         tlog.end("vision_llm", f"len={len(description) if description else 0}")
                     
-                    # Cache the result in background (but not in track mode)
-                    if description and use_cache:
-                        parallel.submit_optimize(lambda: cache.put(optimized_path, description))
+                    # Cache the result
+                    if description:
+                        # Track mode: cache per track_id for object reidentification
+                        if self.mode == "track" and active_track_id:
+                            self._cache_llm_description(active_track_id, description)
+                        else:
+                            # Non-track mode: use file-based cache
+                            parallel.submit_optimize(lambda: cache.put(optimized_path, description))
             except ImportError:
                 tlog.end("image_optimize", "skipped")
                 # Fallback without optimization
@@ -1735,6 +1820,18 @@ class LiveNarratorComponent(Component):
                     guarder_model=guarder_model,
                     tracking_data=tracking_data,
                 )
+                
+                # VALIDATION: If YOLO said no target but guarder says target present,
+                # trust YOLO over the guarder (prevent hallucinations)
+                yolo_has_target = detection.has_target if detection else False
+                guarder_says_target = short_description and self.focus.lower() in short_description.lower() and f"no {self.focus}" not in short_description.lower()
+                
+                if not yolo_has_target and guarder_says_target:
+                    # Guarder is hallucinating - override with "No target"
+                    logger.debug(f"Guarder hallucination detected: YOLO={yolo_has_target}, guarder='{short_description}'")
+                    short_description = f"No {self.focus} visible"
+                    is_worth_logging = False
+                
                 tlog.end("guarder_llm", short_description[:40] if short_description else "")
                 
                 # State change detection - always report person appeared/disappeared
@@ -1847,9 +1944,17 @@ class LiveNarratorComponent(Component):
                         print(f"📝 [{ts}]{analysis_info} {description}", flush=True)
                 
                 # Speak (TTS) only for significant events
-                # In track mode, always speak status updates (even "no person")
+                # In track mode, speak status updates - but respect diff mode
                 if self.mode == "track" and self.tts_enabled:
-                    should_speak = True
+                    if self.tts_mode == "diff":
+                        # Only speak when description changed
+                        tts_text_now = format_for_tts(description) if description else ""
+                        if tts_text_now and tts_text_now != getattr(self, '_last_tts_summary', ''):
+                            should_speak = True
+                        else:
+                            should_speak = False
+                    else:
+                        should_speak = True
                 else:
                     should_speak = should_notify(description, mode=self.mode) or triggered
                 tlog.start("tts_check")
@@ -1872,6 +1977,8 @@ class LiveNarratorComponent(Component):
                             tlog.end("tts_check", f"speak: {tts_text[:30]}")
                             tlog.log_decision(frame_num, "tts_speak", "spoken", tts_text[:50])
                             self._speak(tts_text)
+                            # Remember for diff mode
+                            self._last_tts_summary = tts_text
                         else:
                             tlog.end("tts_check", "no_tts_text")
                             tlog.log_decision(frame_num, "tts_format", "empty", "format_for_tts returned empty")

@@ -238,7 +238,19 @@ class SmartDetector:
         # Use lower threshold or more frequent periodic checks
         is_track_mode = self.focus == "person" and self.mode == "track"
         effective_threshold = self.motion_gate_threshold // 2 if is_track_mode else self.motion_gate_threshold
-        periodic_interval = int(config.get("SQ_TRACK_PERIODIC_INTERVAL", "2")) if is_track_mode else self.periodic_interval  # Check every N frames in track mode
+        
+        # Calculate periodic interval from FPS and time-based config
+        # FPS = frames per second, interval = seconds between frames
+        stream_interval = float(config.get("SQ_STREAM_INTERVAL", "2"))  # seconds between processing
+        fps = 1.0 / stream_interval if stream_interval > 0 else 1.0
+        
+        if is_track_mode:
+            periodic_seconds = float(config.get("SQ_TRACK_PERIODIC_SECONDS", "2"))
+        else:
+            periodic_seconds = float(config.get("SQ_PERIODIC_CHECK_SECONDS", "5"))
+        
+        # Convert time to frames: frames = time * fps
+        periodic_interval = max(1, int(periodic_seconds * fps))
         force_check = (self._frame_count % periodic_interval == 0)
         
         if (motion_area < effective_threshold and 
@@ -280,6 +292,19 @@ class SmartDetector:
                         
                         result.quick_summary = animal_result.get_detailed_summary()
                         logger.debug(f"Animal detected: {result.quick_summary} in {result.yolo_ms:.0f}ms")
+                        
+                        # OPTIMIZATION: Skip LLM if YOLO confidence is high enough
+                        yolo_skip_threshold = float(config.get("SQ_YOLO_SKIP_LLM_THRESHOLD", "0.5"))
+                        if result.confidence >= yolo_skip_threshold:
+                            # Only notify on state change (diff mode support)
+                            if not self._prev_summary or "detected" not in self._prev_summary.lower():
+                                result.should_notify = True  # New detection
+                                self._prev_summary = result.quick_summary
+                            else:
+                                result.should_notify = False  # Same state
+                            result.should_process_llm = False
+                            logger.debug(f"Animal YOLO confident ({result.confidence:.2f}), skipping LLM")
+                            return result
                     else:
                         self._consecutive_no_target += 1
                         if self._consecutive_no_target % int(config.get("SQ_CONSECUTIVE_NO_TARGET_SKIP", "5")) != 0:
@@ -302,23 +327,121 @@ class SmartDetector:
                         yolo_detected = True
                         self._consecutive_no_target = 0
                         
-                        # Build quick summary from YOLO detections
+                        # Build quick summary from YOLO detections with position info
                         class_counts = {}
+                        positions = []
                         for d in detections:
                             class_counts[d.class_name] = class_counts.get(d.class_name, 0) + 1
+                            # Calculate position in frame (left/center/right, near/far)
+                            center_x = d.x + d.w / 2
+                            center_y = d.y + d.h / 2
+                            # Assume normalized coords or frame ~1920x1080
+                            if d.x < 0.33 or d.x < 640:
+                                h_pos = "left"
+                            elif d.x > 0.66 or d.x > 1280:
+                                h_pos = "right"
+                            else:
+                                h_pos = "center"
+                            positions.append(h_pos)
                         
                         summary_parts = []
                         for cls, count in class_counts.items():
                             if count == 1:
-                                summary_parts.append(f"{cls.title()}")
+                                # Add position for single detection
+                                pos = positions[0] if positions else ""
+                                if pos and pos != "center":
+                                    summary_parts.append(f"{cls.title()} on {pos}")
+                                else:
+                                    summary_parts.append(f"{cls.title()}")
                             else:
                                 summary_parts.append(f"{count} {cls}s")
                         
                         result.quick_summary = ", ".join(summary_parts) + " detected"
+                        
+                        # Track movement direction based on position change
+                        prev_positions = getattr(self, '_prev_positions', {})
+                        prev_had_target = getattr(self, '_prev_had_target', False)
+                        
+                        for d in detections:
+                            det_id = f"{d.class_name}"
+                            curr_x = d.x + d.w / 2
+                            curr_y = d.y + d.h / 2
+                            
+                            # Check for entering/exiting (near edges)
+                            near_left_edge = d.x < 100
+                            near_right_edge = d.x + d.w > 1820  # Assume ~1920 width
+                            near_top = d.y < 100
+                            near_bottom = d.y + d.h > 980  # Assume ~1080 height
+                            
+                            if det_id in prev_positions:
+                                prev_x, prev_y = prev_positions[det_id]
+                                dx = curr_x - prev_x
+                                dy = curr_y - prev_y
+                                
+                                # Determine movement
+                                if abs(dx) > 30:  # Horizontal movement
+                                    if dx > 0:
+                                        if near_right_edge:
+                                            result.quick_summary = f"{d.class_name.title()} exiting right"
+                                        else:
+                                            result.quick_summary = f"{d.class_name.title()} moving right"
+                                    else:
+                                        if near_left_edge:
+                                            result.quick_summary = f"{d.class_name.title()} exiting left"
+                                        else:
+                                            result.quick_summary = f"{d.class_name.title()} moving left"
+                                elif abs(dy) > 30:  # Vertical movement
+                                    if dy > 0:
+                                        result.quick_summary = f"{d.class_name.title()} moving away"
+                                    else:
+                                        result.quick_summary = f"{d.class_name.title()} approaching"
+                            else:
+                                # New detection - check if entering
+                                if not prev_had_target:
+                                    if near_left_edge:
+                                        result.quick_summary = f"{d.class_name.title()} entering from left"
+                                    elif near_right_edge:
+                                        result.quick_summary = f"{d.class_name.title()} entering from right"
+                                    else:
+                                        result.quick_summary = f"{d.class_name.title()} detected"
+                            
+                            prev_positions[det_id] = (curr_x, curr_y)
+                        
+                        self._prev_positions = prev_positions
+                        self._prev_had_target = True
                         logger.debug(f"YOLO detected: {result.quick_summary} in {result.yolo_ms:.0f}ms")
+                        
+                        # OPTIMIZATION: Skip LLM if YOLO confidence is high enough
+                        yolo_skip_threshold = float(config.get("SQ_YOLO_SKIP_LLM_THRESHOLD", "0.5"))
+                        if result.confidence >= yolo_skip_threshold:
+                            # Notify when summary changes (position, movement, or new detection)
+                            summary_changed = result.quick_summary != self._prev_summary
+                            new_detection = not self._prev_summary or "no " in self._prev_summary.lower()
+                            
+                            if new_detection or summary_changed:
+                                result.should_notify = True  # New or changed state
+                            else:
+                                result.should_notify = False  # Same state - no TTS repeat
+                            
+                            self._prev_summary = result.quick_summary
+                            result.should_process_llm = False  # Don't need LLM - YOLO is confident
+                            logger.debug(f"YOLO confident ({result.confidence:.2f} >= {yolo_skip_threshold}), skipping LLM, notify={result.should_notify}, summary={result.quick_summary}")
+                            return result
                     else:
                         # YOLO found nothing
                         self._consecutive_no_target += 1
+                        
+                        # Notify when target disappears (was visible before)
+                        had_target = getattr(self, '_prev_had_target', False)
+                        if had_target:
+                            result.quick_summary = f"{self.focus.title()} left the frame"
+                            result.should_notify = True  # Target left
+                            self._prev_summary = result.quick_summary
+                            self._prev_had_target = False
+                            self._prev_positions = {}  # Reset positions
+                            result.detection_method = "yolo"
+                            return result
+                        
                         if self._consecutive_no_target % int(config.get("SQ_CONSECUTIVE_NO_TARGET_SKIP", "5")) != 0:
                             result.skip_reason = "yolo_no_target"
                             result.detection_method = "yolo"
@@ -336,9 +459,12 @@ class SmartDetector:
                 # HOG confident no person - but verify with LLM occasionally
                 self._consecutive_no_target += 1
                 
-                # Every 3rd frame in track mode, verify with LLM to avoid false negatives
-                # Every 5th frame in other modes
-                skip_interval = int(config.get("SQ_TRACK_SKIP_INTERVAL", "3")) if self.mode == 'track' else int(config.get("SQ_SKIP_INTERVAL", "5"))
+                # Calculate skip interval from FPS and time-based config
+                stream_interval = float(config.get("SQ_STREAM_INTERVAL", "2"))
+                fps = 1.0 / stream_interval if stream_interval > 0 else 1.0
+                skip_seconds = float(config.get("SQ_SKIP_AFTER_NO_TARGET_SECONDS", "10"))
+                skip_interval = max(1, int(skip_seconds * fps))
+                
                 if self._consecutive_no_target % skip_interval != 0:
                     result.skip_reason = f"hog_no_person_{hog_confidence:.1f}"
                     result.detection_method = "opencv_hog"

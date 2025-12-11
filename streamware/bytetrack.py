@@ -713,7 +713,7 @@ class ByteTracker:
 # =============================================================================
 
 def create_tracker(
-    use_reid: bool = False,
+    use_reid: bool = None,
     preset: str = "balanced",
 ) -> ByteTracker:
     """
@@ -723,7 +723,19 @@ def create_tracker(
         - "speed": Maximum FPS, may have more ID switches
         - "balanced": Good balance of speed and accuracy (default)
         - "stable": Stable IDs, lower FPS
+        
+    ReID can be enabled via SQ_USE_REID=true in .env
     """
+    from .config import config as app_config
+    
+    # Read ReID settings from config if not explicitly set
+    if use_reid is None:
+        use_reid = app_config.get("SQ_USE_REID", "false").lower() == "true"
+    
+    reid_threshold = float(app_config.get("SQ_REID_THRESHOLD", "0.4"))
+    reid_gallery_size = int(app_config.get("SQ_REID_GALLERY_SIZE", "10"))
+    track_buffer = int(app_config.get("SQ_TRACK_BUFFER", "90"))
+    
     presets = {
         "speed": {
             "high_thresh": 0.6,
@@ -735,9 +747,11 @@ def create_tracker(
         "balanced": {
             "high_thresh": 0.5,
             "new_track_thresh": 0.6,
-            "track_buffer": 90,
+            "track_buffer": track_buffer,
             "min_hits": 3,
             "use_reid": use_reid,
+            "reid_threshold": reid_threshold,
+            "max_features": reid_gallery_size,
         },
         "stable": {
             "high_thresh": 0.4,
@@ -746,16 +760,19 @@ def create_tracker(
             "min_hits": 3,
             "iou_threshold": 0.2,
             "use_reid": True,
+            "reid_threshold": reid_threshold,
+            "max_features": reid_gallery_size,
         },
     }
     
-    config = presets.get(preset, presets["balanced"])
+    tracker_config = presets.get(preset, presets["balanced"])
     
     reid_extractor = None
-    if config.get("use_reid", use_reid):
+    if tracker_config.get("use_reid", use_reid):
         reid_extractor = ReIDExtractor()
+        logger.info(f"ReID enabled: threshold={reid_threshold}, gallery={reid_gallery_size}")
     
     return ByteTracker(
         reid_extractor=reid_extractor,
-        **config,
+        **tracker_config,
     )

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "streamware"
-version = "0.2.95"
+version = "0.2.107"
 description = "Modern Python stream processing framework inspired by Apache Camel"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -60,7 +60,11 @@ dev = [
     "mypy>=1.0.0",
     "pre-commit>=3.0.0",
 ]
-all = ["streamware[curllm,kafka,rabbitmq,postgres,multimedia,communication,dev]"]
+tracking = [
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+]
+all = ["streamware[curllm,kafka,rabbitmq,postgres,multimedia,communication,tracking,dev]"]
 
 [project.urls]
 Homepage = "https://github.com/stream-ware/streamware"
