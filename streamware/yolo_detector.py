@@ -152,14 +152,17 @@ class Detection:
 
 class YOLODetector:
     """
-    Fast object detection using YOLOv8.
+    Fast object detection using YOLO.
     
     Models (download size / speed):
     - yolov8n: 6MB, fastest (~10ms on GPU, ~100ms on CPU)
     - yolov8s: 22MB, fast (~20ms on GPU)
-    - yolov8m: 52MB, balanced (~40ms on GPU)
-    - yolov8l: 87MB, accurate (~60ms on GPU)
-    - yolov8x: 131MB, most accurate (~100ms on GPU)
+    - yolo11n: 5.4MB, newest, best accuracy/speed (recommended)
+    
+    Backends:
+    - ultralytics: Native PyTorch (default)
+    - openvino: Intel OpenVINO (3-10x faster on AMD/Intel CPU)
+    - onnx: ONNX Runtime
     """
     
     def __init__(
@@ -169,21 +172,24 @@ class YOLODetector:
         iou_threshold: float = 0.45,
         classes: List[str] = None,
         device: str = "auto",
+        backend: str = "ultralytics",
     ):
         """
         Initialize YOLO detector.
         
         Args:
-            model: Model name (yolov8n, yolov8s, yolov8m, yolov8l, yolov8x)
+            model: Model name (yolov8n, yolov8s, yolo11n, etc.)
             confidence_threshold: Minimum confidence for detection
             iou_threshold: IoU threshold for NMS
             classes: List of class names to detect (None = all)
             device: Device to use ('auto', 'cuda', 'cpu')
+            backend: Inference backend ('ultralytics', 'openvino', 'onnx')
         """
         self.model_name = model
         self.confidence_threshold = confidence_threshold
         self.iou_threshold = iou_threshold
         self.device = device
+        self.backend = backend
         
         # Filter classes
         if classes:
@@ -213,15 +219,52 @@ class YOLODetector:
             except ImportError:
                 device = "cpu"
         
-        # Load model (downloads automatically if needed)
-        model_path = f"{self.model_name}.pt"
-        logger.info(f"Loading YOLO model: {model_path} on {device}")
+        # Load model based on backend
+        model_path = f"{self.model_name}.pt" if not self.model_name.endswith('.pt') else self.model_name
         
-        self._model = YOLO(model_path)
-        self._model.to(device)
+        if self.backend == "openvino":
+            self._load_openvino_model(model_path)
+        elif self.backend == "onnx":
+            self._load_onnx_model(model_path)
+        else:
+            # Default ultralytics backend
+            logger.info(f"Loading YOLO model: {model_path} on {device}")
+            self._model = YOLO(model_path)
+            self._model.to(device)
         
         self._initialized = True
-        logger.info(f"YOLO model loaded successfully")
+        logger.info(f"YOLO model loaded successfully ({self.backend} backend)")
+    
+    def _load_openvino_model(self, model_path: str):
+        """Load model with OpenVINO backend for faster CPU inference."""
+        from ultralytics import YOLO
+        
+        # OpenVINO exports to a directory: yolo11n_openvino_model/
+        model_stem = Path(model_path).stem
+        openvino_dir = Path(f"{model_stem}_openvino_model")
+        
+        if not openvino_dir.exists():
+            logger.info(f"Exporting {model_path} to OpenVINO format...")
+            model = YOLO(model_path)
+            model.export(format="openvino", half=False)
+        
+        self._model = YOLO(str(openvino_dir))
+        logger.info(f"Loaded OpenVINO model from {openvino_dir}")
+    
+    def _load_onnx_model(self, model_path: str):
+        """Load model with ONNX backend."""
+        from ultralytics import YOLO
+        
+        model_stem = Path(model_path).stem
+        onnx_path = Path(f"{model_stem}.onnx")
+        
+        if not onnx_path.exists():
+            logger.info(f"Exporting {model_path} to ONNX format...")
+            model = YOLO(model_path)
+            model.export(format="onnx", simplify=True)
+        
+        self._model = YOLO(str(onnx_path))
+        logger.info(f"Loaded ONNX model from {onnx_path}")
     
     def detect(
         self,

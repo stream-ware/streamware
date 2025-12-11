@@ -538,23 +538,24 @@ def extract_detections_from_regions(motion_regions: List[Dict]) -> List[Dict]:
     detections = []
     
     for region in motion_regions:
+        # region is (x, y, w, h) tuple from cv2.boundingRect
         # Assume 1920x1080 if not specified
-        frame_w = region.get("frame_width", 1920)
-        frame_h = region.get("frame_height", 1080)
+        frame_w = 1920
+        frame_h = 1080
         
         # Normalize coordinates
-        x = (region.get("x", 0) + region.get("w", 0) / 2) / frame_w
-        y = (region.get("y", 0) + region.get("h", 0) / 2) / frame_h
-        w = region.get("w", 100) / frame_w
-        h = region.get("h", 200) / frame_h
+        x = (region[0] + region[2] / 2) / frame_w
+        y = (region[1] + region[3] / 2) / frame_h
+        w = region[2] / frame_w
+        h = region[3] / frame_h
         
         detections.append({
             "x": x,
             "y": y,
             "w": w,
             "h": h,
-            "confidence": region.get("confidence", 0.5),
-            "type": region.get("type", "person"),
+            "confidence": 0.5,  # Default confidence for motion-based detection
+            "type": "person",    # Default type for motion-based detection
         })
     
     return detections

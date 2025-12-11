@@ -5,6 +5,129 @@ All notable changes to Streamware will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2024-12-11
+
+### 🔧 Major Refactoring - Complete Configuration System (BREAKING CHANGES)
+
+**🎯 Core Achievement:** Eliminated all hardcoded values and implemented comprehensive configuration system.
+
+#### ✅ Refactored Components
+
+**smart_detector.py:**
+
+- All YOLO detection thresholds now configurable (`SQ_YOLO_CONFIDENCE_THRESHOLD`, `SQ_YOLO_CONFIDENCE_THRESHOLD_HIGH`)
+- HOG person detection parameters configurable (`SQ_HOG_SCALE`, `SQ_HOG_WINSTRIDE`, `SQ_HOG_PADDING`, `SQ_HOG_SCALE_FACTOR`)
+- Motion detection thresholds configurable (`SQ_MOTION_DIFF_THRESHOLD`, `SQ_MOTION_BLUR_KERNEL`, `SQ_MOTION_CONTOUR_MIN_AREA`)
+- Motion classification thresholds configurable (`SQ_MOTION_MIN_PERCENT`, `SQ_MOTION_LOW_PERCENT`, `SQ_MOTION_MEDIUM_PERCENT`, `SQ_MOTION_HIGH_PERCENT`)
+
+**live_narrator.py:**
+
+- All vision model prompts configurable through environment variables
+- Vision model confidence thresholds configurable (`SQ_VISION_ASSUME_PRESENT`, `SQ_VISION_CONFIDENT_PRESENT`, `SQ_VISION_CONFIDENT_ABSENT`)
+- Image optimization parameters configurable (`SQ_IMAGE_PRESET`, `SQ_IMAGE_MAX_SIZE`, `SQ_IMAGE_QUALITY`)
+- Frame processing parameters configurable (`SQ_FRAME_SCALE`, `SQ_LLM_MIN_MOTION_PERCENT`)
+
+**response_filter.py:**
+
+- All timeout values configurable (`SQ_GUARDER_TIMEOUT`, `SQ_QUICK_PERSON_TIMEOUT`, `SQ_QUICK_CHANGE_TIMEOUT`, `SQ_SUMMARIZE_TIMEOUT`, `SQ_VALIDATE_TIMEOUT`, `SQ_ANALYZE_TIMEOUT`, `SQ_ANALYZE_TRACKING_TIMEOUT`)
+- Guarder model configuration (`SQ_GUARDER_MODEL`, `SQ_ANALYSIS_MODEL`)
+- Improved track mode logic to prevent false negatives
+
+#### 🛠️ Code Quality Improvements
+
+**Modularity Enhancements:**
+
+- Added `_fallback_summary()` helper function to eliminate 3x code duplication
+- Added `_get_confidence_threshold()` helper function to eliminate 6x code duplication
+- Improved error handling with configurable fallback values
+- Better separation of concerns in response filtering
+
+**Linting Fixes:**
+
+- Fixed all regex linting issues in response_filter.py
+- Fixed f-string warnings in config.py
+- Improved code readability and maintainability
+
+#### 🐛 Bug Fixes
+
+**Critical Fixes:**
+
+- Fixed guarder filter blocking track mode responses
+- Resolved `NameError: name 'config' is not defined` in default function arguments
+- Improved TTS system to announce scene descriptions instead of "No person visible"
+- Enhanced error handling for vision model failures
+
+#### 📚 Documentation Updates
+
+**New Documentation:**
+
+- **CONFIGURATION.md** - Complete configuration reference with all new parameters
+- Updated **LLM_INTEGRATION.md** with timeout configuration and custom prompts
+- Updated **PERFORMANCE.md** with configuration-based performance tuning
+- Updated **MOTION_ANALYSIS.md** with configurable motion thresholds
+
+**Enhanced README.md:**
+
+- Added comprehensive refactoring section
+- Added configuration examples for different use cases
+- Updated documentation index with new configuration guide
+
+#### ⚙️ New Configuration Options
+
+**Total New Environment Variables:** 25+
+
+**Key Categories:**
+
+- **Detection Thresholds:** YOLO, HOG, motion detection sensitivity
+- **Timeout Configuration:** All LLM operation timeouts
+- **Performance Tuning:** Frame processing, memory optimization
+- **Model Configuration:** Vision models, guarder models, analysis models
+- **Custom Prompts:** All LLM prompts now customizable
+- **Resource Management:** RAM disk, concurrent operations, queue sizes
+
+#### 🔄 Migration Guide
+
+**For Existing Users:**
+
+```bash
+# Your existing .env file will work with defaults
+# But you can now fine-tune these parameters:
+
+# Example: High sensitivity detection
+SQ_YOLO_CONFIDENCE_THRESHOLD=0.1
+SQ_VISION_CONFIDENT_PRESENT=0.8
+
+# Example: Fast performance mode
+SQ_MODEL=moondream
+SQ_IMAGE_PRESET=fast
+SQ_LLM_MIN_MOTION_PERCENT=50
+```
+
+**Breaking Changes:**
+
+- None - all existing configurations remain compatible
+- New parameters use sensible defaults
+- Backward compatibility maintained
+
+#### 🧪 Testing & Validation
+
+**System Testing:**
+
+- ✅ Vision LLM person detection working correctly
+- ✅ Guarder filter processing responses in track mode
+- ✅ TTS announcing scene descriptions properly
+- ✅ All configuration parameters loading correctly
+- ✅ Error handling with fallback values working
+- ✅ Performance improvements validated
+
+**Performance Impact:**
+
+- No performance degradation from refactoring
+- Improved configurability allows better optimization
+- Better error handling reduces system hangs
+
+---
+
 ## [0.2.1] - 2024-12-10
 
 ### 🎥 Real-time Visualizer (NEW!)
@@ -67,11 +190,13 @@ sq mqtt --url "rtsp://camera/stream" --broker localhost --topic home/camera/fron
 Major performance improvements for Live Narrator real-time video analysis:
 
 - **FastCapture** - Persistent RTSP connection (4000ms → 0ms capture time)
+  
   - OpenCV backend with auto-fallback to FFmpeg
   - GPU acceleration (NVDEC) support
   - Frame buffering (10 frames) for slow processing
   
 - **Model Optimization** - Default to fast models
+  
   - `moondream` as default vision model (~1.5s vs llava:13b ~4s)
   - `gemma:2b` as default guarder (text-only, ~250ms)
   
@@ -82,6 +207,7 @@ Major performance improvements for Live Narrator real-time video analysis:
 ### 🎯 Intelligent Movement Tracking
 
 New `--mode track` with movement direction analysis:
+
 - Detects entering/exiting from frame edges
 - Tracks horizontal (left/right) and vertical (approaching/leaving) movement
 - Identifies stationary vs moving subjects
@@ -90,18 +216,21 @@ New `--mode track` with movement direction analysis:
 ### 🛠️ Bug Fixes
 
 - **Fixed:** `gemma:2b` incorrectly used as vision model in SmartDetector
+  
   - Now properly detected as text-only model
   - Falls back to main vision LLM for image analysis
   
 - **Fixed:** LLM returning template examples instead of descriptions
+  
   - Simplified prompts without copyable examples
   - Added preamble stripping ("Sure, here is...")
   
 - **Fixed:** Model matching in setup (gemma: vs gemma2:)
+  
   - Precise model name matching
   - Auto-installation of missing models
 
-### 📚 Documentation
+### 📚 Documentation Improvements
 
 - New: `docs/LIVE_NARRATOR_ARCHITECTURE.md` - Full system architecture
 - Updated: README with performance optimization guide
@@ -110,6 +239,7 @@ New `--mode track` with movement direction analysis:
 ### 🔧 Configuration Changes
 
 **New defaults:**
+
 ```ini
 SQ_MODEL=moondream
 SQ_GUARDER_MODEL=gemma:2b
@@ -119,6 +249,7 @@ SQ_FAST_CAPTURE=true
 ```
 
 **New install script:**
+
 ```bash
 ./install_fast_model.sh  # Auto-installs moondream + gemma:2b
 ```

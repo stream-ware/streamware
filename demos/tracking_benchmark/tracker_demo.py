@@ -27,7 +27,12 @@ import logging
 import cv2
 import numpy as np
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logging.getLogger().handlers[0].flush = sys.stdout.flush
 logger = logging.getLogger(__name__)
 
 
@@ -65,7 +70,7 @@ class ThreadedCapture:
             if self.queue.full():
                 try:
                     self.queue.get_nowait()  # Drop old frame
-                except:
+                except Exception:
                     pass
             self.queue.put(frame)
 
@@ -74,7 +79,7 @@ class ThreadedCapture:
             return None
         try:
             return self.queue.get(timeout=1.0)
-        except:
+        except Exception:
             return None
 
     def release(self):
@@ -172,7 +177,7 @@ class YOLODetector:
 
         # Try OpenVINO export if requested
         model_file = Path(model_path)
-        openvino_dir = model_file.with_suffix("_openvino_model")
+        openvino_dir = model_file.parent / (model_file.stem + "_openvino_model")
 
         if use_openvino and openvino_dir.exists():
             logger.info(f"Loading OpenVINO model from {openvino_dir}")
@@ -221,6 +226,7 @@ class YOLODetector:
 class Tracker:
     """
     ByteTrack tracker via Supervision library.
+    Tracks object states: new, stable, lost.
     """
 
     def __init__(
@@ -229,6 +235,7 @@ class Tracker:
         lost_track_buffer: int = 90,  # ~3 sec at 30fps
         minimum_matching_threshold: float = 0.8,
         frame_rate: int = 30,
+        min_stable_frames: int = 3,
     ):
         import supervision as sv
 
@@ -239,25 +246,47 @@ class Tracker:
             frame_rate=frame_rate,
         )
         self.sv = sv
+        self.min_stable_frames = min_stable_frames
 
-        # Track state for Kalman prediction between detections
+        # Track state management
         self._last_detections = None
+        self._track_frames: dict = {}  # track_id -> frames_seen
+        self._prev_track_ids: set = set()
 
     def update(self, results) -> "sv.Detections":
         """
         Update tracker with new detections.
+        Returns detections and updates track state counters.
         """
         detections = self.sv.Detections.from_ultralytics(results)
         detections = self.tracker.update_with_detections(detections)
         self._last_detections = detections
-        return detections
 
-    def predict(self) -> Optional["sv.Detections"]:
+        # Update track frame counts
+        current_ids = set()
+        if detections.tracker_id is not None:
+            for tid in detections.tracker_id:
+                current_ids.add(tid)
+                self._track_frames[tid] = self._track_frames.get(tid, 0) + 1
+
+        # Detect state changes
+        new_tracks = current_ids - self._prev_track_ids
+        lost_tracks = self._prev_track_ids - current_ids
+        self._prev_track_ids = current_ids
+
+        return detections, new_tracks, lost_tracks
+
+    def predict(self):
         """
         Return last known detections (for frames without detection).
         In a full implementation, this would apply Kalman prediction.
         """
-        return self._last_detections
+        return self._last_detections, set(), set()
+
+    def get_stable_tracks(self) -> List[int]:
+        """Return track IDs that have been seen for min_stable_frames."""
+        return [tid for tid, frames in self._track_frames.items()
+                if frames >= self.min_stable_frames and tid in self._prev_track_ids]
 
 
 # -----------------------------------------------------------------------------
@@ -310,6 +339,9 @@ class PipelineStats:
     tracking_time_ms: float = 0.0
     motion_percent: float = 0.0
     active_tracks: int = 0
+    stable_tracks: int = 0
+    total_new_tracks: int = 0
+    total_lost_tracks: int = 0
 
     fps_history: List[float] = field(default_factory=list)
 
@@ -340,7 +372,7 @@ def draw_stats(frame: np.ndarray, stats: PipelineStats, motion_gate: MotionGate)
         f"FPS: {stats.avg_fps:.1f}",
         f"Det: {stats.detection_time_ms:.1f}ms | Trk: {stats.tracking_time_ms:.1f}ms",
         f"Motion: {stats.motion_percent:.1f}% | Gate: {motion_gate.detection_rate*100:.0f}%",
-        f"Tracks: {stats.active_tracks}",
+        f"Tracks: {stats.active_tracks} (stable: {stats.stable_tracks})",
     ]
 
     y = 30
@@ -401,9 +433,18 @@ def run_pipeline(args):
     stats = PipelineStats()
 
     logger.info("Starting pipeline... Press 'q' to quit.")
+    start_time = time.time()
 
     try:
         while True:
+            # Check duration/frame limits
+            if args.duration > 0 and (time.time() - start_time) >= args.duration:
+                logger.info(f"Duration limit ({args.duration}s) reached")
+                break
+            if args.max_frames > 0 and stats.frame_count >= args.max_frames:
+                logger.info(f"Frame limit ({args.max_frames}) reached")
+                break
+
             t_start = time.perf_counter()
 
             frame = capture.read()
@@ -419,21 +460,25 @@ def run_pipeline(args):
             t_det = time.perf_counter()
             if should_detect:
                 results = detector.detect(frame)
-                detections = tracker.update(results)
+                detections, new_tracks, lost_tracks = tracker.update(results)
                 stats.detection_count += 1
                 stats.detection_time_ms = detector.last_inference_ms
+                stats.total_new_tracks += len(new_tracks)
+                stats.total_lost_tracks += len(lost_tracks)
             else:
-                detections = tracker.predict()
+                detections, new_tracks, lost_tracks = tracker.predict()
                 stats.detection_time_ms = 0.0
 
             t_trk = time.perf_counter()
             stats.tracking_time_ms = (t_trk - t_det) * 1000 - stats.detection_time_ms
 
-            # Count active tracks
+            # Count active and stable tracks
             if detections is not None and detections.tracker_id is not None:
                 stats.active_tracks = len(set(detections.tracker_id))
+                stats.stable_tracks = len(tracker.get_stable_tracks())
             else:
                 stats.active_tracks = 0
+                stats.stable_tracks = 0
 
             # Annotate
             annotated = annotator.annotate(frame, detections, show_trace=args.trace)
@@ -486,6 +531,7 @@ def run_pipeline(args):
     logger.info(f"  Detection frames: {stats.detection_count} ({stats.detection_rate*100:.1f}%)")
     logger.info(f"  Motion gate savings: {(1 - motion_gate.detection_rate)*100:.1f}%")
     logger.info(f"  Average FPS: {stats.avg_fps:.1f}")
+    logger.info(f"  Track events: {stats.total_new_tracks} entered, {stats.total_lost_tracks} left")
     logger.info("=" * 50)
 
 
@@ -551,6 +597,16 @@ def main():
     parser.add_argument(
         "--stats", action="store_true",
         help="Show stats overlay"
+    )
+
+    # Benchmark options
+    parser.add_argument(
+        "--duration", type=int, default=0,
+        help="Limit run to N seconds (0 = unlimited)"
+    )
+    parser.add_argument(
+        "--max-frames", type=int, default=0,
+        help="Limit run to N frames (0 = unlimited)"
     )
 
     args = parser.parse_args()

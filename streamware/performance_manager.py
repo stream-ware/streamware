@@ -18,6 +18,10 @@ Features:
 import logging
 import os
 import platform
+
+# Constants for default models
+DEFAULT_VISION_MODEL = "llava:7b"
+DEFAULT_CHAT_MODEL = "gemma:2b"
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -159,9 +163,8 @@ def _run_benchmarks() -> Tuple[float, float]:
     """Run quick benchmarks to assess actual performance."""
     # CPU benchmark
     start = time.perf_counter()
-    total = 0
     for i in range(500000):
-        total += i
+        _ = i  # Simple computation to benchmark CPU
     cpu_time = (time.perf_counter() - start) * 1000
     
     # OpenCV benchmark
@@ -170,7 +173,8 @@ def _run_benchmarks() -> Tuple[float, float]:
         import cv2
         import numpy as np
         
-        img = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+        rng = np.random.default_rng(seed=42)  # Fixed seed for reproducible benchmarks
+        img = rng.integers(0, 255, (480, 640, 3), dtype=np.uint8)
         start = time.perf_counter()
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         blur = cv2.GaussianBlur(gray, (5, 5), 0)
@@ -198,7 +202,7 @@ def get_optimal_config(hardware: HardwareInfo) -> PerformanceConfig:
         
     elif hardware.profile == HardwareProfile.HIGH:
         # High-end CPU
-        config.vision_model = "llava:7b"
+        config.vision_model = DEFAULT_VISION_MODEL
         config.capture_resolution = (960, 540)
         config.llm_image_size = 512
         config.jpeg_quality = 75
@@ -208,7 +212,7 @@ def get_optimal_config(hardware: HardwareInfo) -> PerformanceConfig:
         
     elif hardware.profile == HardwareProfile.MEDIUM:
         # Medium hardware
-        config.vision_model = "llava:7b"
+        config.vision_model = DEFAULT_VISION_MODEL
         config.capture_resolution = (640, 480)
         config.llm_image_size = 384
         config.jpeg_quality = 70
@@ -218,7 +222,7 @@ def get_optimal_config(hardware: HardwareInfo) -> PerformanceConfig:
         
     else:  # LOW
         # Low-end hardware
-        config.vision_model = "moondream"
+        config.vision_model = DEFAULT_VISION_MODEL
         config.guarder_model = "qwen2.5:0.5b"
         config.capture_resolution = (480, 360)
         config.llm_image_size = 256
@@ -371,7 +375,7 @@ class PerformanceManager:
         
         return self.config
     
-    def should_process_frame(self, motion_pct: float, time_since_last: float) -> Tuple[bool, str]:
+    def should_process_frame(self, motion_pct: float) -> Tuple[bool, str]:
         """Decide if frame should be processed based on performance."""
         # If system is slow (high avg times), be more selective
         avg_total = (

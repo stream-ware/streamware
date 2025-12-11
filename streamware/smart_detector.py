@@ -27,7 +27,11 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+
+# Import constants from response_filter to avoid duplication
+from .response_filter import DEFAULT_OLLAMA_URL
 from typing import Optional, Tuple, List
+from .config import config
 
 logger = logging.getLogger(__name__)
 
@@ -97,8 +101,11 @@ class SmartDetector:
         motion_threshold: float = None,  # None = use config
         use_yolo: bool = True,
         use_hog: bool = True,
+        motion_gate_threshold: int = None,  # Pixels threshold for motion gating
+        periodic_interval: int = None,  # Force detection every N frames
         use_small_llm: bool = True,
         yolo_model: str = "yolov8n",
+        mode: str = "full",  # Track mode detection
     ):
         from .config import config
         
@@ -111,10 +118,20 @@ class SmartDetector:
             motion_threshold = float(config.get("SQ_MIN_CHANGE", "0.1"))
         self.motion_threshold = motion_threshold
         
+        # Motion gating parameters (from demo)
+        if motion_gate_threshold is None:
+            motion_gate_threshold = int(config.get("SQ_MOTION_GATE_THRESHOLD", "1000"))
+        self.motion_gate_threshold = motion_gate_threshold
+        
+        if periodic_interval is None:
+            periodic_interval = int(config.get("SQ_PERIODIC_INTERVAL", "30"))
+        self.periodic_interval = periodic_interval
+        
         self.use_yolo = use_yolo
         self.use_hog = use_hog
         self.use_small_llm = use_small_llm
         self.yolo_model = yolo_model
+        self.mode = mode
         
         self._hog_detector = None
         self._yolo_detector = None
@@ -151,7 +168,7 @@ class SmartDetector:
                     self._animal_detector = AnimalDetector(
                         focus=self.focus if self.focus != "animal" else "all",
                         model=self.yolo_model,
-                        confidence_threshold=0.25,
+                        confidence_threshold=float(config.get("SQ_YOLO_CONFIDENCE_THRESHOLD", "0.25")),
                     )
                     self._yolo_available = True
                     logger.info(f"🎯 Animal detector initialized: {self.focus}")
@@ -160,7 +177,7 @@ class SmartDetector:
                 self._yolo_detector = YOLODetector(
                     model=self.yolo_model,
                     classes=classes,
-                    confidence_threshold=0.5,  # Higher threshold to reduce false positives
+                    confidence_threshold=float(config.get("SQ_YOLO_CONFIDENCE_THRESHOLD_HIGH", "0.5")),  # Higher threshold to reduce false positives
                 )
                 self._yolo_available = True
                 logger.info(f"🎯 YOLO detector initialized: {self.yolo_model}, classes={classes}")
@@ -196,6 +213,8 @@ class SmartDetector:
         Returns:
             DetectionResult with all analysis
         """
+        from .config import config
+        
         result = DetectionResult()
         result.detections = []
         
@@ -210,10 +229,22 @@ class SmartDetector:
         # Skip if no motion - but do periodic checks even without motion
         # to catch slow movements or stationary people
         self._frame_count = getattr(self, '_frame_count', 0) + 1
-        force_check = (self._frame_count % 10 == 0)  # Check every 10th frame regardless
+        force_check = (self._frame_count % self.periodic_interval == 0)
         
-        if motion_pct < self.motion_threshold and prev_frame_path and not force_check:
-            result.skip_reason = f"no_motion_{motion_pct:.1f}%"
+        # Calculate motion area in pixels (from motion regions)
+        motion_area = sum(r[2] * r[3] for r in motion_regions)  # r is (x, y, w, h) tuple
+        
+        # For track mode, be more lenient with motion gating to detect stationary people
+        # Use lower threshold or more frequent periodic checks
+        is_track_mode = self.focus == "person" and self.mode == "track"
+        effective_threshold = self.motion_gate_threshold // 2 if is_track_mode else self.motion_gate_threshold
+        periodic_interval = int(config.get("SQ_TRACK_PERIODIC_INTERVAL", "2")) if is_track_mode else self.periodic_interval  # Check every N frames in track mode
+        force_check = (self._frame_count % periodic_interval == 0)
+        
+        if (motion_area < effective_threshold and 
+            prev_frame_path and 
+            not force_check):
+            result.skip_reason = f"motion_gate_{motion_area}px"
             result.detection_method = "opencv_motion"
             return result
         
@@ -251,7 +282,7 @@ class SmartDetector:
                         logger.debug(f"Animal detected: {result.quick_summary} in {result.yolo_ms:.0f}ms")
                     else:
                         self._consecutive_no_target += 1
-                        if self._consecutive_no_target % 5 != 0:
+                        if self._consecutive_no_target % int(config.get("SQ_CONSECUTIVE_NO_TARGET_SKIP", "5")) != 0:
                             result.skip_reason = "yolo_no_animal"
                             result.detection_method = "yolo_animal"
                             return result
@@ -288,7 +319,7 @@ class SmartDetector:
                     else:
                         # YOLO found nothing
                         self._consecutive_no_target += 1
-                        if self._consecutive_no_target % 5 != 0:
+                        if self._consecutive_no_target % int(config.get("SQ_CONSECUTIVE_NO_TARGET_SKIP", "5")) != 0:
                             result.skip_reason = "yolo_no_target"
                             result.detection_method = "yolo"
                             return result
@@ -299,14 +330,16 @@ class SmartDetector:
         
         # Stage 3: HOG Person Detection (fallback if no YOLO or YOLO failed)
         if not yolo_detected and self.use_hog and self.focus == "person":
-            has_person_hog, hog_confidence, hog_boxes = self._detect_person_hog(frame_path)
+            has_person_hog, hog_confidence, _ = self._detect_person_hog(frame_path)
             
-            if not has_person_hog and hog_confidence > 0.7:
+            if not has_person_hog and hog_confidence > float(config.get("SQ_HOG_CONFIDENCE_THRESHOLD", "0.85")):  # Increased threshold to be less strict
                 # HOG confident no person - but verify with LLM occasionally
                 self._consecutive_no_target += 1
                 
-                # Every 5th frame, verify with LLM to avoid false negatives
-                if self._consecutive_no_target % 5 != 0:
+                # Every 3rd frame in track mode, verify with LLM to avoid false negatives
+                # Every 5th frame in other modes
+                skip_interval = int(config.get("SQ_TRACK_SKIP_INTERVAL", "3")) if self.mode == 'track' else int(config.get("SQ_SKIP_INTERVAL", "5"))
+                if self._consecutive_no_target % skip_interval != 0:
                     result.skip_reason = f"hog_no_person_{hog_confidence:.1f}"
                     result.detection_method = "opencv_hog"
                     return result
@@ -374,8 +407,10 @@ class SmartDetector:
         prev_frame_path: Optional[Path]
     ) -> Tuple[float, List]:
         """Detect motion between frames using OpenCV."""
+        from .config import config
+        
         if not prev_frame_path:
-            return 100.0, []  # First frame - assume motion
+            return float(config.get("SQ_MOTION_FIRST_FRAME_PERCENT", "100.0")), []  # First frame - assume motion
         
         try:
             import cv2
@@ -385,21 +420,26 @@ class SmartDetector:
             prev = cv2.imread(str(prev_frame_path), cv2.IMREAD_GRAYSCALE)
             
             if curr is None or prev is None:
-                return 50.0, []
+                return float(config.get("SQ_MOTION_ERROR_PERCENT", "50.0")), []
             
             # Resize for speed
-            scale = min(320 / curr.shape[1], 240 / curr.shape[0], 1.0)
+            scale = min(
+                int(config.get("SQ_MOTION_SCALE_WIDTH", "320")) / curr.shape[1], 
+                int(config.get("SQ_MOTION_SCALE_HEIGHT", "240")) / curr.shape[0], 
+                1.0
+            )
             if scale < 1.0:
                 curr = cv2.resize(curr, None, fx=scale, fy=scale)
                 prev = cv2.resize(prev, None, fx=scale, fy=scale)
             
             # Blur to reduce noise
-            curr = cv2.GaussianBlur(curr, (5, 5), 0)
-            prev = cv2.GaussianBlur(prev, (5, 5), 0)
+            blur_kernel = int(config.get("SQ_MOTION_BLUR_KERNEL", "5"))
+            curr = cv2.GaussianBlur(curr, (blur_kernel, blur_kernel), 0)
+            prev = cv2.GaussianBlur(prev, (blur_kernel, blur_kernel), 0)
             
             # Compute difference
             diff = cv2.absdiff(curr, prev)
-            _, thresh = cv2.threshold(diff, 25, 255, cv2.THRESH_BINARY)
+            _, thresh = cv2.threshold(diff, int(config.get("SQ_MOTION_DIFF_THRESHOLD", "25")), 255, cv2.THRESH_BINARY)
             
             # Calculate motion percentage
             motion_pixels = cv2.countNonZero(thresh)
@@ -408,19 +448,21 @@ class SmartDetector:
             
             # Find motion regions
             contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            regions = [cv2.boundingRect(c) for c in contours if cv2.contourArea(c) > 100]
+            regions = [cv2.boundingRect(c) for c in contours if cv2.contourArea(c) > int(config.get("SQ_MOTION_CONTOUR_MIN_AREA", "100"))]
             
             return motion_pct, regions
             
         except ImportError:
             logger.debug("OpenCV not available for motion detection")
-            return 50.0, []
+            return float(config.get("SQ_MOTION_ERROR_PERCENT", "50.0")), []
         except Exception as e:
             logger.debug(f"Motion detection failed: {e}")
-            return 50.0, []
+            return float(config.get("SQ_MOTION_ERROR_PERCENT", "50.0")), []
     
     def _detect_person_hog(self, frame_path: Path) -> Tuple[bool, float, List]:
         """Detect person using HOG descriptor."""
+        from .config import config
+        
         try:
             import cv2
             
@@ -434,29 +476,39 @@ class SmartDetector:
             
             # Resize for speed
             height, width = img.shape[:2]
-            scale = min(400 / width, 400 / height, 1.0)
+            scale = min(
+                int(config.get("SQ_HOG_SCALE", "400")) / width, 
+                int(config.get("SQ_HOG_SCALE", "400")) / height, 
+                1.0
+            )
             if scale < 1.0:
                 img = cv2.resize(img, None, fx=scale, fy=scale)
             
             # Detect
             boxes, weights = self._hog_detector.detectMultiScale(
                 img,
-                winStride=(8, 8),
-                padding=(4, 4),
-                scale=1.05
+                winStride=(
+                    int(config.get("SQ_HOG_WINSTRIDE", "8")), 
+                    int(config.get("SQ_HOG_WINSTRIDE", "8"))
+                ),
+                padding=(
+                    int(config.get("SQ_HOG_PADDING", "4")), 
+                    int(config.get("SQ_HOG_PADDING", "4"))
+                ),
+                scale=float(config.get("SQ_HOG_SCALE_FACTOR", "1.05"))
             )
             
             if len(boxes) > 0:
                 confidence = float(max(weights)) if len(weights) > 0 else 0.5
                 return True, min(confidence, 1.0), list(boxes)
             
-            return False, 0.8, []  # Confident no person
+            return False, float(config.get("SQ_HOG_CONFIDENT_NO_PERSON", "0.8")), []  # Confident no person
             
         except ImportError:
-            return True, 0.5, []  # Assume might be person
+            return True, float(config.get("SQ_HOG_MIGHT_BE_PERSON", "0.5")), []  # Assume might be person
         except Exception as e:
             logger.debug(f"HOG detection failed: {e}")
-            return True, 0.5, []
+            return True, float(config.get("SQ_HOG_MIGHT_BE_PERSON", "0.5")), []
     
     def _llm_quick_check(self, frame_path: Path) -> Tuple[bool, float]:
         """Quick LLM check: is target present?
@@ -472,7 +524,7 @@ class SmartDetector:
         
         # Check if guarder model is vision-capable
         # Most guarder models (gemma, qwen, phi) are text-only!
-        vision_models = ["llava", "moondream", "bakllava", "llava-llama3", "minicpm-v"]
+        vision_models = config.get("SQ_VISION_MODELS", "llava,moondream,bakllava,llava-llama3,minicpm-v").split(",")
         guarder_lower = self.guarder_model.lower()
         is_vision_model = any(vm in guarder_lower for vm in vision_models)
         
@@ -480,14 +532,14 @@ class SmartDetector:
             # Non-vision model - cannot check images, assume target might be present
             # This is less strict - better to process than miss detections
             logger.debug(f"Guarder {self.guarder_model} is not vision model, skipping quick check")
-            return True, 0.5  # Assume present, let main LLM decide
+            return True, float(config.get("SQ_VISION_ASSUME_PRESENT", "0.5"))  # Assume present, let main LLM decide
         
         try:
             image_data = prepare_image_for_llm_base64(frame_path, preset="fast")
         except Exception:
-            return True, 0.5
+            return True, float(config.get("SQ_VISION_ASSUME_PRESENT", "0.5"))
         
-        ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+        ollama_url = config.get("SQ_OLLAMA_URL", DEFAULT_OLLAMA_URL)
         
         prompt = f"Is there a {self.focus} in this image? Answer only YES or NO."
         
@@ -500,20 +552,20 @@ class SmartDetector:
                     "images": [image_data],
                     "stream": False,
                 },
-                timeout=10,
+                timeout=int(config.get("SQ_VISION_TIMEOUT", "10")),
             )
             
             if resp.ok:
                 answer = resp.json().get("response", "").strip().upper()
                 if "YES" in answer:
-                    return True, 0.9
+                    return True, float(config.get("SQ_VISION_CONFIDENT_PRESENT", "0.9"))
                 elif "NO" in answer:
-                    return False, 0.9
+                    return False, float(config.get("SQ_VISION_CONFIDENT_ABSENT", "0.9"))
             
-            return True, 0.5  # On error, assume present
+            return True, float(config.get("SQ_VISION_ASSUME_PRESENT", "0.5"))  # On error, assume present
             
         except Exception:
-            return True, 0.5  # On error, assume present
+            return True, float(config.get("SQ_VISION_ASSUME_PRESENT", "0.5"))  # On error, assume present
     
     def _llm_quick_summary(self, frame_path: Path) -> str:
         """Get quick summary from small LLM.
@@ -526,7 +578,7 @@ class SmartDetector:
         from .image_optimize import prepare_image_for_llm_base64
         
         # Check if guarder model is vision-capable
-        vision_models = ["llava", "moondream", "bakllava", "llava-llama3", "minicpm-v"]
+        vision_models = config.get("SQ_VISION_MODELS", "llava,moondream,bakllava,llava-llama3,minicpm-v").split(",")
         guarder_lower = self.guarder_model.lower()
         is_vision_model = any(vm in guarder_lower for vm in vision_models)
         
@@ -539,7 +591,7 @@ class SmartDetector:
         except Exception:
             return ""
         
-        ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+        ollama_url = config.get("SQ_OLLAMA_URL", DEFAULT_OLLAMA_URL)
         
         prompt = f"""Describe the {self.focus} briefly (max 10 words). Just describe what you see, no format.
 If no {self.focus}: say "No {self.focus} visible"
@@ -554,7 +606,7 @@ Answer:"""
                     "images": [image_data],
                     "stream": False,
                 },
-                timeout=12,
+                timeout=int(config.get("SQ_VISION_TIMEOUT_LONG", "12")),
             )
             
             if resp.ok:
@@ -562,7 +614,7 @@ Answer:"""
                 # Clean up
                 summary = summary.replace('"', '').replace("'", "")
                 summary = summary.split('\n')[0].strip()
-                return summary[:80]
+                return summary[:int(config.get("SQ_VISION_SUMMARY_MAX_LENGTH", "80"))]
             
             return ""
             
@@ -574,7 +626,7 @@ Answer:"""
         import requests
         from .config import config
         
-        ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+        ollama_url = config.get("SQ_OLLAMA_URL", DEFAULT_OLLAMA_URL)
         
         prompt = f"""Compare these two observations:
 BEFORE: "{previous}"
@@ -606,13 +658,14 @@ Answer only: YES or NO"""
     
     def _classify_motion(self, motion_pct: float) -> MotionLevel:
         """Classify motion percentage into level."""
-        if motion_pct < 0.5:
+        
+        if motion_pct < float(config.get("SQ_MOTION_MIN_PERCENT", "0.5")):
             return MotionLevel.NONE
-        elif motion_pct < 1.0:
+        elif motion_pct < float(config.get("SQ_MOTION_LOW_PERCENT", "1.0")):
             return MotionLevel.MINIMAL
-        elif motion_pct < 5.0:
+        elif motion_pct < float(config.get("SQ_MOTION_MEDIUM_PERCENT", "5.0")):
             return MotionLevel.LOW
-        elif motion_pct < 15.0:
+        elif motion_pct < float(config.get("SQ_MOTION_HIGH_PERCENT", "15.0")):
             return MotionLevel.MEDIUM
         else:
             return MotionLevel.HIGH

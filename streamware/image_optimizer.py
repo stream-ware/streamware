@@ -28,23 +28,36 @@ def optimize_for_llm(
     quality: int = 75,
     output_path: Path = None,
     keep_aspect: bool = True,
+    image_data: Any = None,  # Optional numpy array
 ) -> Path:
     """Optimize image for LLM vision processing.
     
     Args:
-        image_path: Source image path
+        image_path: Source image path (used for naming even if image_data provided)
         max_size: Maximum dimension (width or height)
         quality: JPEG quality (1-100)
         output_path: Output path (default: same as input with _opt suffix)
         keep_aspect: Maintain aspect ratio
+        image_data: Optional numpy array (cv2 image) to avoid disk read
         
     Returns:
         Path to optimized image
     """
     try:
         from PIL import Image
+        import cv2
+        import numpy as np
         
-        img = Image.open(image_path)
+        if image_data is not None:
+            # Convert BGR (OpenCV) to RGB (PIL)
+            if len(image_data.shape) == 3:
+                rgb_image = cv2.cvtColor(image_data, cv2.COLOR_BGR2RGB)
+                img = Image.fromarray(rgb_image)
+            else:
+                img = Image.fromarray(image_data)
+        else:
+            img = Image.open(image_path)
+            
         original_size = img.size
         
         # Calculate new size
@@ -89,9 +102,10 @@ def get_optimal_size_for_model(model_name: str) -> int:
     """Get optimal image size for a specific vision model."""
     # Model-specific optimal sizes
     optimal_sizes = {
-        "llava:7b": 512,
+        "llava:7b": 768,  # Increased from 512 for better person detection
         "llava:13b": 768,
         "llava:34b": 1024,
+        "llava": 768,  # Default llava
         "moondream": 384,
         "bakllava": 512,
         "gpt-4o": 1024,

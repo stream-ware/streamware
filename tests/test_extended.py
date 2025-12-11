@@ -471,6 +471,7 @@ class TestMarkdownLogging:
         args.html = False
         args.file = "logs.md"
         args.log = "md"
+        args.fps = "30"  # Add valid fps string to prevent conversion error
 
         rc = handle_live(args)
         assert rc == 0
@@ -589,7 +590,7 @@ class TestLLMClient:
         metrics.total_time_ms = 5000
 
         assert metrics.avg_time_ms == 500
-        assert metrics.success_rate == 0.8
+        assert round(metrics.success_rate, 6) == 0.8  # Use rounding for float comparison
 
     def test_get_client_singleton(self):
         """get_client should return singleton"""
@@ -810,7 +811,7 @@ class TestBatchGuarder:
 
         guarder = BatchGuarder(batch_size=3, timeout=5.0)
         assert guarder.batch_size == 3
-        assert guarder.timeout == 5.0
+        assert round(guarder.timeout, 6) == 5.0  # Use rounding for float comparison
 
     def test_flush_empty_returns_empty(self):
         """Flush on empty batch should return empty list"""

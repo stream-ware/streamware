@@ -51,8 +51,6 @@ DEFAULTS = {
     "SQ_RAMDISK_ENABLED": "true",
     "SQ_RAMDISK_SIZE_MB": "512",
     "SQ_CAPTURE_FPS": "0.5",
-    "SQ_IMAGE_MAX_SIZE": "512",
-    "SQ_IMAGE_QUALITY": "75",
     "SQ_USE_CACHE": "true",
     
     # Detection Settings (descriptive)
@@ -66,6 +64,93 @@ DEFAULTS = {
     "SQ_MIN_REGION": "500",          # minimum region size in pixels
     "SQ_MIN_CHANGE": "0.0",          # minimum change percent (0.0 = always check, 0.1 = very sensitive)
     "SQ_FRAME_SCALE": "0.3",         # downscale factor for motion detection (0.1-1.0)
+    
+    # Motion Gating (from tracking benchmark)
+    "SQ_MOTION_GATE_THRESHOLD": "500",   # Minimum motion area in pixels to trigger detection (lower = more sensitive)
+    "SQ_PERIODIC_INTERVAL": "30",        # Check every N frames even without motion
+    "SQ_CONSECUTIVE_NO_TARGET_THRESHOLD": "5",  # Skip LLM after N consecutive no-detections
+    
+    # Advanced Detection Thresholds
+    "SQ_YOLO_CONFIDENCE_THRESHOLD": "0.15",     # YOLO detection confidence threshold (lower for better sensitivity)
+    "SQ_YOLO_CONFIDENCE_THRESHOLD_HIGH": "0.3", # Higher threshold for reducing false positives
+    "SQ_HOG_CONFIDENCE_THRESHOLD": "0.85",      # HOG person detection confidence threshold
+    "SQ_TRACK_PERIODIC_INTERVAL": "2",          # Check every N frames in track mode (more frequent)
+    "SQ_TRACK_SKIP_INTERVAL": "3",              # Skip LLM check interval in track mode
+    "SQ_SKIP_INTERVAL": "5",                    # Skip LLM check interval in other modes
+    "SQ_CONSECUTIVE_NO_TARGET_SKIP": "5",       # Skip every Nth frame when no target detected
+    
+    # Motion Detection Parameters
+    "SQ_MOTION_DIFF_THRESHOLD": "25",           # OpenCV threshold for motion detection
+    "SQ_MOTION_BLUR_KERNEL": "5",               # Gaussian blur kernel size
+    "SQ_MOTION_CONTOUR_MIN_AREA": "100",        # Minimum contour area for motion regions
+    "SQ_MOTION_SCALE_WIDTH": "320",             # Max width for motion detection scaling
+    "SQ_MOTION_SCALE_HEIGHT": "240",            # Max height for motion detection scaling
+    "SQ_MOTION_FIRST_FRAME_PERCENT": "100.0",   # Assume motion percent for first frame
+    "SQ_MOTION_ERROR_PERCENT": "50.0",          # Motion Classification Thresholds
+    "SQ_MOTION_MIN_PERCENT": "0.5",             # Minimum motion percent to consider
+    "SQ_MOTION_LOW_PERCENT": "1.0",             # Low motion threshold
+    "SQ_MOTION_MEDIUM_PERCENT": "5.0",          # Medium motion threshold
+    "SQ_MOTION_HIGH_PERCENT": "15.0",           # High motion threshold
+    
+    # Response Filter Timeouts
+    "SQ_GUARDER_TIMEOUT": "5",                  # Timeout for guarder model availability check
+    "SQ_QUICK_PERSON_TIMEOUT": "10",            # Timeout for quick person detection
+    "SQ_QUICK_CHANGE_TIMEOUT": "8",             # Timeout for quick change detection
+    "SQ_SUMMARIZE_TIMEOUT": "15",               # Timeout for detection summarization
+    "SQ_VALIDATE_TIMEOUT": "10",                # Timeout for LLM validation
+    "SQ_ANALYZE_TIMEOUT": "8",                  # Timeout for LLM analysis
+    "SQ_ANALYZE_TRACKING_TIMEOUT": "10",        # Timeout for LLM analysis with tracking
+    
+    # Vision Model Confidence Thresholds
+    "SQ_VISION_ASSUME_PRESENT": "0.5",          # Default confidence when vision can't load
+    "SQ_VISION_CONFIDENT_PRESENT": "0.9",       # Confidence for confident YES response
+    "SQ_VISION_CONFIDENT_ABSENT": "0.9",        # Confidence for confident NO response
+    
+    # HOG Detection Parameters
+    "SQ_HOG_SCALE": "400",                      # Max dimension for HOG detection
+    "SQ_HOG_WINSTRIDE": "8",                    # HOG detection window stride
+    "SQ_HOG_PADDING": "4",                      # HOG detection padding
+    "SQ_HOG_SCALE_FACTOR": "1.05",              # HOG detection scale factor
+    "SQ_HOG_CONFIDENT_NO_PERSON": "0.8",        # Confidence when no person detected
+    "SQ_HOG_MIGHT_BE_PERSON": "0.5",            # Confidence when might be person
+    
+    # Vision Model Parameters
+    "SQ_VISION_MODELS": "llava,moondream,bakllava,llava-llama3,minicpm-v",  # Available vision models
+    "SQ_VISION_TIMEOUT": "10",                 # Vision model request timeout
+    "SQ_VISION_TIMEOUT_LONG": "12",            # Longer timeout for complex requests
+    "SQ_VISION_SUMMARY_MAX_LENGTH": "80",       # Maximum summary length
+    "SQ_VISION_ASSUME_PRESENT": "0.5",         # Default confidence when assuming present
+    "SQ_VISION_CONFIDENT_PRESENT": "0.9",      # High confidence when present
+    "SQ_VISION_CONFIDENT_ABSENT": "0.9",       # High confidence when absent
+    
+    # Guarder Model Parameters
+    "SQ_GUARDER_TIMEOUT": "8",                 # Guarder model request timeout
+    "SQ_GUARDER_DEFAULT_MODEL": "qwen2.5:3b",  # Default guarder model
+    "SQ_GUARDER_SMALL_MODELS": "gemma:2b,phi3:mini,llama3.2:latest,deepseek-r1:1.5b",  # Alternative small models
+    "SQ_GUARDER_MAX_RESPONSE_LENGTH": "200",   # Maximum response length for guarder
+    
+    # Motion Analysis Parameters
+    "SQ_MOTION_ANALYSIS_THRESHOLD": "25",      # Edge detection threshold
+    "SQ_MOTION_ANALYSIS_MIN_AREA": "500",      # Minimum motion area
+    "SQ_MOTION_ANALYSIS_GRID_SIZE": "8",       # Grid size for motion analysis
+    "SQ_MOTION_ANALYSIS_CELL_THRESHOLD": "0.1", # Cell change threshold
+    "SQ_MOTION_ANALYSIS_EDGE_THRESHOLD": "50", # Edge detection threshold
+    "SQ_MOTION_ANALYSIS_VERTICAL_THRESHOLD": "0.3", # Vertical edge threshold
+    "SQ_MOTION_ANALYSIS_UPPER_PERCENT": "0.6",  # Upper motion area percentage
+    "SQ_MOTION_ANALYSIS_MIN_MOTION": "0.5",    # Minimum motion percent
+    "SQ_MOTION_ANALYSIS_MAX_MOTION": "15.0",   # Maximum motion percent
+    "SQ_MOTION_ANALYSIS_MIN_REGIONS": "2",     # Minimum motion regions
+    "SQ_MOTION_ANALYSIS_MAX_REGIONS": "8",     # Maximum motion regions
+    "SQ_MOTION_ANALYSIS_MIN_SPREAD": "0.1",    # Minimum motion spread
+    "SQ_MOTION_ANALYSIS_MAX_SPREAD_X": "0.5",  # Maximum motion spread X
+    "SQ_MOTION_ANALYSIS_MAX_SPREAD_Y": "0.6",  # Maximum motion spread Y
+    "SQ_MOTION_ANALYSIS_CONFIDENCE_THRESHOLD": "0.5", # Person confidence threshold
+    
+    # Tracking Settings
+    "SQ_TRACK_MIN_STABLE_FRAMES": "3",     # Frames before considering track stable
+    "SQ_TRACK_BUFFER": "90",               # Frames before deleting lost track (~3 sec at 30fps)
+    "SQ_TRACK_ACTIVATION_THRESHOLD": "0.25", # Min confidence for new tracks
+    "SQ_TRACK_MATCHING_THRESHOLD": "0.8",   # IoU threshold for track matching
     
     # YOLO Detection (auto-installed on first use)
     "SQ_USE_YOLO": "true",           # Use YOLO for detection (faster, more accurate)
@@ -558,8 +643,8 @@ def run_config_web(host: str = "0.0.0.0", port: int = 8080):
         except Exception as e:
             return jsonify({"success": False, "message": str(e)})
     
-    print(f"\n🔧 Streamware Configuration Panel")
+    print("\n🔧 Streamware Configuration Panel")
     print(f"   Open: http://localhost:{port}")
-    print(f"   Press Ctrl+C to stop\n")
+    print("   Press Ctrl+C to stop\n")
     
     app.run(host=host, port=port, debug=False)

@@ -20,18 +20,25 @@ import json
 logger = logging.getLogger(__name__)
 
 
-def resize_frame_to_base64(frame_path: Path, max_size: int = 128) -> str:
+def resize_frame_to_base64(frame_path: Path, max_size: int = None) -> str:
     """Resize frame to max_size and encode as base64.
     
     Args:
         frame_path: Path to frame image
-        max_size: Maximum dimension (width or height)
+        max_size: Maximum dimension (uses config SQ_MOTION_ANALYSIS_THUMBNAIL_SIZE if None)
         
     Returns:
         Base64 encoded JPEG string
     """
     try:
         import cv2
+        from .config import config
+        
+        # Use config if size not specified
+        if max_size is None:
+            max_size = int(config.get("SQ_MOTION_ANALYSIS_THUMBNAIL_SIZE", "192"))
+        quality = int(config.get("SQ_MOTION_ANALYSIS_THUMBNAIL_QUALITY", "75"))
+        
         img = cv2.imread(str(frame_path))
         if img is None:
             return ""
@@ -45,7 +52,7 @@ def resize_frame_to_base64(frame_path: Path, max_size: int = 128) -> str:
             new_w = int(w * max_size / h)
         
         resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
-        _, buffer = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        _, buffer = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, quality])
         return base64.b64encode(buffer).decode()
         
     except Exception:
@@ -647,15 +654,26 @@ def generate_dsl_html_lightweight(
                 backgrounds_json[delta.frame_num] = delta.background_base64
             # Fallback: try to read from file if it still exists
             elif hasattr(delta, 'frame_path') and delta.frame_path:
-                bg_b64 = resize_frame_to_base64(Path(delta.frame_path), max_size=128)
+                bg_b64 = resize_frame_to_base64(Path(delta.frame_path))
                 if bg_b64:
                     backgrounds_json[delta.frame_num] = bg_b64
+    
+    # Collect frame timestamps for real-time playback
+    frame_timestamps = {}
+    for delta in deltas:
+        frame_timestamps[delta.frame_num] = delta.timestamp
     
     # Calculate statistics
     total_frames = len(deltas)
     avg_motion = sum(d.motion_percent for d in deltas) / total_frames if deltas else 0
     max_blobs = max(len(d.blobs) for d in deltas) if deltas else 0
     total_events = sum(len(d.events) for d in deltas)
+    
+    # Calculate actual duration from timestamps
+    if deltas and len(deltas) > 1:
+        duration_secs = deltas[-1].timestamp - deltas[0].timestamp
+    else:
+        duration_secs = 0
     
     # Load CSS/JS
     static_dir = Path(__file__).parent / "static"
@@ -697,7 +715,7 @@ def generate_dsl_html_lightweight(
     {css_block}
 </head>
 <body>
-    <div class="motion-container" data-motion-player data-width="800" data-height="600" data-fps="{fps}">
+    <div class="motion-container" data-motion-player data-width="800" data-height="600" data-fps="{fps}" data-duration="{duration_secs:.1f}">
         <div class="motion-viewer">
             <h1>🎯 {title}</h1>
             <div class="motion-canvas" id="motion-canvas"></div>
@@ -707,6 +725,7 @@ def generate_dsl_html_lightweight(
                 <button onclick="MotionPlayer.nextFrame()">⏭</button>
                 <input type="range" id="motion-slider" min="0" max="{total_frames-1}" value="0">
                 <span class="frame-info" id="frame-info">1/{total_frames}</span>
+                <span class="duration-info" id="duration-info">{duration_secs:.1f}s</span>
             </div>
         </div>
         
@@ -714,6 +733,7 @@ def generate_dsl_html_lightweight(
             <div class="motion-panel">
                 <h3>📊 Statistics</h3>
                 <div class="stat-row"><span>Total Frames</span><span class="stat-value">{total_frames}</span></div>
+                <div class="stat-row"><span>Duration</span><span class="stat-value">{duration_secs:.1f}s</span></div>
                 <div class="stat-row"><span>Avg Motion</span><span class="stat-value">{avg_motion:.1f}%</span></div>
                 <div class="stat-row"><span>Max Blobs</span><span class="stat-value">{max_blobs}</span></div>
                 <div class="stat-row"><span>Total Events</span><span class="stat-value">{total_events}</span></div>
@@ -736,9 +756,14 @@ def generate_dsl_html_lightweight(
 {dsl_escaped}
     </script>
     
-    <!-- Background Images (128px thumbnails) -->
+    <!-- Background Images (thumbnails) -->
     <script type="application/json" id="motion-backgrounds">
 {json.dumps(backgrounds_json)}
+    </script>
+    
+    <!-- Frame Timestamps for real-time playback -->
+    <script type="application/json" id="motion-timestamps">
+{json.dumps(frame_timestamps)}
     </script>
     
     {js_block}

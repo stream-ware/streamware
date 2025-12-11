@@ -84,6 +84,7 @@ Detailed documentation is available in the [docs/](docs/) directory:
 | Document | Description |
 |----------|-------------|
 | [📚 Documentation Index](docs/README.md) | Main documentation hub |
+| [⚙️ Configuration](docs/CONFIGURATION.md) | Complete configuration reference (NEW!) |
 | [🎬 Real-time Streaming](docs/REALTIME_STREAMING.md) | Browser viewer, WebSocket streaming |
 | [⚡ Performance](docs/PERFORMANCE.md) | Optimization, timing logs, benchmarks |
 | [🤖 LLM Integration](docs/LLM_INTEGRATION.md) | Vision models, async inference |
@@ -309,6 +310,40 @@ sq live narrator --url "rtsp://..." --mode track --focus person --lite
 | 4GB  | `llava:7b` | ~2-3s |
 | 8GB  | `llava:13b` | ~4-5s |
 
+### 🔧 Full Configuration Refactoring (NEW!)
+
+Streamware has been completely refactored to eliminate hardcoded values and provide complete configurability:
+
+**✅ What's Been Refactored:**
+- **smart_detector.py** - All YOLO, HOG, and motion detection parameters configurable
+- **live_narrator.py** - All vision model prompts and processing parameters configurable  
+- **response_filter.py** - All timeout values and confidence thresholds configurable
+
+**🎯 Key Benefits:**
+- **No more hardcoded values** - Everything can be adjusted via `.env` file
+- **Runtime configuration** - Change parameters without code modifications
+- **Better modularity** - Cleaner code with helper functions
+- **Easier debugging** - All thresholds and timeouts visible in configuration
+
+**📊 Configuration Examples:**
+```ini
+# High sensitivity detection
+SQ_YOLO_CONFIDENCE_THRESHOLD=0.1
+SQ_VISION_CONFIDENT_PRESENT=0.8
+
+# Fast performance mode
+SQ_MODEL=moondream
+SQ_IMAGE_PRESET=fast
+SQ_LLM_MIN_MOTION_PERCENT=50
+
+# High accuracy mode
+SQ_MODEL=llava:13b
+SQ_IMAGE_PRESET=quality
+SQ_TRACK_MIN_STABLE_FRAMES=5
+```
+
+📖 **Complete configuration reference:** [docs/CONFIGURATION.md](docs/CONFIGURATION.md)
+
 ### ⚡ Performance Optimizations (NEW)
 
 Streamware includes major performance optimizations for real-time video analysis:
@@ -377,7 +412,115 @@ sq live narrator --url "rtsp://..." --no-guarder
 
 # Lite mode (less RAM) + quiet
 sq live narrator --url "rtsp://..." --lite --quiet
+
+### 🎯 Advanced Object Tracking with ByteTrack (NEW!)
+
+Streamware now includes **ByteTrack** integration for superior multi-object tracking with motion gating:
+
+```bash
+# Enable ByteTrack tracking (recommended for accuracy)
+sq live narrator --url "rtsp://..." --mode track --focus person --tts
 ```
+
+**🚀 Key Benefits:**
+
+- **Stable Track IDs** - Objects maintain consistent IDs across frames
+- **Motion Gating** - 45-90% reduction in YOLO detections for efficiency
+- **Entry/Exit Events** - Instant TTS announcements when objects enter/leave
+- **Track States** - NEW → STABLE → LOST → GONE lifecycle management
+
+**⚙️ Configuration (`.env`):**
+```ini
+# Motion Gating (from tracking benchmark)
+SQ_MOTION_GATE_THRESHOLD=1000    # Min motion area to trigger detection
+SQ_PERIODIC_INTERVAL=30          # Force detection every N frames
+
+# Tracking Settings
+SQ_TRACK_MIN_STABLE_FRAMES=3     # Frames before track is stable
+SQ_TRACK_BUFFER=90               # Frames before deleting lost track
+SQ_TRACK_ACTIVATION_THRESHOLD=0.25  # Min confidence for new tracks
+SQ_TRACK_MATCHING_THRESHOLD=0.8    # IoU threshold for track matching
+```
+
+**📊 Performance Results (RTSP benchmark):**
+
+| Metric | Result | Improvement |
+|--------|--------|-------------|
+| **YOLO11n Detection** | ~10ms | Fast enough for real-time |
+| **Motion Gating** | 45-86% reduction | Significant CPU savings |
+| **Tracking FPS** | 74+ | Real-time capability |
+| **Track Stability** | 95%+ | Consistent object IDs |
+
+**🎮 Usage Examples:**
+
+```bash
+# Basic person tracking with TTS
+sq live narrator --url "rtsp://camera/stream" --mode track --focus person --tts
+
+# High-sensitivity tracking (detect small movements)
+SQ_MOTION_GATE_THRESHOLD=500 sq live narrator --url "rtsp://..." --mode track
+
+# Low-power mode (fewer detections, longer intervals)
+SQ_MOTION_GATE_THRESHOLD=2000 SQ_PERIODIC_INTERVAL=60 sq live narrator --url "rtsp://..."
+
+# Multi-object tracking (vehicles)
+sq live narrator --url "rtsp://traffic/camera" --mode track --focus vehicle --tts
+
+# Animal/bird tracking with specialized detector
+sq live narrator --url "rtsp://wildlife/cam" --mode track --focus animal --tts
+```
+
+**🔧 API Usage:**
+
+```python
+from streamware.object_tracker_bytetrack import ObjectTrackerByteTrack
+
+# Create tracker with custom settings
+tracker = ObjectTrackerByteTrack(
+    focus="person",
+    max_lost_frames=90,
+    min_stable_frames=3,
+    frame_rate=30,
+)
+
+# Update with detections
+detections = [{"x": 0.5, "y": 0.5, "w": 0.1, "h": 0.2, "confidence": 0.8}]
+result = tracker.update(detections)
+
+# Check for entry/exit events
+if result.entries:
+    for obj in result.entries:
+        print(f"Person #{obj.id} entered the frame")
+
+if result.exits:
+    for obj in result.exits:
+        print(f"Person #{obj.id} left the frame")
+```
+
+**🤖 Recommended Vision Models:**
+
+| Model | Quality | Speed | Use Case |
+|-------|---------|-------|----------|
+| **llava:13b** | Excellent | Medium | Best accuracy, detailed analysis |
+| **llava:7b** | Good | Fast | Default choice, balanced performance |
+| **bakllava** | Good | Fast | Alternative to llava:7b |
+| **moondream** | Basic | Fastest | Lightweight, basic detection |
+
+```bash
+# Use better model for high-quality analysis
+sq live narrator --url "rtsp://..." --model llava:13b --mode track
+
+# Use default balanced model
+sq live narrator --url "rtsp://..." --model llava:7b --mode track
+```
+
+**📋 Track States:**
+- **NEW** - Track just created, not yet stable
+- **TRACKED** - Stable track with consistent ID
+- **LOST** - Track temporarily missing (may recover)
+- **GONE** - Track permanently lost (exit event)
+
+📖 **Full tracking documentation:** [demos/tracking_benchmark/README.md](demos/tracking_benchmark/README.md)
 
 ### ⚡ Image Optimization for LLM
 

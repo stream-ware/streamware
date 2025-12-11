@@ -2968,7 +2968,8 @@ def handle_live(args) -> int:
     # FAST mode: auto-select smaller model if not specified
     if getattr(args, 'fast', False) and not getattr(args, 'model', None):
         # Try to use fastest available vision model
-        fast_models = ['moondream', 'moondream:latest', 'llava:7b', 'bakllava']
+        # Prefer llava:7b as it's more reliable than moondream (which returns empty responses sometimes)
+        fast_models = ['llava:7b', 'llava', 'llava:13b', 'bakllava']
         from .setup_utils import check_ollama_model
         for fast_model in fast_models:
             if check_ollama_model(fast_model):
@@ -3033,18 +3034,17 @@ def handle_live(args) -> int:
         config.set("SQ_INTENT", intent_str)
         config.set("SQ_INTENT_TYPE", intent.name)
     
-    # Fast mode: use smaller model and aggressive optimization
-    if getattr(args, 'fast', False):
-        print("⚡ Fast mode enabled: using llava:7b model, aggressive caching")
-        # Use llava:7b as default fast vision model
         from .setup_utils import check_ollama_model
         if not getattr(args, 'model', None):
             if check_ollama_model("llava:7b")[0]:
                 args.model = "llava:7b"
-            elif check_ollama_model("moondream")[0]:
-                args.model = "moondream"
+            elif check_ollama_model("llava")[0]:
+                args.model = "llava"
+            elif check_ollama_model("bakllava")[0]:
+                args.model = "bakllava"
         # Set aggressive optimization
         config.set("SQ_FAST_MODE", "true")
+        print(f"⚡ Fast mode enabled: using {args.model} model, aggressive caching")
     
     # Build URI
     uri = f"live://{op}?source={url}"
@@ -3108,8 +3108,9 @@ def handle_live(args) -> int:
         uri += f"&focus={args.focus}"
     if getattr(args, 'webhook', None):
         uri += f"&webhook_url={args.webhook}"
-    if getattr(args, 'model', None):
-        uri += f"&model={args.model}"
+    # Always pass model - either from args or from config
+    model_param = getattr(args, 'model', None) or vision_model
+    uri += f"&model={model_param}"
     if getattr(args, 'lite', False):
         uri += "&lite=true"
     if getattr(args, 'quiet', False):
@@ -3129,12 +3130,18 @@ def handle_live(args) -> int:
     # Setup timing logger if --log-file specified
     log_file = getattr(args, 'log_file', None)
     log_format = getattr(args, 'log_format', 'csv')
+    
+    # Pass log format to URI so component knows about it
+    uri += f"&log_format={log_format}"
+    
     if log_file and isinstance(log_file, str):
         from .timing_logger import set_log_file
+        # Note: set_log_file doesn't support console_format yet in this context, 
+        # but LiveNarrator will re-init logger with correct format
         set_log_file(log_file, verbose=getattr(args, 'verbose', False))
         print(f"📊 Timing logs will be saved to: {log_file} (format: {log_format})")
         # Also pass through URI so component can access it
-        uri += f"&log_file={log_file}&log_format={log_format}"
+        uri += f"&log_file={log_file}"
     
     # Show header only if not quiet and not structured format
     fmt = _get_output_format(args)

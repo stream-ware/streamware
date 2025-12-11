@@ -223,56 +223,130 @@ class LLMClient:
         
         for attempt in range(self.config.max_retries + 1):
             try:
-                response = self._session.post(
-                    url,
-                    json={
-                        "model": model,
-                        "prompt": prompt,
-                        "images": [image_b64],
-                        "stream": False,
-                    },
-                    timeout=timeout,
-                )
+                response = self._make_ollama_request(url, model, prompt, image_b64, timeout)
+                result = self._process_ollama_response(response, model, prompt, image_b64, timeout, attempt)
+                if result is not None:
+                    return result
                 
-                if response.ok:
-                    data = response.json()
-                    resp_text = data.get("response", "").strip()
-                    # Debug: log if empty response
-                    if not resp_text:
-                        logger.warning(f"Ollama returned empty response. Raw data: {str(data)[:200]}")
-                    return {
-                        "success": True,
-                        "response": resp_text,
-                        "model": model,
-                        "tokens_in": data.get("prompt_eval_count", 0),
-                        "tokens_out": data.get("eval_count", 0),
-                    }
-                else:
-                    if attempt < self.config.max_retries:
-                        time.sleep(1)
-                        continue
-                    return {
-                        "success": False,
-                        "response": "",
-                        "error": f"HTTP {response.status_code}",
-                    }
-                    
             except requests.exceptions.Timeout:
-                if attempt < self.config.max_retries:
+                if self._should_retry(attempt):
                     continue
-                return {
-                    "success": False,
-                    "response": "",
-                    "error": "Timeout",
-                }
+                return self._create_error_response("Timeout")
+                
             except Exception as e:
-                return {
-                    "success": False,
-                    "response": "",
-                    "error": str(e),
-                }
+                return self._create_error_response(str(e))
         
-        return {"success": False, "response": "", "error": "Max retries exceeded"}
+        return self._create_error_response("Max retries exceeded")
+    
+    def _make_ollama_request(self, url: str, model: str, prompt: str, image_b64: str, timeout: int):
+        """Make HTTP request to Ollama API."""
+        return self._session.post(
+            url,
+            json={
+                "model": model,
+                "prompt": prompt,
+                "images": [image_b64],
+                "stream": False,
+            },
+            timeout=timeout,
+        )
+    
+    def _process_ollama_response(self, response, model: str, prompt: str, image_b64: str, timeout: int, attempt: int) -> Union[Dict[str, Any], None]:
+        """Process Ollama API response."""
+        if response.ok:
+            return self._handle_successful_response(response, model, prompt, image_b64, timeout)
+        else:
+            return self._handle_failed_response(response, attempt)
+    
+    def _handle_successful_response(self, response, model: str, prompt: str, image_b64: str, timeout: int) -> Dict[str, Any]:
+        """Handle successful Ollama response."""
+        data = response.json()
+        resp_text = data.get("response", "").strip()
+        
+        if not resp_text:
+            return self._handle_empty_response(data, model, prompt, image_b64, timeout)
+        
+        return {
+            "success": True,
+            "response": resp_text,
+            "model": model,
+            "tokens_in": data.get("prompt_eval_count", 0),
+            "tokens_out": data.get("eval_count", 0),
+        }
+    
+    def _handle_empty_response(self, data: dict, model: str, prompt: str, image_b64: str, timeout: int) -> Dict[str, Any]:
+        """Handle empty response from Ollama."""
+        logger.warning(f"Ollama returned empty response. Model: {model}, Prompt length: {len(prompt)}")
+        logger.warning(f"Raw response data: {str(data)[:500]}")
+        logger.warning(f"Image data length: {len(image_b64) if image_b64 else 0}")
+        
+        if "person" in prompt.lower():
+            logger.info("Trying fallback prompt for person detection...")
+            fallback_prompt = "Is there a person visible? Answer YES or NO."
+            return self._call_ollama_fallback(image_b64, fallback_prompt, model, timeout)
+        
+        return self._create_error_response("Empty response")
+    
+    def _handle_failed_response(self, response, attempt: int) -> Union[Dict[str, Any], None]:
+        """Handle failed HTTP response."""
+        if attempt < self.config.max_retries:
+            time.sleep(1)
+            return None  # Signal to retry
+        return self._create_error_response(f"HTTP {response.status_code}")
+    
+    def _should_retry(self, attempt: int) -> bool:
+        """Check if we should retry based on attempt number."""
+        return attempt < self.config.max_retries
+    
+    def _create_error_response(self, error: str) -> Dict[str, Any]:
+        """Create standardized error response."""
+        return {"success": False, "response": "", "error": error}
+    
+    def _call_ollama_fallback(
+        self, 
+        image_b64: str, 
+        prompt: str, 
+        model: str, 
+        timeout: int
+    ) -> Dict[str, Any]:
+        """Fallback Ollama call with simpler parameters."""
+        try:
+            url = f"{self.config.ollama_url}/api/generate"
+            response = self._session.post(
+                url,
+                json={
+                    "model": model,
+                    "prompt": prompt,
+                    "images": [image_b64],
+                    "stream": False,
+                    "options": {
+                        "temperature": 0.1,
+                        "top_p": 0.9,
+                    }
+                },
+                timeout=timeout,
+            )
+            
+            if response.ok:
+                data = response.json()
+                resp_text = data.get("response", "").strip()
+                logger.info(f"Fallback response: {resp_text[:100]}")
+                
+                return {
+                    "success": True,
+                    "response": resp_text,
+                    "model": model,
+                    "tokens_in": data.get("prompt_eval_count", 0),
+                    "tokens_out": data.get("eval_count", 0),
+                    "fallback": True,
+                }
+            else:
+                logger.error(f"Fallback call failed: {response.status_code}")
+                
+        except Exception as e:
+            logger.error(f"Fallback exception: {e}")
+        
+        return {"success": False, "response": "", "error": "Fallback failed"}
     
     def _call_openai(
         self, 

@@ -523,7 +523,8 @@ class LiveNarratorComponent(Component):
         self._person_state: str = ""  # visible, not_visible, just_appeared, just_left
         
         # Object tracker for multi-object tracking across frames
-        self._object_tracker = None  # Lazy init
+        self._object_tracker = None  # Lazy init (IoU-based)
+        self._bytetrack = None       # Lazy init (ByteTrack-based)
         self.min_stable_track_frames = int(config.get("SQ_TRACK_MIN_STABLE_FRAMES", "2"))
     
     def _parse_triggers(self, trigger_str: str) -> List[Trigger]:
@@ -539,7 +540,7 @@ class LiveNarratorComponent(Component):
         return triggers
     
     def _analyze_movement(self, analysis: Dict, frame_width: int = 1920, frame_height: int = 1080) -> Dict:
-        """Analyze movement direction from motion regions using ObjectTracker.
+        """Analyze movement direction from motion regions using ObjectTracker or ByteTracker.
         
         Returns dict with:
             - direction: entering, exiting, moving_left, moving_right, stationary, unknown
@@ -548,6 +549,10 @@ class LiveNarratorComponent(Component):
             - description: human-readable movement description
             - tracked_objects: list of tracked objects with IDs
         """
+        # Use ByteTracker for 'track' mode (more accurate, stable IDs)
+        if self.mode == "track":
+            return self._analyze_movement_bytetrack(analysis, frame_width, frame_height)
+            
         from ..object_tracker import ObjectTracker, extract_detections_from_regions
         
         # Initialize tracker if needed
@@ -654,7 +659,242 @@ class LiveNarratorComponent(Component):
         self._person_state = result["person_state"]
         
         return result
+
+    def _analyze_movement_bytetrack(self, analysis: Dict, frame_width: int, frame_height: int) -> Dict:
+        """Analyze movement using ByteTrack tracker."""
+        from ..object_tracker_bytetrack import ObjectTrackerByteTrack
+        from ..object_tracker import extract_detections_from_regions
+        
+        # Lazy init ByteTrack tracker
+        if self._bytetrack is None:
+            self._bytetrack = ObjectTrackerByteTrack(
+                focus=self.focus or "person",
+                max_lost_frames=90,
+                min_stable_frames=self.min_stable_track_frames,
+                frame_rate=30,
+            )
+            logger.info("ByteTrack tracker initialized")
+        
+        result = {
+            "direction": "unknown",
+            "person_state": "unknown",
+            "position": None,
+            "description": "",
+            "tracked_objects": [],
+            "object_count": 0,
+        }
+        
+        # Get motion regions and convert to detections
+        regions = analysis.get("motion_regions", [])
+        has_motion = analysis.get("has_motion", False)
+        
+        # Add frame dimensions to regions
+        for r in regions:
+            r["frame_width"] = frame_width
+            r["frame_height"] = frame_height
+        
+        detections = extract_detections_from_regions(regions)
+        
+        # Update tracker
+        tracking_result = self._bytetrack.update(detections)
+        
+        result["tracked_objects"] = tracking_result.objects
+        result["object_count"] = tracking_result.active_count
+        
+        if not tracking_result.objects:
+            # No objects tracked
+            if self._last_position:
+                result["person_state"] = "just_left"
+                result["direction"] = "exiting"
+                result["description"] = f"{self.focus.title()} left the frame"
+            else:
+                result["person_state"] = "not_visible"
+                result["description"] = "Scene is still"
+            
+            self._last_position = None
+            return result
+        
+        # Filter stable objects
+        stable_objects = [
+            o for o in tracking_result.objects
+            if getattr(o, "frames_tracked", 0) >= self.min_stable_track_frames
+        ]
+        
+        if not stable_objects:
+            if has_motion:
+                result["person_state"] = "just_appeared"
+                result["direction"] = "entering"
+                result["description"] = f"{self.focus.title()} just appeared (stabilizing track)"
+            else:
+                result["person_state"] = "not_visible"
+                result["description"] = "Scene is still"
+            self._last_position = None
+            return result
+        
+        # Get primary object (largest stable one)
+        primary_obj = max(stable_objects, key=lambda o: o.bbox.area)
+        
+        # Update position
+        center_x = primary_obj.bbox.x * frame_width
+        center_y = primary_obj.bbox.y * frame_height
+        current_pos = {"x": center_x, "y": center_y, "timestamp": time.time()}
+        result["position"] = current_pos
+        
+        # Use tracker's direction and state
+        result["direction"] = primary_obj.direction.value
+        result["person_state"] = primary_obj.state.value
+        
+        # Build description
+        if tracking_result.active_count == 1:
+            result["description"] = primary_obj.get_summary()
+        else:
+            summaries = [f"#{obj.id}: {obj.get_summary()}" for obj in tracking_result.objects[:3]]
+            result["description"] = f"{tracking_result.active_count} objects tracked. " + ". ".join(summaries)
+        
+        # Add entry/exit events to description and trigger TTS
+        if tracking_result.has_entries():
+            for obj in tracking_result.entries:
+                result["description"] += f" {obj.object_type.title()} #{obj.id} entered."
+                # Trigger immediate TTS for entry event
+                if self.tts_enabled and not self.quiet:
+                    self._speak_tracker_event(obj, "entered")
+        
+        if tracking_result.has_exits():
+            for obj in tracking_result.exits:
+                result["description"] += f" {obj.object_type.title()} #{obj.id} left."
+                # Trigger immediate TTS for exit event
+                if self.tts_enabled and not self.quiet:
+                    self._speak_tracker_event(obj, "left")
+        
+        # Update position history
+        self._position_history.append(current_pos)
+        if len(self._position_history) > 10:
+            self._position_history.pop(0)
+        
+        self._last_position = current_pos
+        self._movement_direction = result["direction"]
+        self._person_state = result["person_state"]
+        
+        return result
     
+    def _analyze_movement_bytetrack(self, analysis: Dict, frame_width: int, frame_height: int) -> Dict:
+        """Analyze movement using ByteTrack + YOLO."""
+        from ..bytetrack import ByteTracker, create_tracker, Detection, TrackState
+        from ..yolo_detector import YOLODetector
+        import cv2
+        import numpy as np
+        
+        # Lazy init components
+        if self._bytetrack is None:
+            # Check if ReID is requested (via URI or config)
+            use_reid = True if self.mode == "track" else False
+            self._bytetrack = create_tracker(use_reid=use_reid, preset="balanced")
+            
+        if getattr(self, "_yolo_detector", None) is None:
+            # Use OpenVINO backend if available on AMD
+            self._yolo_detector = YOLODetector(
+                model="yolo11n", 
+                backend="openvino",
+                classes=[self.focus] if self.focus and self.focus != "general" else None
+            )
+            
+        detections = []
+        frame = None
+        
+        frame_path = getattr(self, "_current_frame_path", None)
+        
+        if frame_path and Path(frame_path).exists():
+            try:
+                frame = cv2.imread(str(frame_path))
+                if frame is not None:
+                    # Run YOLO
+                    yolo_detections = self._yolo_detector.detect(frame)
+                    detections = yolo_detections
+            except Exception as e:
+                logger.debug(f"YOLO detection failed: {e}")
+        
+        # Update tracker
+        tracks = self._bytetrack.update(detections, frame)
+        
+        # Convert tracks to result format
+        result = {
+            "direction": "unknown",
+            "person_state": "unknown",
+            "position": None,
+            "description": "",
+            "tracked_objects": [],
+            "object_count": len(tracks),
+        }
+        
+        adapted_tracks = []
+        for track in tracks:
+            # Determine direction from velocity
+            vx, vy = track.velocity
+            direction = "stationary"
+            if abs(vx) > 0.005 or abs(vy) > 0.005:  # Lower threshold for normalized velocity
+                if abs(vx) > abs(vy):
+                    direction = "moving_right" if vx > 0 else "moving_left"
+                else:
+                    direction = "moving_down" if vy > 0 else "moving_up"
+            
+            # Determine state
+            state = "visible"
+            if track.age < 5:
+                state = "just_appeared"
+            
+            # Create a simple object to mimic the old interface
+            class AdaptedTrack:
+                def __init__(self, t):
+                    self.id = t.id
+                    self.bbox = type('obj', (object,), {
+                        'x': (t.bbox[0]+t.bbox[2])/2, 
+                        'y': (t.bbox[1]+t.bbox[3])/2, 
+                        'area': t.area
+                    })
+                    self.direction = type('obj', (object,), {'value': direction})
+                    self.state = type('obj', (object,), {'value': state})
+                    self._t = t
+                    self.object_type = t.class_name
+                
+                def get_summary(self):
+                    return f"is {direction.replace('_', ' ')}"
+            
+            adapted_tracks.append(AdaptedTrack(track))
+            
+        result["tracked_objects"] = adapted_tracks
+        
+        if adapted_tracks:
+            # Get primary object (largest)
+            primary = max(adapted_tracks, key=lambda o: o.bbox.area)
+            result["direction"] = primary.direction.value
+            result["person_state"] = primary.state.value
+            
+            # Position
+            result["position"] = {
+                "x": primary.bbox.x * frame_width,
+                "y": primary.bbox.y * frame_height,
+                "timestamp": time.time()
+            }
+            
+            if len(adapted_tracks) == 1:
+                result["description"] = f"{self.focus.title()} {primary.get_summary()}"
+            else:
+                ids = [f"#{t.id}" for t in adapted_tracks[:3]]
+                result["description"] = f"{len(tracks)} objects tracked ({', '.join(ids)})"
+        else:
+             if self._last_position:
+                 result["person_state"] = "just_left"
+                 result["description"] = f"{self.focus.title()} left the frame"
+                 self._last_position = None
+             else:
+                 result["person_state"] = "not_visible"
+                 result["description"] = "No objects visible"
+             
+        if adapted_tracks:
+            self._last_position = result["position"]
+            
+        return result
+
     def _matches_focus(self, label: str) -> bool:
         if not self.focus:
             return True
@@ -812,7 +1052,29 @@ class LiveNarratorComponent(Component):
             worker.speak(text)
         except Exception as e:
             logger.debug(f"DSL TTS worker error: {e}")
-    
+
+    def _speak_tracker_event(self, obj, action: str) -> None:
+        """Speak tracker entry/exit events using TTS."""
+        label = obj.object_type.title()
+        text = f"{label} #{obj.id} {action} the frame"
+        
+        # Avoid duplicate TTS for same event
+        last_tracker_tts = getattr(self, "_last_tracker_tts", "")
+        if text == last_tracker_tts:
+            return
+        self._last_tracker_tts = text
+        
+        try:
+            from ..tts_worker_process import get_tts_worker
+            worker = get_tts_worker(
+                engine=self.tts_engine,
+                rate=self.tts_rate,
+                voice=self.tts_voice,
+            )
+            worker.speak(text)
+        except Exception as e:
+            logger.debug(f"Tracker TTS error: {e}")
+
     def process(self, data: Any) -> Dict:
         """Process live narration"""
         if not self.source:
@@ -858,11 +1120,13 @@ class LiveNarratorComponent(Component):
         
         # Check if log_file was passed through URI
         log_file = getattr(self, 'log_file', None)
+        log_format = getattr(self, 'log_format', 'text')
+        
         if log_file:
-            set_log_file(log_file, verbose=self.verbose)
+            set_log_file(log_file, verbose=self.verbose, console_format=log_format)
         
         # Get logger (will reuse existing if set_log_file was called)
-        tlog = get_logger(verbose=self.verbose)
+        tlog = get_logger(verbose=self.verbose, console_format=log_format)
         
         if self.verbose:
             print("\n📊 Verbose mode: showing all steps in real-time", flush=True)
@@ -972,6 +1236,8 @@ class LiveNarratorComponent(Component):
             min_interval=max(1.0, self.interval / 3),
             max_interval=min(15.0, self.interval * 3),
             use_local_detection=True,
+            slow_processing_threshold=float(config.get("SQ_SLOW_PROCESSING_THRESHOLD", "1.0")),
+            throttle_interval=float(config.get("SQ_THROTTLE_INTERVAL", "5.0")),
         )
         optimizer = get_optimizer(opt_config)
         
@@ -1004,6 +1270,7 @@ class LiveNarratorComponent(Component):
             use_small_llm=True,
             use_yolo=use_yolo,
             yolo_model=yolo_model,
+            mode=self.mode,
         )
         
         start_time = time.time()
@@ -1031,7 +1298,9 @@ class LiveNarratorComponent(Component):
         else:
             print(f"\n🎬 Starting narrator loop (duration={self.duration}s, interval={self.interval}s)", flush=True)
         
+        last_frame_duration = 0.0
         while time.time() - start_time < self.duration and self._running:
+            loop_start_time = time.time()
             frame_num += 1
             elapsed = time.time() - start_time
             
@@ -1042,6 +1311,7 @@ class LiveNarratorComponent(Component):
             
             # Capture frame - use FastCapture if available (10x faster)
             tlog.start("capture")
+            frame_from_fast_capture = False
             if fast_capture and fast_capture.is_running:
                 # Get pre-buffered frame from FastCapture
                 if self.verbose:
@@ -1049,6 +1319,7 @@ class LiveNarratorComponent(Component):
                 frame_info = fast_capture.get_frame(timeout=5.0)
                 if frame_info:
                     frame_path = frame_info.path
+                    frame_from_fast_capture = True
                     tlog.end("capture", f"fast={frame_info.capture_time_ms:.0f}ms")
                     if self.verbose:
                         print(f"   ✅ Got frame: {frame_path}", flush=True)
@@ -1060,15 +1331,39 @@ class LiveNarratorComponent(Component):
                 frame_path = self._capture_frame(frame_num)
                 tlog.end("capture")
             
-            if not frame_path or not frame_path.exists():
+            # Skip exists check for FastCapture frames - trust the queue
+            # Only check exists for fallback captures
+            if not frame_from_fast_capture and (not frame_path or not frame_path.exists()):
                 print(f"   ❌ Frame capture failed", flush=True)
                 tlog.end_frame("capture_failed")
                 time.sleep(current_interval)
                 continue
             
+            # For FastCapture, just check we have a path
+            if frame_from_fast_capture and not frame_path:
+                print(f"   ❌ Frame capture failed", flush=True)
+                tlog.end_frame("capture_failed")
+                time.sleep(current_interval)
+                continue
+            
+            # Store for ByteTracker/YOLO analysis
+            self._current_frame_path = frame_path
+            
+            # Read frame immediately to prevent race conditions with cleanup
+            try:
+                import cv2
+                frame_data = cv2.imread(str(frame_path))
+            except Exception:
+                frame_data = None
+            
             # === SVG ANALYSIS (runs in parallel, doesn't block) ===
             try:
-                svg_delta = svg_analyzer.analyze(frame_path, timing_logger=dsl_timing)
+                svg_delta = svg_analyzer.analyze(
+                    frame_path, 
+                    timing_logger=dsl_timing, 
+                    frame_num=frame_num,
+                    frame_data=frame_data
+                )
                 dsl_generator.add_delta(svg_delta)
                 frame_deltas.append(svg_delta)
                 
@@ -1162,7 +1457,7 @@ class LiveNarratorComponent(Component):
                 tlog.end("smart_detect", f"target={detection.has_target} motion={detection.motion_percent:.1f}%")
                 
                 # Adaptive interval based on motion
-                current_interval = optimizer.get_adaptive_interval(detection.motion_percent)
+                current_interval = optimizer.get_adaptive_interval(detection.motion_percent, processing_time=last_frame_duration)
                 
                 # Skip if SmartDetector says no need to process
                 if detection.skip_reason and frame_num > 1:
@@ -1256,25 +1551,36 @@ class LiveNarratorComponent(Component):
                 ]
 
                 # Configurable minimal motion threshold for calling vision LLM
-                min_motion_pct = float(config.get("SQ_LLM_MIN_MOTION_PERCENT", "1.0"))
+                # In track mode, use lower threshold to detect stationary people
+                if self.mode == "track":
+                    min_motion_pct = float(config.get("SQ_LLM_MIN_MOTION_PERCENT", "0.1"))
+                else:
+                    min_motion_pct = float(config.get("SQ_LLM_MIN_MOTION_PERCENT", "1.0"))
 
                 if not moving_tracks and motion_pct < min_motion_pct:
-                    if not self.quiet:
-                        ts = datetime.now().strftime("%H:%M:%S")
-                        print(f"⚪ [{ts}] No significant tracked movement (motion={motion_pct:.1f}%)", flush=True)
+                    # In track mode, force analysis every N frames even with no motion
+                    # This helps detect stationary people that might not trigger motion
+                    if self.mode == "track" and frame_num % 5 == 0:  # Every 5th frame
+                        if not self.quiet:
+                            ts = datetime.now().strftime("%H:%M:%S")
+                            print(f"⚪ [{ts}] Track mode: forcing analysis (motion={motion_pct:.1f}%)", flush=True)
+                    else:
+                        if not self.quiet:
+                            ts = datetime.now().strftime("%H:%M:%S")
+                            print(f"⚪ [{ts}] No significant tracked movement (motion={motion_pct:.1f}%)", flush=True)
 
-                    tlog.log_decision(
-                        frame_num,
-                        "llm_gating",
-                        "skipped",
-                        f"no_moving_tracks motion={motion_pct:.1f}%",
-                        {"motion_percent": motion_pct, "object_count": movement_data.get("object_count", 0)},
-                    )
-                    tlog.increment_frame_count(skipped=True)
-                    tlog.end_frame("no_significant_motion")
-                    self._prev_frame = frame_path
-                    time.sleep(current_interval)
-                    continue
+                        tlog.log_decision(
+                            frame_num,
+                            "llm_gating",
+                            "skipped",
+                            f"no_moving_tracks motion={motion_pct:.1f}%",
+                            {"motion_percent": motion_pct, "object_count": movement_data.get("object_count", 0)},
+                        )
+                        tlog.increment_frame_count(skipped=True)
+                        tlog.end_frame("no_significant_motion")
+                        self._prev_frame = frame_path
+                        time.sleep(current_interval)
+                        continue
                 
             elif self.use_advanced:
                 # Legacy advanced analysis for non-tracking modes
@@ -1284,7 +1590,7 @@ class LiveNarratorComponent(Component):
                 self._last_analysis = frame_analysis
                 
                 motion_pct = frame_analysis.get("motion_percent", 0)
-                current_interval = optimizer.get_adaptive_interval(motion_pct)
+                current_interval = optimizer.get_adaptive_interval(motion_pct, processing_time=last_frame_duration)
                 
                 if motion_pct < 0.5 and frame_num > 1:
                     if not self.quiet:
@@ -1438,7 +1744,8 @@ class LiveNarratorComponent(Component):
                 self._last_state_person = curr_has_person
                 
                 # Skip if same as last description AND no state change
-                if short_description == getattr(self, '_last_short_description', '') and not state_changed:
+                # EXCEPTION: In track mode with TTS, always speak even if duplicate
+                if short_description == getattr(self, '_last_short_description', '') and not state_changed and not (self.mode == "track" and self.tts_enabled):
                     tlog.log_decision(frame_num, "duplicate_filter", "skipped", 
                                      f"Same as previous: {short_description[:40]}", {})
                     tlog.increment_frame_count(skipped=True)
@@ -1478,7 +1785,10 @@ class LiveNarratorComponent(Component):
                 triggered, matches = self._check_triggers(self._last_description)
                 
                 # Skip logging if not significant and no trigger (reduce noise)
-                if not is_worth_logging and not triggered:
+                # EXCEPTION: In track mode with TTS, always speak status updates
+                should_speak = self.tts_enabled and self.mode == "track"
+                
+                if not is_worth_logging and not triggered and not should_speak:
                     if not self.quiet:
                         ts = datetime.now().strftime("%H:%M:%S")
                         print(f"⚪ [{ts}] {short_description}", flush=True)
@@ -1537,7 +1847,11 @@ class LiveNarratorComponent(Component):
                         print(f"📝 [{ts}]{analysis_info} {description}", flush=True)
                 
                 # Speak (TTS) only for significant events
-                should_speak = should_notify(description, mode=self.mode) or triggered
+                # In track mode, always speak status updates (even "no person")
+                if self.mode == "track" and self.tts_enabled:
+                    should_speak = True
+                else:
+                    should_speak = should_notify(description, mode=self.mode) or triggered
                 tlog.start("tts_check")
                 
                 # Log the TTS decision with full context
@@ -1576,6 +1890,9 @@ class LiveNarratorComponent(Component):
             
             self._prev_frame = frame_path
             time.sleep(current_interval)
+            
+            # Update processing duration for next iteration throttling
+            last_frame_duration = time.time() - loop_start_time
         
         # Cleanup FastCapture
         if fast_capture:
@@ -1623,15 +1940,22 @@ class LiveNarratorComponent(Component):
                 if self.log_file:
                     html_path = Path(self.log_file).with_suffix('.html')
                 else:
-                    html_path = Path(f"motion_analysis_{int(time.time())}.html")
+                    # Use session_id from logger for consistent naming with timing log
+                    session_id = getattr(tlog, 'session_id', int(time.time()))
+                    html_path = Path(f"motion_analysis_{session_id}.html")
                 
                 dsl_output = dsl_generator.get_full_dsl()
+                
+                # Get FPS from config (default 1.0 for slower, complete animations)
+                from ..config import config as cfg
+                motion_fps = float(cfg.get("SQ_MOTION_ANALYSIS_FPS", "1.0"))
+                
                 generate_dsl_html_lightweight(
                     deltas=frame_deltas,
                     dsl_output=dsl_output,
                     output_path=str(html_path),
                     title=f"Motion Analysis - {self.mode} mode",
-                    fps=2.0,
+                    fps=motion_fps,
                     include_backgrounds=True,  # 128px frame thumbnails
                     embed_assets=True,  # Inline CSS/JS for standalone file
                 )
@@ -2303,8 +2627,8 @@ class LiveNarratorComponent(Component):
                     except KeyError:
                         pass  # Fall through to default
                 
-                # Clear prompt for person detection - verify presence first
-                return "Look at this image carefully. Is there a person clearly visible? If YES, describe what they are doing in one sentence. If NO person is visible, say 'No person visible' and briefly describe what you see instead."
+                # Ultra-lenient prompt for person detection - prioritize detection over accuracy
+                return "Is there a person in this image? Look for ANY human shape: person, silhouette, shadow, reflection, partial view. If you see anything that could be a person, say YES and describe them. Only say 'No person visible' if the image is 100% empty room with no humans at all. Be very generous - false positives are better than missing a person."
             
             elif focus_obj in ("bird", "birds"):
                 # Load from file

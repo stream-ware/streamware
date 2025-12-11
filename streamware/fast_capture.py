@@ -354,13 +354,19 @@ class FastCapture:
             self._cv_capture.release()
     
     def _cleanup_old_frames(self):
-        """Remove old frame files, keep last 30 (enough for slow LLM processing)."""
+        """Remove old frame files, keep last 500 (enough for very slow LLM processing)."""
         try:
-            old_frames = sorted(self.ramdisk_path.glob("frame_*.jpg"))
-            if len(old_frames) > 30:
-                for old_frame in old_frames[:-30]:
+            # Only match original frames (not optimized _opt.jpg versions)
+            all_frames = sorted(self.ramdisk_path.glob("frame_*.jpg"))
+            old_frames = [f for f in all_frames if "_opt" not in f.name]
+            if len(old_frames) > 500:
+                for old_frame in old_frames[:-500]:
                     try:
                         old_frame.unlink()
+                        # Also remove optimized version if exists
+                        opt_frame = old_frame.with_name(old_frame.stem + "_opt.jpg")
+                        if opt_frame.exists():
+                            opt_frame.unlink()
                     except OSError:
                         pass
         except OSError:
@@ -439,12 +445,17 @@ class FastCapture:
                         
                         last_mtime = mtime
                         
-                        # Cleanup old frame copies (keep last 10 for slow processing)
-                        old_frames = sorted(self.ramdisk_path.glob("frame_*.jpg"))
-                        if len(old_frames) > 10:
-                            for old_frame in old_frames[:-10]:
+                        # Cleanup old frame copies (keep last 500 for slow processing)
+                        all_frames = sorted(self.ramdisk_path.glob("frame_*.jpg"))
+                        old_frames = [f for f in all_frames if "_opt" not in f.name]
+                        if len(old_frames) > 500:
+                            for old_frame in old_frames[:-500]:
                                 try:
                                     old_frame.unlink()
+                                    # Also remove optimized version if exists
+                                    opt_frame = old_frame.with_name(old_frame.stem + "_opt.jpg")
+                                    if opt_frame.exists():
+                                        opt_frame.unlink()
                                 except OSError:
                                     pass
                 

@@ -74,6 +74,10 @@ class OptimizerConfig:
     # Resolution scaling
     max_width: int = 640           # Max width for LLM
     max_height: int = 480          # Max height for LLM
+    
+    # Throttling for slow processing
+    slow_processing_threshold: float = 1.0  # If processing > this (seconds), throttle
+    throttle_interval: float = 5.0          # Throttle to this interval (seconds) = 0.2 FPS
 
 
 class FrameOptimizer:
@@ -87,20 +91,23 @@ class FrameOptimizer:
         self._hog_detector = None
         self._stats: List[FrameStats] = []
         
-    def get_adaptive_interval(self, motion_percent: float) -> float:
-        """Calculate adaptive interval based on motion.
+    def get_adaptive_interval(self, motion_percent: float, processing_time: float = 0.0) -> float:
+        """Calculate adaptive interval based on motion and processing time.
         
         High motion → short interval (more frequent checks)
         Low motion → long interval (save resources)
+        Slow processing → long interval (avoid lag)
         
         Args:
             motion_percent: Current motion percentage (0-100)
+            processing_time: Last frame processing duration in seconds
             
         Returns:
             Recommended interval in seconds
         """
         self._last_motion = motion_percent
         
+        # Base interval from motion
         if motion_percent >= self.config.high_motion_threshold:
             # High activity - check frequently
             interval = self.config.min_interval
@@ -114,6 +121,11 @@ class FrameOptimizer:
             
             normalized = (motion_percent - self.config.low_motion_threshold) / motion_range
             interval = self.config.max_interval - (normalized * interval_range)
+            
+        # Throttling check: if processing is slow, force higher interval
+        if processing_time > self.config.slow_processing_threshold:
+            # If processing took > 1s, throttle to at least 5s (0.2 FPS)
+            interval = max(interval, self.config.throttle_interval)
         
         # Smooth transitions (don't jump too fast)
         if abs(interval - self._last_interval) > 2.0:

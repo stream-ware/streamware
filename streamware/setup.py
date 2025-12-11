@@ -189,7 +189,7 @@ def run_setup(interactive: bool = True, mode: str = "balance"):
     mode_config = {
         "fast": {
             "whisper": "tiny",
-            "ollama_vision": "moondream",      # Fastest vision model (~1.5s)
+            "ollama_vision": "llava:7b",        # Better vision model (~2-3s)
             "ollama_chat": "gemma:2b",        # Fast chat/guarder
             "desc": "Maximum speed, real-time monitoring (recommended)"
         },

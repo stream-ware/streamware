@@ -26,6 +26,9 @@ from pathlib import Path
 from threading import Lock
 from typing import Dict, List, Optional
 
+# Constants for default models
+DEFAULT_VISION_MODEL = "llava:7b"
+
 
 @dataclass
 class TimingEvent:
@@ -76,9 +79,8 @@ def run_benchmark() -> dict:
     
     # Test 1: CPU speed (simple loop)
     start = time.perf_counter()
-    total = 0
     for i in range(1000000):
-        total += i
+        _ = i  # Simple computation to benchmark CPU
     cpu_time = time.perf_counter() - start
     results["cpu_benchmark_ms"] = cpu_time * 1000
     
@@ -88,7 +90,8 @@ def run_benchmark() -> dict:
         import numpy as np
         
         # Create test image
-        img = np.random.randint(0, 255, (480, 640, 3), dtype=np.uint8)
+        rng = np.random.default_rng(seed=42)  # Fixed seed for reproducible benchmarks
+        img = rng.integers(0, 255, (480, 640, 3), dtype=np.uint8)
         
         start = time.perf_counter()
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -106,15 +109,15 @@ def run_benchmark() -> dict:
     if cpu_time < 0.05:  # Fast CPU
         results["recommendations"]["interval"] = 3
         results["recommendations"]["use_hog"] = True
-        results["recommendations"]["vision_model"] = "llava:7b"
+        results["recommendations"]["vision_model"] = DEFAULT_VISION_MODEL
     elif cpu_time < 0.1:  # Medium CPU
         results["recommendations"]["interval"] = 5
         results["recommendations"]["use_hog"] = True
-        results["recommendations"]["vision_model"] = "moondream"
+        results["recommendations"]["vision_model"] = DEFAULT_VISION_MODEL
     else:  # Slow CPU
         results["recommendations"]["interval"] = 8
         results["recommendations"]["use_hog"] = False
-        results["recommendations"]["vision_model"] = "moondream"
+        results["recommendations"]["vision_model"] = DEFAULT_VISION_MODEL
     
     return results
 
@@ -125,10 +128,14 @@ class TimingLogger:
     _instance: Optional["TimingLogger"] = None
     _lock = Lock()
     
-    def __init__(self, log_file: Optional[str] = None, verbose: bool = False):
+    def __init__(self, log_file: Optional[str] = None, verbose: bool = False, console_format: str = "text"):
         self.log_file = Path(log_file) if log_file else None
         self.verbose = verbose
+        self.console_format = console_format
+        self.session_id = None # Will be set on first init
         self.csv_file = None
+        self.yaml_file = None  # YAML log file
+        self._yaml_handle = None
         self.decisions_file = None  # New: detailed decisions log
         
         # Live statistics
@@ -164,6 +171,10 @@ class TimingLogger:
         if self.log_file:
             self._init_file()
             self._init_csv()
+        
+        # Initialize YAML file if yaml format requested
+        if self.console_format == "yaml":
+            self._init_yaml()
     
     def _init_file(self):
         """Initialize log file with header."""
@@ -183,6 +194,37 @@ class TimingLogger:
             "timestamp", "frame", "step", "duration_ms", "details", "result"
         ])
         self._csv_handle.flush()
+    
+    def _init_yaml(self):
+        """Initialize YAML log file."""
+        import time as time_module
+        
+        # Use existing session_id if available (set by constructor or previous init)
+        if not hasattr(self, 'session_id') or self.session_id is None:
+            self.session_id = int(time_module.time())
+            
+        self.yaml_file = Path(f"timing_{self.session_id}.yaml")
+        self._yaml_handle = open(self.yaml_file, "w")
+        self._yaml_handle.write("# Streamware Timing Log (YAML)\n")
+        self._yaml_handle.write(f"# Started: {datetime.now().isoformat()}\n")
+        self._yaml_handle.write("events:\n")
+        self._yaml_handle.flush()
+        print(f"📝 YAML log: {self.yaml_file}", flush=True)
+    
+    def _write_yaml_entry(self, frame_num: int, step: str, duration_ms: float, details: str = ""):
+        """Write a single YAML entry to file."""
+        if not self._yaml_handle:
+            return
+        try:
+            self._yaml_handle.write(f"  - time: {datetime.now().isoformat()}\n")
+            self._yaml_handle.write(f"    frame: {frame_num}\n")
+            self._yaml_handle.write(f"    step: {step}\n")
+            self._yaml_handle.write(f"    duration_ms: {duration_ms:.0f}\n")
+            if details:
+                self._yaml_handle.write(f"    details: \"{details}\"\n")
+            self._yaml_handle.flush()
+        except Exception:
+            pass
     
     def start_frame(self, frame_num: int):
         """Start logging a new frame."""
@@ -231,19 +273,29 @@ class TimingLogger:
             if self.verbose:
                 frame_num = self.current_frame.frame_num if self.current_frame else 0
                 ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
-                
-                # Color code based on duration
                 duration = event.duration_ms
-                if duration > 5000:
-                    indicator = "🔴"  # Slow
-                elif duration > 2000:
-                    indicator = "🟡"  # Medium
-                elif duration > 500:
-                    indicator = "🟢"  # Fast
-                else:
-                    indicator = "⚡"  # Very fast
                 
-                print(f"  {indicator} [{ts}] F{frame_num} {name}: {duration:.0f}ms {details}", flush=True)
+                if self.console_format == "yaml":
+                    print(f"- time: {datetime.now().isoformat()}")
+                    print(f"  frame: {frame_num}")
+                    print(f"  step: {name}")
+                    print(f"  duration_ms: {duration:.0f}")
+                    if details:
+                        print(f"  details: {details}")
+                    # Also write to YAML file
+                    self._write_yaml_entry(frame_num, name, duration, details)
+                else:
+                    # Color code based on duration
+                    if duration > 5000:
+                        indicator = "🔴"  # Slow
+                    elif duration > 2000:
+                        indicator = "🟡"  # Medium
+                    elif duration > 500:
+                        indicator = "🟢"  # Fast
+                    else:
+                        indicator = "⚡"  # Very fast
+                    
+                    print(f"  {indicator} [{ts}] F{frame_num} {name}: {duration:.0f}ms {details}", flush=True)
             
             # Track statistics
             if name not in self._stats:
@@ -269,18 +321,37 @@ class TimingLogger:
         return {
             "csv": str(self.csv_file) if self.csv_file else None,
             "txt": str(self.log_file) if self.log_file else None,
+            "yaml": str(self.yaml_file) if self.yaml_file else None,
         }
     
     def print_log_summary(self):
         """Print summary of log locations."""
-        if self.csv_file and self.csv_file.exists():
-            size_kb = self.csv_file.stat().st_size / 1024
+        has_logs = (self.csv_file and self.csv_file.exists()) or (self.yaml_file and self.yaml_file.exists())
+        if has_logs:
             print(f"\n📊 Logs saved:", flush=True)
-            print(f"   CSV: {self.csv_file} ({size_kb:.1f} KB)", flush=True)
+            if self.csv_file and self.csv_file.exists():
+                size_kb = self.csv_file.stat().st_size / 1024
+                print(f"   CSV: {self.csv_file} ({size_kb:.1f} KB)", flush=True)
             if self.log_file and self.log_file.exists():
                 txt_size = self.log_file.stat().st_size / 1024
                 print(f"   TXT: {self.log_file} ({txt_size:.1f} KB)", flush=True)
+            if self.yaml_file and self.yaml_file.exists():
+                yaml_size = self.yaml_file.stat().st_size / 1024
+                print(f"   YAML: {self.yaml_file} ({yaml_size:.1f} KB)", flush=True)
             print(f"   Frames: {self._total_frames}, Decisions: {len(self._decisions)}", flush=True)
+    
+    def close(self):
+        """Close all file handles."""
+        if self._csv_handle:
+            try:
+                self._csv_handle.close()
+            except Exception:
+                pass
+        if self._yaml_handle:
+            try:
+                self._yaml_handle.close()
+            except Exception:
+                pass
     
     def _show_live_stats(self):
         """Show live performance statistics."""
@@ -686,7 +757,7 @@ class TimingLogger:
 _logger: Optional[TimingLogger] = None
 
 
-def get_logger(log_file: Optional[str] = None, verbose: bool = False) -> TimingLogger:
+def get_logger(log_file: Optional[str] = None, verbose: bool = False, console_format: str = "text") -> TimingLogger:
     """Get or create timing logger.
     
     If a logger already exists, reuse it but update verbose flag if requested.
@@ -699,26 +770,28 @@ def get_logger(log_file: Optional[str] = None, verbose: bool = False) -> TimingL
         if verbose:
             _logger.verbose = True
             _logger.enabled = True
+        if console_format != "text":
+            _logger.console_format = console_format
         # Return existing logger - DON'T create new one
         return _logger
     
     # No logger exists - create new one
     if log_file or verbose:
-        _logger = TimingLogger(log_file, verbose=verbose)
+        _logger = TimingLogger(log_file, verbose=verbose, console_format=console_format)
     else:
         _logger = TimingLogger(None)  # Disabled logger
     
     return _logger
 
 
-def set_log_file(log_file: str, verbose: bool = False):
+def set_log_file(log_file: str, verbose: bool = False, console_format: str = "text"):
     """Set log file for global logger. 
     
     This should be called BEFORE get_logger() to set the output file.
     """
     global _logger
     # Create new logger with the specified file
-    _logger = TimingLogger(log_file, verbose=verbose)
+    _logger = TimingLogger(log_file, verbose=verbose, console_format=console_format)
     return _logger
 
 

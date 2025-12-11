@@ -19,6 +19,15 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+# Constants to avoid string duplication
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
+DEFAULT_GUARDER_MODEL = "gemma:2b"
+DEFAULT_ANALYSIS_MODEL = "qwen2.5:3b"
+NO_PERSON_PHRASE = "no person"
+NOT_VISIBLE_PHRASE = "not visible"
+SUMMARY_PREFIX = "summary:"
+PRESENT_PREFIX = "present:"
+
 __all__ = [
     "is_significant",
     "filter_response",
@@ -140,7 +149,7 @@ def extract_alert_info(response: str) -> Tuple[bool, str]:
     
     # Extract reason if alert
     if is_alert:
-        reason_match = re.search(r"REASON:\s*(.+?)(?:\n|$)", response, re.IGNORECASE)
+        reason_match = re.search(r"REASON:\s*(.+)(?:\n|$)", response, re.IGNORECASE)
         if reason_match:
             reason = reason_match.group(1).strip()
             if reason == "-":
@@ -210,12 +219,13 @@ def should_notify(response: str, mode: str = "general") -> bool:
     response_lower = response.lower()
     
     # Skip noise patterns - don't notify for these
+    # EXCEPTION: In track mode, we want to hear status updates
     noise_patterns = [
-        "no person", "no change", "nothing", "unclear", 
-        "not visible", "empty", "no movement", "no_change",
+        NO_PERSON_PHRASE, "no change", "nothing", "unclear", 
+        NOT_VISIBLE_PHRASE, "empty", "no movement", "no_change",
         "no clear person", "no human", "no individual"
     ]
-    if any(p in response_lower for p in noise_patterns):
+    if mode != "track" and any(p in response_lower for p in noise_patterns):
         return False
     
     # In track mode, notify for ANY person-related activity
@@ -249,16 +259,15 @@ def should_notify(response: str, mode: str = "general") -> bool:
         return True
     
     # Person/object detected in track mode
-    if mode == "track":
-        if fields.get("present", "").upper() == "YES":
-            return True
-        if fields.get("visible", "").upper() == "YES":
-            return True
+    if mode == "track" and (
+        fields.get("present", "").upper() == "YES" or
+        fields.get("visible", "").upper() == "YES"
+    ):
+        return True
     
     # Change detected in diff mode
-    if mode == "diff":
-        if fields.get("changed", "").upper() == "YES":
-            return True
+    if mode == "diff" and fields.get("changed", "").upper() == "YES":
+        return True
     
     # Trigger match
     if fields.get("match", "").upper() == "YES":
@@ -306,7 +315,7 @@ def format_for_tts(response: str) -> str:
     return text[:200]
 
 
-def check_guarder_model_available(model: str = "qwen2.5:3b") -> Tuple[bool, str]:
+def check_guarder_model_available(model: str = DEFAULT_ANALYSIS_MODEL) -> Tuple[bool, str]:
     """Check if guarder model is available in Ollama.
     
     Returns:
@@ -315,10 +324,10 @@ def check_guarder_model_available(model: str = "qwen2.5:3b") -> Tuple[bool, str]
     import requests
     from .config import config
     
-    ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+    ollama_url = config.get("SQ_OLLAMA_URL", DEFAULT_OLLAMA_URL)
     
     try:
-        resp = requests.get(f"{ollama_url}/api/tags", timeout=5)
+        resp = requests.get(f"{ollama_url}/api/tags", timeout=int(config.get("SQ_GUARDER_TIMEOUT", "5")))
         if resp.ok:
             models = [m.get("name", "") for m in resp.json().get("models", [])]
             
@@ -335,7 +344,7 @@ def check_guarder_model_available(model: str = "qwen2.5:3b") -> Tuple[bool, str]
                     return True, m
             
             # Check for alternative small models (fallback)
-            small_models = ["gemma:2b", "phi3:mini", "llama3.2:latest", "deepseek-r1:1.5b"]
+            small_models = [DEFAULT_GUARDER_MODEL, "phi3:mini", "llama3.2:latest", "deepseek-r1:1.5b"]
             for sm in small_models:
                 if sm in models:
                     return True, sm
@@ -352,7 +361,7 @@ def check_guarder_model_available(model: str = "qwen2.5:3b") -> Tuple[bool, str]
         return False, f"Ollama not available: {e}"
 
 
-def ensure_guarder_model(model: str = "qwen2.5:3b", interactive: bool = True) -> bool:
+def ensure_guarder_model(model: str = DEFAULT_ANALYSIS_MODEL, interactive: bool = True) -> bool:
     """Ensure guarder model is available, offer to install if not.
     
     Args:
@@ -378,7 +387,7 @@ def ensure_guarder_model(model: str = "qwen2.5:3b", interactive: bool = True) ->
     print(f"\n   Guarder model '{model}' is needed for smart response filtering.")
     print("   Recommended models (small, fast):")
     print("   1. qwen2.5:3b  - Best quality (2GB)")
-    print("   2. gemma:2b   - Fastest (1.6GB)")
+    print(f"   2. {DEFAULT_GUARDER_MODEL}   - Fastest (1.6GB)")
     print("   3. phi3:mini   - Good balance (2.3GB)")
     print("   4. Skip        - Use regex filtering only")
     
@@ -386,8 +395,8 @@ def ensure_guarder_model(model: str = "qwen2.5:3b", interactive: bool = True) ->
         choice = input("\n   Install model? [1-4, default=1]: ").strip() or "1"
         
         models_map = {
-            "1": "qwen2.5:3b",
-            "2": "gemma:2b",
+            "1": DEFAULT_ANALYSIS_MODEL,
+            "2": DEFAULT_GUARDER_MODEL,
             "3": "phi3:mini",
         }
         
@@ -422,7 +431,7 @@ _last_summary: str = ""  # Track last summary for deduplication
 def quick_person_check(
     image_path,
     focus: str = "person",
-    model: str = "gemma:2b",
+    model: str = DEFAULT_GUARDER_MODEL,
     timeout: int = 10,
 ) -> Tuple[bool, float]:
     """Quick check if person/object is in frame using small LLM.
@@ -443,13 +452,13 @@ def quick_person_check(
     from .config import config
     from .image_optimize import prepare_image_for_llm_base64
     
-    ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+    ollama_url = config.get("SQ_OLLAMA_URL", DEFAULT_OLLAMA_URL)
     
     # Prepare small image for speed
     try:
         image_data = prepare_image_for_llm_base64(image_path, preset="fast")
     except Exception:
-        return True, 0.5  # Assume yes if can't load
+        return True, _get_confidence_threshold("assume_present")  # Assume yes if can't load
     
     prompt = f"""Look at this image. Is there a {focus} visible?
 Answer ONLY with: YES or NO"""
@@ -469,22 +478,22 @@ Answer ONLY with: YES or NO"""
         if resp.ok:
             answer = resp.json().get("response", "").strip().upper()
             if "YES" in answer:
-                return True, 0.9
+                return True, _get_confidence_threshold("confident_present")
             elif "NO" in answer:
-                return False, 0.9
+                return False, _get_confidence_threshold("confident_absent")
             else:
-                return True, 0.5  # Unclear, assume yes
+                return True, _get_confidence_threshold("assume_present")  # Unclear, assume yes
         
-        return True, 0.5
+        return True, _get_confidence_threshold("assume_present")
         
     except Exception:
-        return True, 0.5  # On error, assume yes (don't skip)
+        return True, _get_confidence_threshold("assume_present")  # On error, assume yes (don't skip)
 
 
 def quick_change_check(
     current_summary: str,
     previous_summary: str,
-    model: str = "gemma:2b",
+    model: str = DEFAULT_GUARDER_MODEL,
     timeout: int = 8,
 ) -> Tuple[bool, str]:
     """Quick check if there's a meaningful change between two states.
@@ -506,7 +515,7 @@ def quick_change_check(
     if not previous_summary:
         return True, "first_detection"
     
-    ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+    ollama_url = config.get("SQ_OLLAMA_URL", DEFAULT_OLLAMA_URL)
     
     prompt = f"""Compare these two camera observations:
 BEFORE: "{previous_summary}"
@@ -542,7 +551,7 @@ Answer ONLY: YES or NO"""
 def summarize_detection(
     response: str,
     focus: str = "person",
-    model: str = "qwen2.5:3b",
+    model: str = DEFAULT_ANALYSIS_MODEL,
     timeout: int = 15,
     prev_summary: str = None,
 ) -> Tuple[bool, str]:
@@ -569,25 +578,14 @@ def summarize_detection(
     import requests
     from .config import config
     
-    ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+    ollama_url = config.get("SQ_OLLAMA_URL", DEFAULT_OLLAMA_URL)
     
     # Use module-level last summary if not provided
     if prev_summary is None:
         prev_summary = _last_summary
     
     # Build prompt with previous context for comparison
-    prev_context = ""
-    compare_mode = False
-    if prev_summary:
-        compare_mode = True
-        prev_context = f"""
-PREVIOUS STATE: "{prev_summary}"
-
-IMPORTANT: Compare current detection with previous state.
-- If the MEANING is the same (same person, same location, same activity) → respond "NO_CHANGE"
-- Only report if there's a REAL change: person appeared/left, moved to different location, started different activity
-- Minor wording differences are NOT changes. "Person at desk" and "Seated person at computer" = NO_CHANGE
-"""
+    compare_mode = bool(prev_summary)
     
     # Different prompts for first detection vs comparison
     if compare_mode:
@@ -647,7 +645,7 @@ Output:"""
                 "heres the summary:",
                 "here is a short summary:",
                 "here's a short summary:",
-                "summary:",
+                SUMMARY_PREFIX,
                 "the summary is:",
                 "the current state is",
                 "based on the",
@@ -663,14 +661,14 @@ Output:"""
             # Also strip "sure" patterns via regex - catch all variants
             import re
             # Strip "Sure. Here's..." "Sure, here is..." etc.
-            summary = re.sub(r'^sure[,!.\s]+(here\'?s?|heres|the)[\s\S]*?[:]\s*', '', summary, flags=re.IGNORECASE).strip()
+            summary = re.sub(r'^sure[,!.\s]+(here\'?s?|the).*?[:]\s*', '', summary, flags=re.IGNORECASE).strip()
             summary = re.sub(r'^sure[,!.\s]+', '', summary, flags=re.IGNORECASE).strip()
             # Strip "Here is/Here's..."
             summary = re.sub(r'^here\'?s?\s+(is\s+)?(a\s+)?(the\s+)?(summary|description)[:\s]*', '', summary, flags=re.IGNORECASE).strip()
             # Strip "The current state is..."
             summary = re.sub(r'^the\s+(current\s+)?(state|situation)\s+(is|shows)[:\s]*', '', summary, flags=re.IGNORECASE).strip()
             # Strip "Based on..."
-            summary = re.sub(r'^based\s+on[\s\S]*?[,:]', '', summary, flags=re.IGNORECASE).strip()
+            summary = re.sub(r'^based\s+on.*?[,:]', '', summary, flags=re.IGNORECASE).strip()
             # Strip if it's just "you requested:" or similar
             summary = re.sub(r'^(the\s+)?summary\s+(you\s+)?requested[:\s]*', '', summary, flags=re.IGNORECASE).strip()
             
@@ -713,9 +711,9 @@ Output:"""
             if compare_mode and ("no_change" in summary.lower() or "no change" in summary.lower()):
                 # Double-check: if previous had person and current says no person, that's a change!
                 prev_had_person = focus.lower() in prev_summary.lower() and "no " + focus.lower() not in prev_summary.lower()
-                curr_no_person = any(p in response.lower() for p in ["no person", "no clear person", "not visible", "no " + focus.lower()])
+                curr_no_person = any(p in response.lower() for p in [NO_PERSON_PHRASE, "no clear person", NOT_VISIBLE_PHRASE, "no " + focus.lower()])
                 curr_has_person = focus.lower() in response.lower() and not curr_no_person
-                prev_no_person = "no " + focus.lower() in prev_summary.lower() or "no person" in prev_summary.lower()
+                prev_no_person = "no " + focus.lower() in prev_summary.lower() or NO_PERSON_PHRASE in prev_summary.lower()
                 
                 # Person appeared or left - that's always a change
                 if (prev_had_person and curr_no_person) or (prev_no_person and curr_has_person):
@@ -761,12 +759,9 @@ Output:"""
             # Noise patterns - ONLY filter if explicitly negative
             noise_patterns = [
                 "no person visible", "no one visible", "empty room", "nothing detected",
-                "unclear image", "cannot see", "not visible"
+                "unclear image", "cannot see", NOT_VISIBLE_PHRASE
             ]
             is_explicit_noise = any(p in summary_lower for p in noise_patterns)
-            
-            # If we have person OR activity, it's significant
-            is_significant = (has_person or has_activity) and not is_explicit_noise
             
             # Legacy is_noise for backwards compatibility
             is_noise = is_explicit_noise and not has_activity and not has_person
@@ -777,20 +772,20 @@ Output:"""
             
             return not is_noise, summary
         else:
-            return True, response[:80]  # Fallback to truncated original
+            return True, _fallback_summary(response)  # Fallback to truncated original
             
     except requests.exceptions.Timeout:
         logger.debug("LLM summarization timeout")
-        return True, response[:80]
+        return True, _fallback_summary(response)
     except Exception as e:
         logger.debug(f"LLM summarization failed: {e}")
-        return True, response[:80]
+        return True, _fallback_summary(response)
 
 
 def validate_with_llm(
     response: str,
     context: str = "",
-    model: str = "qwen2.5:3b",
+    model: str = DEFAULT_ANALYSIS_MODEL,
     timeout: int = 10,
 ) -> Tuple[bool, str]:
     """Use small LLM to validate AND summarize response.
@@ -819,7 +814,6 @@ def is_significant_smart(
     mode: str = "general",
     focus: str = "person",
     guarder_model: str = None,
-    fallback_to_regex: bool = True,
     tracking_data: Dict = None,
 ) -> Tuple[bool, str]:
     """Smart significance check - uses LLM to analyze with tracking metadata.
@@ -852,8 +846,14 @@ def is_significant_smart(
     # OPTIMIZATION: Skip guarder LLM for clear responses
     # This saves 2-4 seconds per frame
     
-    # Check if it's a clear negative (regardless of length)
-    if response_lower.startswith(f"no {focus}") or response_lower.startswith("no person"):
+    # Check if it's a clear negative (but be more lenient for track mode)
+    is_negative = (
+        response_lower.startswith(f"no {focus}") or 
+        response_lower.startswith(NO_PERSON_PHRASE)
+    )
+    
+    # For track mode, don't immediately reject negatives - they might be false positives
+    if is_negative and mode != "track":
         return False, f"No {focus} visible"
     
     # Check if it's a clear positive with activity (any length)
@@ -886,7 +886,7 @@ def is_significant_smart(
     
     # For longer responses without clear positive, use guarder LLM with tracking data
     if guarder_model is None:
-        guarder_model = config.get("SQ_GUARDER_MODEL", "gemma:2b")
+        guarder_model = config.get("SQ_GUARDER_MODEL", DEFAULT_GUARDER_MODEL)
     
     available, actual_model = check_guarder_model_available(guarder_model)
     
@@ -895,7 +895,8 @@ def is_significant_smart(
             response, 
             focus=focus, 
             model=actual_model,
-            tracking_data=tracking_data or {}
+            tracking_data=tracking_data or {},
+            mode=mode
         )
         return is_significant_result, summary
     else:
@@ -909,8 +910,9 @@ def is_significant_smart(
 def _analyze_with_tracking_llm(
     response: str,
     focus: str = "person",
-    model: str = "gemma:2b",
+    model: str = DEFAULT_GUARDER_MODEL,
     tracking_data: Dict = None,
+    mode: str = "track",
     timeout: int = 10,
 ) -> Tuple[bool, str]:
     """Use LLM to analyze vision response with tracking metadata from DSL.
@@ -926,7 +928,7 @@ def _analyze_with_tracking_llm(
     from .config import config
     from .prompts import get_prompt
     
-    ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+    ollama_url = config.get("SQ_OLLAMA_URL", DEFAULT_OLLAMA_URL)
     tracking_data = tracking_data or {}
     
     # Build tracking context from DSL data
@@ -935,23 +937,20 @@ def _analyze_with_tracking_llm(
     # Load prompt from file or use default
     prompt_template = get_prompt("analyze_with_tracking")
     if not prompt_template:
-        prompt_template = """Analyze this scene:
+        # Simplified prompt for better compatibility with small models
+        prompt_template = """Vision: {vision_description}
+        
+Tracking: {tracking_context}
 
-VISION: {vision_description}
+Question: Is there a {focus} visible? Answer YES or NO.
+Then describe what they're doing in 5 words maximum.
 
-TRACKING DATA:
-{tracking_context}
+Example:
+YES
+Person sitting at desk
 
-TARGET: {focus}
-
-Based on both vision and tracking data:
-1. Is {focus} present? (yes/no)
-2. What is their activity/state?
-3. Movement direction?
-
-Reply format:
-PRESENT: yes/no
-SUMMARY: [short description for TTS, max 10 words]"""
+NO
+No person visible"""
     
     prompt = prompt_template.format(
         vision_description=response[:300],
@@ -977,11 +976,11 @@ SUMMARY: [short description for TTS, max 10 words]"""
         if resp.ok:
             data = resp.json()
             llm_response = data.get("response", "").strip()
-            return _parse_tracking_response(llm_response, focus, original_vision=response)
+            return _parse_tracking_response(llm_response, focus, mode=mode)
         else:
             return True, response[:60]
             
-    except Exception as e:
+    except Exception:
         return True, response[:60]
 
 
@@ -1042,19 +1041,32 @@ def _build_tracking_context(tracking_data: Dict, focus: str) -> str:
     return " ".join(parts) if parts else "No tracking"
 
 
-def _parse_tracking_response(llm_response: str, focus: str, original_vision: str = "") -> Tuple[bool, str]:
+def _fallback_summary(response: str, length: int = 80) -> str:
+    """Return truncated response as fallback."""
+    return response[:length] + ("..." if len(response) > length else "")
+
+
+def _get_confidence_threshold(threshold_type: str) -> float:
+    """Get confidence threshold from config."""
+    thresholds = {
+        "assume_present": config.get("SQ_VISION_ASSUME_PRESENT", "0.5"),
+        "confident_present": config.get("SQ_VISION_CONFIDENT_PRESENT", "0.9"),
+        "confident_absent": config.get("SQ_VISION_CONFIDENT_ABSENT", "0.9")
+    }
+    return float(thresholds.get(threshold_type, "0.5"))
+
+
+def _parse_tracking_response(llm_response: str, focus: str, mode: str = "track") -> Tuple[bool, str]:
     """Parse LLM response with tracking analysis.
     
-    Prioritizes vision LLM's determination of presence over guarder's interpretation.
+    Handles both structured (PRESENT:/SUMMARY:) and simple (YES/NO) formats.
+    For track mode, allows guarder to override vision negatives to avoid false negatives.
     """
     # Clean markdown formatting
     clean_response = llm_response.replace("**", "").replace("*", "").strip()
-    original_lower = original_vision.lower() if original_vision else ""
     
-    # FIRST: Check if original vision response clearly says no target
-    # This takes priority over guarder's interpretation
-    if original_lower.startswith(f"no {focus}") or f"no {focus} visible" in original_lower:
-        return False, f"No {focus} visible"
+    # NOTE: In track mode, we DON'T immediately reject vision negatives
+    # Let the guarder LLM make the final decision to avoid false negatives
     
     is_present = False
     summary = ""
@@ -1064,39 +1076,76 @@ def _parse_tracking_response(llm_response: str, focus: str, original_vision: str
         parts = clean_response.split("|")
         for part in parts:
             part_lower = part.strip().lower()
-            if part_lower.startswith("present:"):
-                value = part_lower.replace("present:", "").strip()
+            if part_lower.startswith(PRESENT_PREFIX):
+                value = part_lower.replace(PRESENT_PREFIX, "").strip()
                 is_present = value.startswith("yes") or value == "true"
-            elif part_lower.startswith("summary:"):
+            elif part_lower.startswith(SUMMARY_PREFIX):
                 summary = part.split(":", 1)[1].strip() if ":" in part else ""
     else:
-        # Try line-by-line parsing
-        for line in clean_response.split('\n'):
+        # Try line-by-line parsing for structured format
+        lines = clean_response.split('\n')
+        for i, line in enumerate(lines):
             line_lower = line.lower().strip()
-            if line_lower.startswith("present:"):
-                value = line_lower.replace("present:", "").strip()
+            if line_lower.startswith(PRESENT_PREFIX):
+                value = line_lower.replace(PRESENT_PREFIX, "").strip()
                 is_present = value.startswith("yes") or value == "true"
-            elif line_lower.startswith("summary:"):
+            elif line_lower.startswith(SUMMARY_PREFIX):
                 summary = line.split(":", 1)[1].strip() if ":" in line else ""
+        
+        # If no structured format, try simple YES/NO format
+        if not summary and lines:
+            # First line might be YES/NO
+            first_line = lines[0].strip().upper()
+            if first_line.startswith("YES"):
+                is_present = True
+                # Second line is the summary
+                if len(lines) > 1:
+                    summary = lines[1].strip()
+            elif first_line.startswith("NO"):
+                is_present = False
+                # Second line is the summary
+                if len(lines) > 1:
+                    summary = lines[1].strip()
     
     # If no structured response, extract from text
     if not summary:
         resp_lower = clean_response.lower()
         
-        # Detect presence - check for negatives first
-        if f"no {focus}" in resp_lower or "not present" in resp_lower or "not visible" in resp_lower:
-            is_present = False
-            summary = f"No {focus} visible"
-        elif "yes" in resp_lower or (focus in resp_lower and f"no {focus}" not in resp_lower):
-            is_present = True
-            # Extract activity words
-            activities = ["sitting", "standing", "walking", "working", "moving", "entering", "leaving"]
-            for act in activities:
-                if act in resp_lower:
-                    summary = f"{focus.title()} {act}"
-                    break
-            if not summary:
-                summary = f"{focus.title()} present"
+        # For track mode, be more lenient with negatives
+        if mode == "track":
+            # In track mode, only reject if guarder is absolutely certain
+            if f"no {focus}" in resp_lower and ("certain" in resp_lower or "definitely" in resp_lower or "absolutely" in resp_lower):
+                is_present = False
+                summary = f"No {focus} visible"
+            elif "yes" in resp_lower or (focus in resp_lower and f"no {focus}" not in resp_lower):
+                is_present = True
+                # Extract activity words
+                activities = ["sitting", "standing", "walking", "working", "moving", "entering", "leaving"]
+                for act in activities:
+                    if act in resp_lower:
+                        summary = f"{focus.title()} {act}"
+                        break
+                if not summary:
+                    summary = f"{focus.title()} present"
+            else:
+                # In track mode, assume present if guarder is uncertain
+                is_present = True
+                summary = f"{focus.title()} detected"
+        else:
+            # For other modes, be stricter with negatives
+            if f"no {focus}" in resp_lower or "not present" in resp_lower or NOT_VISIBLE_PHRASE in resp_lower:
+                is_present = False
+                summary = f"No {focus} visible"
+            elif "yes" in resp_lower or (focus in resp_lower and f"no {focus}" not in resp_lower):
+                is_present = True
+                # Extract activity words
+                activities = ["sitting", "standing", "walking", "working", "moving", "entering", "leaving"]
+                for act in activities:
+                    if act in resp_lower:
+                        summary = f"{focus.title()} {act}"
+                        break
+                if not summary:
+                    summary = f"{focus.title()} present"
     
     # Clean up summary
     summary = summary.strip().replace("[", "").replace("]", "")
@@ -1109,7 +1158,7 @@ def _parse_tracking_response(llm_response: str, focus: str, original_vision: str
 def _analyze_with_llm(
     response: str,
     focus: str = "person",
-    model: str = "gemma:2b",
+    model: str = DEFAULT_GUARDER_MODEL,
     timeout: int = 8,
 ) -> Tuple[bool, str]:
     """Legacy: Use small LLM to analyze vision response (without tracking).
@@ -1136,7 +1185,7 @@ def _parse_simple_response(llm_summary: str, original_response: str, focus: str)
                       for ind in negative_indicators)
     
     # Also check original response for clear negatives
-    if orig_lower.startswith("no ") or "no person visible" in orig_lower or "not visible" in orig_lower:
+    if orig_lower.startswith("no ") or "no person visible" in orig_lower or NOT_VISIBLE_PHRASE in orig_lower:
         is_negative = True
     
     # Check for positive presence
@@ -1166,12 +1215,12 @@ def _parse_analysis_response(llm_response: str, focus: str) -> Tuple[bool, str]:
     
     for line in lines:
         line_lower = line.lower().strip()
-        if line_lower.startswith("present:"):
-            value = line_lower.replace("present:", "").strip()
+        if line_lower.startswith(PRESENT_PREFIX):
+            value = line_lower.replace(PRESENT_PREFIX, "").strip()
             is_present = value in ("yes", "true", "1")
         elif line_lower.startswith("activity:"):
             activity = line.split(":", 1)[1].strip() if ":" in line else "none"
-        elif line_lower.startswith("summary:"):
+        elif line_lower.startswith(SUMMARY_PREFIX):
             summary = line.split(":", 1)[1].strip() if ":" in line else ""
     
     # Build final summary
@@ -1189,7 +1238,7 @@ def is_significant_with_llm(
     response: str,
     mode: str = "general",
     use_llm: bool = True,  # Changed default to True
-    guarder_model: str = "qwen2.5:3b",
+    guarder_model: str = DEFAULT_ANALYSIS_MODEL,
 ) -> bool:
     """Check significance with LLM validation (default) or regex fallback.
     

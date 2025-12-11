@@ -46,7 +46,7 @@ class CaptureConfig:
     rtsp_url: str
     fps: float = 1.0                    # Frames per second to capture
     ramdisk_path: str = "/dev/shm/streamware"  # Default Linux shared memory
-    max_frames: int = 5                  # Keep last N frames
+    max_frames: int = 100                # Keep last N frames
     resolution: Tuple[int, int] = None   # Optional resize (width, height)
     quality: int = 85                    # JPEG quality
 
@@ -59,7 +59,7 @@ class RAMDiskCapture:
         rtsp_url: str,
         fps: float = None,
         ramdisk_path: str = None,
-        max_frames: int = 5,
+        max_frames: int = 100,
         resolution: Tuple[int, int] = None,
     ):
         self.rtsp_url = rtsp_url
@@ -283,7 +283,7 @@ class ContinuousCapture:
         rtsp_url: str,
         fps: float = 1.0,
         ramdisk_path: str = None,
-        max_frames: int = 10,
+        max_frames: int = 100,
     ):
         self.rtsp_url = rtsp_url
         self.fps = fps

@@ -234,7 +234,7 @@ class FrameDiffAnalyzer:
         self._bg_model = None
         self._use_bg_subtraction = True
     
-    def analyze(self, frame_path: Path, timing_logger=None) -> FrameDelta:
+    def analyze(self, frame_path: Path, timing_logger=None, frame_num: int = None, frame_data=None) -> FrameDelta:
         """
         Analyze frame and return delta from previous.
         
@@ -243,6 +243,8 @@ class FrameDiffAnalyzer:
         Args:
             frame_path: Path to frame image
             timing_logger: Optional DSLTimingLogger for performance tracking
+            frame_num: Optional frame number from main loop (for synchronization)
+            frame_data: Optional pre-loaded frame data (numpy array) to avoid race conditions
         """
         import time
         t0 = time.perf_counter()
@@ -252,15 +254,22 @@ class FrameDiffAnalyzer:
         except ImportError:
             return self._empty_delta()
         
-        self._frame_count += 1
+        # Use provided frame_num or internal counter
+        if frame_num is not None:
+            self._frame_count = frame_num
+        else:
+            self._frame_count += 1
         
         # Start timing
         if timing_logger:
             timing_logger.start_frame(self._frame_count)
         
-        # Load frame
+        # Load frame - use pre-loaded data if available (prevents race conditions)
         t_step = time.perf_counter()
-        frame = cv2.imread(str(frame_path))
+        if frame_data is not None:
+            frame = frame_data
+        else:
+            frame = cv2.imread(str(frame_path))
         if frame is None:
             return self._empty_delta()
         if timing_logger:
@@ -527,11 +536,21 @@ class FrameDiffAnalyzer:
         
         return merged
     
-    def _capture_thumbnail(self, frame_path: Path, frame: np.ndarray, max_size: int = 128) -> str:
-        """Capture 128px thumbnail from frame while it still exists."""
+    def _capture_thumbnail(self, frame_path: Path, frame: np.ndarray, max_size: int = None) -> str:
+        """Capture thumbnail from frame while it still exists.
+        
+        Size and quality configurable via SQ_MOTION_ANALYSIS_THUMBNAIL_SIZE and
+        SQ_MOTION_ANALYSIS_THUMBNAIL_QUALITY in .env
+        """
         try:
             import cv2
             import base64
+            from .config import config
+            
+            # Get size and quality from config
+            if max_size is None:
+                max_size = int(config.get("SQ_MOTION_ANALYSIS_THUMBNAIL_SIZE", "192"))
+            quality = int(config.get("SQ_MOTION_ANALYSIS_THUMBNAIL_QUALITY", "75"))
             
             h, w = frame.shape[:2]
             if w > h:
@@ -542,7 +561,7 @@ class FrameDiffAnalyzer:
                 new_w = int(w * max_size / h)
             
             resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-            _, buffer = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            _, buffer = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, quality])
             return base64.b64encode(buffer).decode()
         except Exception:
             return ""

@@ -51,6 +51,16 @@ def __getattr__(name):
         from . import components
         return components
     
+    # ByteTrack tracking
+    if name in ("ByteTracker", "MotionGate", "RTSPCapture", "ReIDExtractor", "Track", "Detection", "TrackState"):
+        from . import bytetrack
+        return getattr(bytetrack, name)
+    
+    # YOLO detector
+    if name in ("YOLODetector", "YOLOTracker"):
+        from . import yolo_detector
+        return getattr(yolo_detector, name)
+    
     raise AttributeError(f"module 'streamware' has no attribute '{name}'")
 
 __all__ = [
@@ -93,4 +103,17 @@ __all__ = [
     "ComponentError",
     "MimeTypeError",
     "RoutingError",
+    
+    # Tracking
+    "ByteTracker",
+    "MotionGate",
+    "RTSPCapture",
+    "ReIDExtractor",
+    "Track",
+    "Detection",
+    "TrackState",
+    
+    # Detection
+    "YOLODetector",
+    "YOLOTracker",
 ]
