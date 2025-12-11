@@ -34,15 +34,6 @@ setup(
             'templates/*.j2',
         ],
     },
-    include_package_data=True,
-    package_data={
-        'streamware': [
-            'prompts/*.txt',
-            'prompts/*.prompt',
-            'templates/*.html',
-            'templates/*.j2',
-        ],
-    },
     python_requires=">=3.8",
     install_requires=[
         "aiohttp>=3.9.0",
