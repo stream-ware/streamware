@@ -24,13 +24,11 @@ import tempfile
 import logging
 import time
 import os
-import threading
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Callable, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 import base64
-import json
 from ..core import Component, StreamwareURI, register
 from ..exceptions import ComponentError
 from ..config import config
@@ -302,7 +300,7 @@ class FrameAnalyzer:
                 text = " | ".join(info_text)
                 try:
                     font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
-                except:
+                except Exception:
                     font = ImageFont.load_default()
                 
                 bbox = draw.textbbox((10, 10), text, font=font)
@@ -412,7 +410,7 @@ class LiveNarratorComponent(Component):
         default_duration = config.get("SQ_STREAM_DURATION", "30")
         
         # Descriptive parameters (analysis, motion, frames)
-        from ..presets import get_descriptive_preset, ANALYSIS_PRESETS, MOTION_PRESETS, FRAME_PRESETS
+        from ..presets import get_descriptive_preset
         
         analysis = uri.get_param("analysis", "normal")
         motion = uri.get_param("motion", "significant")
@@ -1390,7 +1388,7 @@ class LiveNarratorComponent(Component):
                         )
                         has_gpu = "cuda" in result.stdout.lower()
                         self._has_nvdec = has_gpu
-                    except:
+                    except Exception:
                         self._has_nvdec = False
                         has_gpu = False
                 

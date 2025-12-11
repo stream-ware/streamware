@@ -242,7 +242,7 @@ class SVGFrameGenerator:
         try:
             import cv2
             small = cv2.resize(mask, (40, 30))
-        except:
+        except Exception:
             return ""
         
         cell_w = self.width / 40
@@ -264,7 +264,7 @@ class SVGFrameGenerator:
         try:
             import cv2
             small = cv2.resize(edges, (80, 60))
-        except:
+        except Exception:
             return ""
         
         points = []

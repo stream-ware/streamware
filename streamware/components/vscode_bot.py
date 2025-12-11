@@ -503,7 +503,7 @@ Generate the next development task prompt.
                 text=True
             )
             return result.stdout or "No changes"
-        except:
+        except Exception:
             return "Git not available"
     
     def _get_recent_changes(self) -> str:
@@ -516,7 +516,7 @@ Generate the next development task prompt.
                 text=True
             )
             return result.stdout[:500] or "No recent changes"
-        except:
+        except Exception:
             return "No changes"
     
     def _get_test_results(self) -> str:
@@ -533,7 +533,7 @@ Generate the next development task prompt.
             if path.exists():
                 try:
                     return path.read_text()[:300]
-                except:
+                except Exception:
                     pass
         
         return "No test results available"

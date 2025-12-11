@@ -114,7 +114,7 @@ class VoiceMouseComponent(Component):
         if self.confirm:
             try:
                 flow(f"voice://speak?text=Klikam w {target}").run()
-            except:
+            except Exception:
                 pass  # Voice confirmation optional
         
         # 6. Click!

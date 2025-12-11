@@ -172,7 +172,7 @@ class RAMDiskCapture:
                     # Add to queue (non-blocking)
                     try:
                         self._frame_queue.put_nowait((self._frame_num, frame_path, time.time()))
-                    except:
+                    except Exception:
                         pass
                     
                     # Cleanup old frames
@@ -233,7 +233,7 @@ class RAMDiskCapture:
                 for f in frames[:-self.max_frames]:
                     try:
                         f.unlink()
-                    except:
+                    except OSError:
                         pass
         except Exception:
             pass
@@ -346,7 +346,7 @@ class ContinuousCapture:
         for f in self.ramdisk_path.glob("frame_*.jpg"):
             try:
                 f.unlink()
-            except:
+            except OSError:
                 pass
     
     def get_latest_frame(self) -> Optional[Path]:

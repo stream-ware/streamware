@@ -338,7 +338,7 @@ class RabbitMQConsumeComponent(StreamComponent):
         finally:
             try:
                 connection.close()
-            except:
+            except Exception:
                 pass
                 
     def process(self, data: Any) -> Any:

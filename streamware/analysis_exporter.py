@@ -157,7 +157,7 @@ class AnalysisExporter:
             try:
                 with open(frame_path, 'rb') as f:
                     background_b64 = base64.b64encode(f.read()).decode()
-            except:
+            except (OSError, IOError):
                 pass
         
         self._converter.add_frame(

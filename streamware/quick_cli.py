@@ -9,7 +9,7 @@ OPTIMIZED: Uses lazy imports for fast startup (~0.3s instead of ~3s)
 import sys
 import argparse
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 # LAZY IMPORTS - only import heavy modules when needed
 # This speeds up CLI startup from ~3s to ~0.3s

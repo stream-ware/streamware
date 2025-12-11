@@ -328,11 +328,11 @@ class FastCapture:
                     # Add to queue
                     try:
                         self._frame_queue.put_nowait(frame_info)
-                    except:
+                    except Exception:
                         try:
                             self._frame_queue.get_nowait()
                             self._frame_queue.put_nowait(frame_info)
-                        except:
+                        except Exception:
                             pass
                     
                     self._capture_times.append(capture_ms)
@@ -357,9 +357,9 @@ class FastCapture:
                 for old_frame in old_frames[:-30]:
                     try:
                         old_frame.unlink()
-                    except:
+                    except OSError:
                         pass
-        except:
+        except OSError:
             pass
     
     def stop(self):
@@ -380,7 +380,7 @@ class FastCapture:
         if self._cv_capture:
             try:
                 self._cv_capture.release()
-            except:
+            except Exception:
                 pass
             self._cv_capture = None
         
@@ -412,7 +412,7 @@ class FastCapture:
                         try:
                             import shutil
                             shutil.copy2(latest_file, frame_copy)
-                        except:
+                        except OSError:
                             frame_copy = latest_file
                         
                         frame_info = FrameInfo(
@@ -425,12 +425,12 @@ class FastCapture:
                         # Add to queue (non-blocking)
                         try:
                             self._frame_queue.put_nowait(frame_info)
-                        except:
+                        except Exception:
                             # Queue full, remove oldest
                             try:
                                 self._frame_queue.get_nowait()
                                 self._frame_queue.put_nowait(frame_info)
-                            except:
+                            except Exception:
                                 pass
                         
                         last_mtime = mtime
@@ -441,7 +441,7 @@ class FastCapture:
                             for old_frame in old_frames[:-10]:
                                 try:
                                     old_frame.unlink()
-                                except:
+                                except OSError:
                                     pass
                 
             except Exception as e:
@@ -525,7 +525,7 @@ class FastCapture:
             for f in self.ramdisk_path.glob(pattern):
                 try:
                     f.unlink()
-                except:
+                except OSError:
                     pass
     
     @property

@@ -498,7 +498,7 @@ class RTSPCapture:
             if self._devnull_fd is not None:
                 os.close(self._devnull_fd)
                 self._devnull_fd = None
-        except:
+        except OSError:
             pass
     
     def _suppress_stderr(self):
@@ -509,7 +509,7 @@ class RTSPCapture:
                 self._stderr_fd = os.dup(2)
                 self._devnull_fd = os.open(os.devnull, os.O_WRONLY)
                 os.dup2(self._devnull_fd, 2)
-        except:
+        except OSError:
             pass
     
     def _capture_loop(self):
@@ -562,7 +562,7 @@ class RTSPCapture:
             test_codec = av.codec.Codec('h264_cuvid', 'r')
             hw_decoder = 'h264_cuvid'
             print("🚀 NVIDIA CUVID hardware decoder available")
-        except:
+        except Exception:
             pass
         
         try:
@@ -598,7 +598,7 @@ class RTSPCapture:
         try:
             import cv2
             has_cv2 = True
-        except:
+        except ImportError:
             has_cv2 = False
         
         # Capture loop - OPTIMIZED
@@ -650,7 +650,7 @@ class RTSPCapture:
                         try:
                             self._frame_queue.get_nowait()
                             self._frame_queue.put_nowait(img)
-                        except:
+                        except Exception:
                             pass
                     
                     last_capture = now
@@ -735,7 +735,7 @@ class RTSPCapture:
                 try:
                     self._frame_queue.get_nowait()
                     self._frame_queue.put_nowait(frame.copy())
-                except:
+                except Exception:
                     pass
             
             last_capture = now
@@ -848,7 +848,7 @@ class RTSPCapture:
                 try:
                     self._frame_queue.get_nowait()
                     self._frame_queue.put_nowait(frame.copy())
-                except:
+                except Exception:
                     pass
             
             last_capture = now
@@ -1531,7 +1531,7 @@ class SimpleVisualizerServer:
                                 frame_data = processor.process_frame(frame_jpeg)
                                 self.wfile.write(f"data: {frame_data.to_json()}\n\n".encode())
                                 self.wfile.flush()
-                    except:
+                    except Exception:
                         pass
                 else:
                     self.send_error(404)
@@ -2135,7 +2135,7 @@ class HLSVisualizerServer:
             self._ffmpeg_proc.terminate()
             try:
                 self._ffmpeg_proc.wait(timeout=5)
-            except:
+            except Exception:
                 self._ffmpeg_proc.kill()
         
         if self._hls_dir and self._hls_dir.exists():
@@ -2192,7 +2192,7 @@ class HLSVisualizerServer:
                         "datetime": dt,
                         "duration": float(dur),
                     })
-            except:
+            except Exception:
                 pass
         
         sync_info = {
@@ -2837,7 +2837,7 @@ class WebRTCVisualizerServer:
                     }
                     dc.send(json.dumps(msg))
                 await asyncio.sleep(0.1)
-            except:
+            except Exception:
                 break
     
     def stop(self):

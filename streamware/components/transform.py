@@ -242,7 +242,7 @@ class TransformComponent(Component):
             # Try to parse as JSON
             try:
                 return json.loads(data)
-            except:
+            except Exception:
                 return {"value": data}
         elif isinstance(data, (list, tuple)):
             return list(data)

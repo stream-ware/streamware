@@ -740,7 +740,7 @@ class MotionAnalysisDSL:
                 if 'FPS' in args.upper():
                     try:
                         self.fps = float(args.upper().replace('FPS', '').replace('AT', '').strip())
-                    except:
+                    except ValueError:
                         pass
             elif cmd == 'OUTPUT':
                 self.output_path = args.replace('TO', '').strip()

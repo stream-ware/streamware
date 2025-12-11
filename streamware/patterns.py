@@ -280,7 +280,7 @@ class ChoicePattern:
                                     return float(actual_value) >= float(value)
                                 elif operator == '<=':
                                     return float(actual_value) <= float(value)
-                except:
+                except (ValueError, TypeError, KeyError):
                     pass
                     
             # Treat as boolean

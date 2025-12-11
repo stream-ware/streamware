@@ -131,7 +131,7 @@ class VoiceKeyboardComponent(Component):
         if self.confirm:
             try:
                 flow(f"voice://speak?text=Wpisuję {text_to_type}").run()
-            except:
+            except Exception:
                 pass
         
         # 4. Type it!
@@ -169,7 +169,7 @@ class VoiceKeyboardComponent(Component):
         if self.confirm:
             try:
                 flow(f"voice://speak?text=Naciskam {key}").run()
-            except:
+            except Exception:
                 pass
         
         # 4. Press it!
@@ -193,7 +193,7 @@ class VoiceKeyboardComponent(Component):
         if self.confirm:
             try:
                 flow("voice://speak?text=Dyktuj. Powiedz stop aby zakończyć.").run()
-            except:
+            except Exception:
                 pass
         
         for i in range(self.iterations):

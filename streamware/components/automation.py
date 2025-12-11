@@ -102,7 +102,7 @@ class AutomationComponent(Component):
             if result.returncode == 0:
                 logger.info("scrot available for screenshots")
                 return  # scrot works, no need for pyautogui
-        except:
+        except Exception:
             pass
         
         # Try to import pyautogui if scrot not available
