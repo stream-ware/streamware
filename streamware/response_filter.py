@@ -856,10 +856,16 @@ def is_significant_smart(
     if response_lower.startswith(f"no {focus}") or response_lower.startswith("no person"):
         return False, f"No {focus} visible"
     
-    # For short responses, extract info from tracking data
-    if len(response_clean) < 80:
-        # Check if it's a clear positive with activity
-        if response_lower.startswith("yes") or f"yes, there is a {focus}" in response_lower:
+    # Check if it's a clear positive with activity (any length)
+    is_positive = (
+        response_lower.startswith("yes") or 
+        f"yes, there is a {focus}" in response_lower or
+        f"there is a {focus}" in response_lower or
+        f"{focus} is visible" in response_lower or
+        f"{focus} clearly visible" in response_lower
+    )
+    
+    if is_positive:
             # Extract activity from tracking data
             tracking_data = tracking_data or {}
             direction = tracking_data.get("direction", "")
@@ -874,9 +880,11 @@ def is_significant_smart(
             elif state and state not in ("unknown", "not_visible"):
                 return True, f"{focus.title()} {state.replace('_', ' ')}"
             else:
-                return True, f"{focus.title()} visible"
+                # Extract first sentence as summary for longer responses
+                first_sentence = response_clean.split('.')[0][:100]
+                return True, first_sentence if len(first_sentence) > 10 else f"{focus.title()} visible"
     
-    # For longer responses, use guarder LLM with tracking data
+    # For longer responses without clear positive, use guarder LLM with tracking data
     if guarder_model is None:
         guarder_model = config.get("SQ_GUARDER_MODEL", "gemma:2b")
     

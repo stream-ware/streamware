@@ -39,6 +39,11 @@ from collections import defaultdict
 from enum import Enum
 import numpy as np
 
+try:  # Optional config integration
+    from .config import config as _sq_config
+except Exception:  # pragma: no cover - keep analyzer usable without full config
+    _sq_config = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -101,6 +106,12 @@ class MotionBlob:
     contour_points: int = 0
     complexity: float = 0.0  # 0-1, how complex the shape is
     aspect_ratio: float = 1.0
+    # Appearance descriptors (for matching in low-light / grayscale)
+    # Hu moments in log-scale (7 values typically), robust to rotation/scale
+    shape_descriptor: Tuple[float, ...] = field(default_factory=tuple)
+    # Grayscale intensity statistics inside blob region
+    intensity_mean: float = -1.0
+    intensity_std: float = -1.0
     
     # Tracking
     age: int = 1  # frames since first seen
@@ -180,6 +191,8 @@ class FrameDiffAnalyzer:
         max_blob_size_ratio: float = 0.8,  # Raised from 0.7 to allow larger objects
         min_moving_frames: int = 1,  # Lowered from 2 for faster detection
         filter_static: bool = True,  # Filter out static objects (monitors, pictures)
+        # Heuristic for global camera motion
+        camera_motion_threshold: float = 40.0,  # % of pixels changed to treat as camera move
     ):
         self.motion_threshold = motion_threshold
         self.min_blob_area = min_blob_area
@@ -192,6 +205,15 @@ class FrameDiffAnalyzer:
         self.max_blob_size_ratio = max_blob_size_ratio
         self.min_moving_frames = min_moving_frames
         self.filter_static = filter_static
+        # Camera motion threshold (can be overridden via config)
+        if _sq_config is not None:
+            try:
+                cfg_val = _sq_config.get("SQ_DSL_CAMERA_MOTION_THRESHOLD", None)
+                if cfg_val is not None:
+                    camera_motion_threshold = float(cfg_val)
+            except Exception:
+                pass
+        self.camera_motion_threshold = camera_motion_threshold
         
         self._prev_gray = None
         self._prev_blobs: Dict[int, MotionBlob] = {}
@@ -284,6 +306,40 @@ class FrameDiffAnalyzer:
         changed_pixels = cv2.countNonZero(motion_mask)
         motion_percent = (changed_pixels / total_pixels) * 100
         
+        # Detect potential camera motion (global change across most of the frame)
+        if motion_percent >= self.camera_motion_threshold:
+            # Treat as camera movement: no blobs/events, only report motion level
+            # Edge map restricted to motion mask for consistency
+            edges = cv2.Canny(gray, 50, 150)
+            edges = cv2.bitwise_and(edges, edges, mask=motion_mask)
+            
+            background_b64 = self._capture_thumbnail(frame_path, frame)
+            
+            delta = FrameDelta(
+                frame_num=self._frame_count,
+                timestamp=time.time(),
+                motion_percent=motion_percent,
+                changed_pixels=changed_pixels,
+                total_pixels=total_pixels,
+                blobs=[],
+                events=[],
+                motion_mask=motion_mask,
+                edge_map=edges,
+                frame_path=str(frame_path),
+                background_base64=background_b64,
+            )
+            
+            if timing_logger:
+                timing_logger.set_metrics(
+                    blobs=0,
+                    motion_pct=motion_percent,
+                    events=0,
+                )
+                timing_logger.end_frame()
+            
+            self._prev_gray = gray
+            return delta
+        
         # Find contours (blobs)
         t_step = time.perf_counter()
         contours, _ = cv2.findContours(
@@ -292,42 +348,80 @@ class FrameDiffAnalyzer:
         if timing_logger:
             timing_logger.log_step("contours", (time.perf_counter() - t_step) * 1000)
         
-        # Extract blobs
-        blobs = []
+        # Extract candidate rectangles for motion regions
+        rects: List[Tuple[int, int, int, int, int, int]] = []  # (x1, y1, x2, y2, area, contour_points)
         for contour in contours:
             area = cv2.contourArea(contour)
             if area < self.min_blob_area:
                 continue
             
-            # Bounding box
             x, y, bw, bh = cv2.boundingRect(contour)
-            
-            # Moments for centroid
-            M = cv2.moments(contour)
-            if M["m00"] > 0:
-                cx = M["m10"] / M["m00"]
-                cy = M["m01"] / M["m00"]
-            else:
-                cx = x + bw / 2
-                cy = y + bh / 2
-            
-            # Complexity (perimeter^2 / area) - circle = 4π ≈ 12.57
-            perimeter = cv2.arcLength(contour, True)
-            complexity = min(1.0, (perimeter ** 2) / (4 * math.pi * area) / 10)
+            x1, y1, x2, y2 = x, y, x + bw, y + bh
+            rects.append((x1, y1, x2, y2, int(area), len(contour)))
+        
+        # Group nearby / overlapping rectangles into larger motion fragments
+        gap_px = max(5, int(0.01 * min(w, h)))
+        merged_rects = self._merge_motion_rects(rects, gap_px=gap_px)
+        
+        blobs: List[MotionBlob] = []
+        for x1, y1, x2, y2, area_px, contour_pts in merged_rects:
+            bw = max(1, x2 - x1)
+            bh = max(1, y2 - y1)
+            cx = x1 + bw / 2.0
+            cy = y1 + bh / 2.0
             
             # Filter out very large blobs (likely background/full frame)
             blob_size_ratio = (bw * bh) / (w * h)
             if self.filter_static and blob_size_ratio > self.max_blob_size_ratio:
-                continue  # Skip - too large, probably background
+                continue
+            
+            # Approximate complexity for merged region
+            perimeter = 2 * (bw + bh)
+            complexity = min(1.0, (perimeter ** 2) / (4 * math.pi * max(area_px, 1)) / 10)
+            
+            # Compute simple appearance descriptors in grayscale (shape + intensity)
+            shape_desc: Tuple[float, ...] = tuple()
+            intensity_mean: float = -1.0
+            intensity_std: float = -1.0
+            try:
+                import cv2
+                # Clip to frame bounds (defensive)
+                rx1 = max(0, min(x1, w - 1))
+                ry1 = max(0, min(y1, h - 1))
+                rx2 = max(1, min(x2, w))
+                ry2 = max(1, min(y2, h))
+                roi_mask = motion_mask[ry1:ry2, rx1:rx2]
+                roi_gray = gray[ry1:ry2, rx1:rx2]
+                if roi_mask.size > 0 and roi_gray.size > 0:
+                    # Hu moments on binary mask (shape, robust to illumination)
+                    m = cv2.moments(roi_mask)
+                    if m["m00"] > 0:
+                        hu = cv2.HuMoments(m).flatten()
+                        # Log-scale for stability, limit extremes
+                        shape_desc = tuple(
+                            float(-math.copysign(1.0, v) * math.log10(abs(v) + 1e-6))
+                            for v in hu
+                        )
+                    # Intensity stats on moving pixels only
+                    moving_pixels = roi_gray[roi_mask > 0]
+                    if moving_pixels.size > 0:
+                        intensity_mean = float(np.mean(moving_pixels))
+                        intensity_std = float(np.std(moving_pixels))
+            except Exception:
+                # Descriptors are optional; tracking falls back to geometric cost
+                pass
             
             blob = MotionBlob(
                 id=0,  # Will be assigned during tracking
                 center=Point2D(cx / w, cy / h),
                 size=Point2D(bw / w, bh / h),
-                area_px=int(area),
-                contour_points=len(contour),
+                area_px=int(area_px),
+                contour_points=int(contour_pts),
                 complexity=complexity,
                 aspect_ratio=bw / bh if bh > 0 else 1.0,
+                shape_descriptor=shape_desc,
+                intensity_mean=intensity_mean,
+                intensity_std=intensity_std,
                 last_seen=self._frame_count,
             )
             blobs.append(blob)
@@ -379,6 +473,46 @@ class FrameDiffAnalyzer:
         self._prev_gray = gray
         return delta
     
+    def _merge_motion_rects(
+        self,
+        rects: List[Tuple[int, int, int, int, int, int]],
+        gap_px: int = 10,
+    ) -> List[Tuple[int, int, int, int, int, int]]:
+        """Merge overlapping / nearby motion rectangles into larger fragments.
+        
+        Args:
+            rects: list of (x1, y1, x2, y2, area_px, contour_points)
+            gap_px: distance in pixels to still treat rectangles as connected
+        """
+        merged: List[Tuple[int, int, int, int, int, int]] = []
+        
+        for rect in rects:
+            x1, y1, x2, y2, area, pts = rect
+            merged_into = False
+            for idx, (mx1, my1, mx2, my2, marea, mpts) in enumerate(merged):
+                # Expand existing merged rect by gap_px and check overlap
+                ex1 = mx1 - gap_px
+                ey1 = my1 - gap_px
+                ex2 = mx2 + gap_px
+                ey2 = my2 + gap_px
+                
+                if not (x2 < ex1 or x1 > ex2 or y2 < ey1 or y1 > ey2):
+                    # Overlaps or is close enough - merge
+                    nx1 = min(mx1, x1)
+                    ny1 = min(my1, y1)
+                    nx2 = max(mx2, x2)
+                    ny2 = max(my2, y2)
+                    narea = marea + area
+                    npts = mpts + pts
+                    merged[idx] = (nx1, ny1, nx2, ny2, narea, npts)
+                    merged_into = True
+                    break
+            
+            if not merged_into:
+                merged.append(rect)
+        
+        return merged
+    
     def _capture_thumbnail(self, frame_path: Path, frame: np.ndarray, max_size: int = 128) -> str:
         """Capture 128px thumbnail from frame while it still exists."""
         try:
@@ -418,9 +552,28 @@ class FrameDiffAnalyzer:
             matches = []
             for new_idx, new_blob in enumerate(new_blobs):
                 for old_id, old_blob in self._prev_blobs.items():
+                    # Geometric distance (normalized center distance)
                     dist = new_blob.center.distance_to(old_blob.center)
+                    # Relative size difference
                     size_diff = abs(new_blob.area_px - old_blob.area_px) / max(new_blob.area_px, old_blob.area_px, 1)
-                    cost = dist + size_diff * 0.3
+                    
+                    # Appearance distance based on shape descriptor (Hu moments)
+                    shape_dist = 0.0
+                    if new_blob.shape_descriptor and old_blob.shape_descriptor and \
+                       len(new_blob.shape_descriptor) == len(old_blob.shape_descriptor):
+                        shape_dist = sum(
+                            abs(a - b) for a, b in zip(new_blob.shape_descriptor, old_blob.shape_descriptor)
+                        ) / len(new_blob.shape_descriptor)
+                        # Clamp to reasonable range
+                        shape_dist = min(shape_dist, 5.0)
+                    
+                    # Intensity distance (mean brightness)
+                    intensity_diff = 0.0
+                    if new_blob.intensity_mean >= 0 and old_blob.intensity_mean >= 0:
+                        intensity_diff = abs(new_blob.intensity_mean - old_blob.intensity_mean) / 255.0
+                    
+                    # Combined cost: geometric + weighted appearance
+                    cost = dist + size_diff * 0.3 + shape_dist * 0.2 + intensity_diff * 0.2
                     matches.append((cost, new_idx, old_id))
             
             # Greedy matching (could use Hungarian for optimal)
@@ -429,7 +582,7 @@ class FrameDiffAnalyzer:
             for cost, new_idx, old_id in matches:
                 if new_idx in used_new or old_id in used_old:
                     continue
-                if cost > 0.5:  # Too far apart
+                if cost > 0.8:  # Too different (position/shape/brightness)
                     continue
                 
                 new_blob = new_blobs[new_idx]

@@ -450,6 +450,8 @@ Shortcuts:
     live_parser.add_argument('--frames', choices=['all', 'changed', 'keyframes', 'periodic'],
                              default='changed', help='Frame processing: all, changed (default), keyframes, periodic')
     live_parser.add_argument('--tts', action='store_true', help='Enable text-to-speech')
+    live_parser.add_argument('--tts-all', action='store_true', help='TTS: speak every LLM response (debug mode)')
+    live_parser.add_argument('--tts-diff', action='store_true', help='TTS: speak only when state/summary changes')
     live_parser.add_argument('--trigger', '-t', help='Triggers: "person appears,door opens"')
     live_parser.add_argument('--focus', '-f', help='Focus on specific objects (e.g., person)')
     live_parser.add_argument('--interval', '-i', type=float, help='Seconds between checks (or use sensitivity)')
@@ -3048,10 +3050,18 @@ def handle_live(args) -> int:
     uri = f"live://{op}?source={url}"
     tts_value = 'true' if args.tts else 'false'
     uri += f"&tts={tts_value}"
+
+    # TTS mode selection
+    tts_mode = 'normal'
+    if getattr(args, 'tts_all', False):
+        tts_mode = 'all'
+    elif getattr(args, 'tts_diff', False):
+        tts_mode = 'diff'
+    uri += f"&tts_mode={tts_mode}"
     
     # Debug: show TTS status
     if args.tts:
-        print(f"🔊 TTS enabled (--tts flag detected)")
+        print(f"🔊 TTS enabled (--tts flag detected, mode={tts_mode})")
     uri += f"&mode={mode}"
     uri += f"&duration={args.duration}"
     

@@ -112,6 +112,10 @@ class RealtimeDSLServer:
         # Close WebSocket server
         if self._ws_server:
             try:
+                # Schedule close in event loop if running
+                if self._loop and self._loop.is_running():
+                    import asyncio
+                    asyncio.run_coroutine_threadsafe(self._ws_server.wait_closed(), self._loop)
                 self._ws_server.close()
             except:
                 pass

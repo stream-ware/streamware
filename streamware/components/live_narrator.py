@@ -389,6 +389,13 @@ class LiveNarratorComponent(Component):
         self.tts_engine = uri.get_param("tts_engine", config.get("SQ_TTS_ENGINE", "auto"))
         self.tts_voice = uri.get_param("tts_voice", config.get("SQ_TTS_VOICE", ""))
         self.tts_rate = int(uri.get_param("tts_rate", config.get("SQ_TTS_RATE", "150")))
+        # TTS mode:
+        #   normal  - current smart filter (default)
+        #   all     - speak every LLM response
+        #   diff    - speak only when summary/state changes
+        self.tts_mode = uri.get_param("tts_mode", config.get("SQ_TTS_MODE", "normal")).lower()
+        if self.tts_mode not in ("normal", "all", "diff"):
+            self.tts_mode = "normal"
         
         # Intent for smart detection pipeline
         import urllib.parse
@@ -504,6 +511,8 @@ class LiveNarratorComponent(Component):
         self._tts_queue = []
         self._last_description = ""
         self._last_analysis = {}
+        # Last spoken short summary for diff-only TTS mode
+        self._last_tts_summary = ""
         
         # Movement tracking state (for smart track mode)
         self._position_history: List[Dict] = []  # [{x, y, timestamp, regions}]
@@ -1439,10 +1448,13 @@ class LiveNarratorComponent(Component):
             except Exception as e:
                 logger.debug(f"Error closing DSL timing logger: {e}")
         
-        # Wait for any pending TTS to complete before exiting
+        # Stop TTS worker process if enabled
         if self.tts_enabled:
-            from ..tts import wait_for_tts
-            wait_for_tts(timeout=5.0)
+            try:
+                from ..tts_worker_process import stop_tts_worker
+                stop_tts_worker(timeout=5.0)
+            except Exception as e:
+                logger.debug(f"Error stopping TTS worker: {e}")
         
         # Summary
         triggered_count = sum(1 for e in self._history if e.triggered)
@@ -1713,6 +1725,8 @@ class LiveNarratorComponent(Component):
             from ..response_filter import is_significant_smart
             from ..config import config
             
+            print(f"   🔄 [LLM] Starting analysis for F{frame_num}...", flush=True)
+            
             # Optimize image
             optimal_size = get_optimal_size_for_model(self.model)
             optimized_path = optimize_for_llm(frame_path, max_size=optimal_size, quality=75)
@@ -1721,6 +1735,10 @@ class LiveNarratorComponent(Component):
             
             # Get AI description
             description = self._describe_frame_advanced(optimized_path, frame_analysis)
+            
+            if not description:
+                print(f"   ⚠️ [LLM F{frame_num}] No description returned", flush=True)
+                return
             
             if description:
                 # Filter and check significance
@@ -1732,14 +1750,33 @@ class LiveNarratorComponent(Component):
                     guarder_model=guarder_model,
                     tracking_data={},
                 )
-                
-                if is_worth and short_desc:
-                    # Log significant detection
+
+                # Decide if we should speak based on TTS mode
+                speak_now = False
+                tts_text = short_desc or description
+
+                if self.tts_enabled:
+                    if self.tts_mode == "all":
+                        # Always speak full description
+                        speak_now = True
+                    elif self.tts_mode == "diff":
+                        # Only speak when significant AND different from last spoken summary
+                        if is_worth and short_desc:
+                            if short_desc != self._last_tts_summary:
+                                speak_now = True
+                    else:  # normal
+                        if is_worth and short_desc:
+                            speak_now = True
+
+                if speak_now:
                     if not self.quiet:
-                        print(f"   🎯 [LLM F{frame_num}] {short_desc}", flush=True)
-                    
+                        print(f"   🎯 [LLM F{frame_num}] {tts_text}", flush=True)
+                    # Remember last spoken summary for diff-only mode
+                    self._last_tts_summary = short_desc or tts_text
                     # Handle TTS, webhooks etc in background
-                    self._handle_detection(short_desc, frame_path, frame_num)
+                    self._handle_detection(tts_text, frame_path, frame_num)
+                else:
+                    print(f"   ⏭️ [LLM F{frame_num}] Filtered (is_worth={is_worth})", flush=True)
                     
         except Exception as e:
             logger.debug(f"Background LLM processing error: {e}")
@@ -1749,8 +1786,16 @@ class LiveNarratorComponent(Component):
         try:
             # TTS if enabled
             if self.tts_enabled:
-                from ..tts import speak_async
-                speak_async(description)
+                try:
+                    from ..tts_worker_process import get_tts_worker
+                    worker = get_tts_worker(
+                        engine=self.tts_engine,
+                        rate=self.tts_rate,
+                        voice=self.tts_voice,
+                    )
+                    worker.speak(description)
+                except Exception as e:
+                    logger.debug(f"TTS worker error: {e}")
             
             # Webhook if configured
             if self.webhook_url:
@@ -1913,7 +1958,11 @@ class LiveNarratorComponent(Component):
             if result.get("success"):
                 desc = result.get("response", "").strip()
                 self._prev_description = desc
+                if desc:
+                    print(f"   ✅ [LLM] Got response: {desc[:100]}...", flush=True)
                 return desc
+            else:
+                print(f"   ❌ [LLM] Failed: {result.get('error', 'unknown')}", flush=True)
             return ""
             
         except Exception as e:
@@ -2145,8 +2194,13 @@ class LiveNarratorComponent(Component):
     def _speak(self, text: str):
         """Speak text using unified TTS module."""
         try:
-            from ..tts import speak
-            speak(text, engine=self.tts_engine, rate=self.tts_rate, voice=self.tts_voice)
+            from ..tts_worker_process import get_tts_worker
+            worker = get_tts_worker(
+                engine=self.tts_engine,
+                rate=self.tts_rate,
+                voice=self.tts_voice,
+            )
+            worker.speak(text)
         except Exception as e:
             logger.warning(f"TTS failed: {e}")
     
