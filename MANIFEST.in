@@ -3,4 +3,8 @@ include LICENSE
 include requirements.txt
 include pyproject.toml
 recursive-include streamware *.py
+recursive-include streamware/prompts *.txt
+recursive-include streamware/prompts *.prompt
+recursive-include streamware/templates *.html
+recursive-include streamware/templates *.j2
 recursive-include examples *.py

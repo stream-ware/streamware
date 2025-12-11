@@ -35,14 +35,26 @@ from queue import Queue
 
 logger = logging.getLogger(__name__)
 
-# Try to import websockets
+# Try to import websockets, auto-install if missing
 try:
     import websockets
     from websockets.server import serve
     HAS_WEBSOCKETS = True
 except ImportError:
     HAS_WEBSOCKETS = False
-    logger.warning("websockets not installed. Real-time DSL streaming disabled.")
+    # Auto-install websockets
+    try:
+        import subprocess
+        import sys
+        print("📦 Installing websockets package...", flush=True)
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "websockets", "-q"])
+        import websockets
+        from websockets.server import serve
+        HAS_WEBSOCKETS = True
+        print("✅ websockets installed successfully", flush=True)
+    except Exception as e:
+        logger.warning(f"websockets not installed and auto-install failed: {e}")
+        logger.warning("Run: pip install websockets")
 
 
 class RealtimeDSLServer:

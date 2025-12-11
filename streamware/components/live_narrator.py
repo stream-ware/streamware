@@ -743,12 +743,19 @@ class LiveNarratorComponent(Component):
                 self._async_llm_instance = None
         
         # FastCapture for low-latency RTSP streaming (10x faster than subprocess)
+        # Skip if DSL streamer process handles streaming separately
         from ..fast_capture import FastCapture
         fast_capture = None
         use_fast_capture = config.get("SQ_FAST_CAPTURE", "true").lower() == "true"
         
-        # Calculate capture FPS based on target - use target_fps for realtime or dsl_only modes
-        capture_fps = self.target_fps if (self.dsl_only or self.realtime) else 1.0 / max(1.0, self.interval)
+        # If DSL streamer process is running, use slower LLM-only capture rate
+        if self._dsl_streamer_process:
+            capture_fps = 0.5  # Slow rate for LLM analysis only
+            print(f"📹 Main process: LLM-only mode (DSL streams separately)", flush=True)
+        elif self.dsl_only or self.realtime:
+            capture_fps = self.target_fps
+        else:
+            capture_fps = 1.0 / max(1.0, self.interval)
         
         if use_fast_capture and self.source.startswith("rtsp://"):
             try:

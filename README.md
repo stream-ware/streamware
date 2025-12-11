@@ -76,6 +76,21 @@ sq get api.example.com/users | sq transform --json | sq file save users.json
 | 🔄 **Pipelines** | HTTP, files, transforms, Kafka, RabbitMQ, PostgreSQL |
 | 🎬 **Media** | Video analysis, image description, audio transcription |
 
+
+## 📚 Documentation
+
+Detailed documentation is available in the [docs/](docs/) directory:
+
+| Document | Description |
+|----------|-------------|
+| [📚 Documentation Index](docs/README.md) | Main documentation hub |
+| [🎬 Real-time Streaming](docs/REALTIME_STREAMING.md) | Browser viewer, WebSocket streaming |
+| [⚡ Performance](docs/PERFORMANCE.md) | Optimization, timing logs, benchmarks |
+| [🤖 LLM Integration](docs/LLM_INTEGRATION.md) | Vision models, async inference |
+| [🎯 Motion Analysis](docs/MOTION_ANALYSIS.md) | DSL tracking, blob detection |
+| [🏗️ Architecture](docs/ARCHITECTURE.md) | System design, multiprocessing |
+| [📡 API Reference](docs/API.md) | CLI options, configuration |
+
 ## 📦 Installation
 
 ```bash

@@ -65,6 +65,7 @@ class FastCapture:
         buffer_size: int = 3,
         resolution: Tuple[int, int] = None,
         backend: str = "auto",  # "auto", "opencv", "ffmpeg"
+        output_dir: str = None,  # Custom output directory for frame files
     ):
         self.rtsp_url = rtsp_url
         self.fps = fps
@@ -83,8 +84,11 @@ class FastCapture:
         else:
             self.backend = backend
         
-        # Use RAM disk
-        self.ramdisk_path = Path(config.get("SQ_RAMDISK_PATH", "/dev/shm/streamware"))
+        # Use RAM disk (custom directory if specified)
+        if output_dir:
+            self.ramdisk_path = Path(output_dir)
+        else:
+            self.ramdisk_path = Path(config.get("SQ_RAMDISK_PATH", "/dev/shm/streamware"))
         self.ramdisk_path.mkdir(parents=True, exist_ok=True)
         
         # State
