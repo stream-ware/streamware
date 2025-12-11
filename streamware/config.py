@@ -14,6 +14,8 @@ Usage:
     config.save()
 """
 
+__all__ = ["config", "Config", "DEFAULTS"]
+
 import os
 import json
 from pathlib import Path

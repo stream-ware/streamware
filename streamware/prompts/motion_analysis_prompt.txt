@@ -1,0 +1,52 @@
+# Motion Analysis LLM Prompt Template
+# Converts DSL motion data into a concise, LLM-friendly format
+
+You are analyzing motion tracking data from a video stream.
+
+## Scene Summary
+- Duration: {duration}s ({frame_count} frames)
+- Camera: {camera_info}
+- Average motion: {avg_motion}%
+
+## Tracked Objects ({object_count} total)
+{object_summaries}
+
+## Movement Timeline
+{timeline}
+
+## Key Events
+{key_events}
+
+## Question
+Based on this motion data, {question}
+
+---
+# Example filled prompt:
+
+You are analyzing motion tracking data from a video stream.
+
+## Scene Summary
+- Duration: 20s (4 frames at 5s intervals)
+- Camera: Security camera, indoor
+- Average motion: 27.1%
+
+## Tracked Objects (5 total)
+- Object #1: Moved RIGHT→DOWN→LEFT, traveled 0.19 units, avg speed 0.047
+- Object #2: Appeared F2, moved DOWN→UP, traveled 0.08 units
+- Object #3: Appeared F2, moved DOWN→UP, small displacement
+- Object #4: Appeared F4, stationary
+- Object #5: Appeared F4, stationary
+
+## Movement Timeline
+F1 (0s): Large motion detected (100%), 1 blob appeared
+F2 (10s): Motion 2.3%, blob#1 moved RIGHT, 2 new objects appeared
+F3 (15s): Motion 4.3%, all 3 objects moving DOWN
+F4 (20s): Motion 1.9%, objects moving UP, 2 new stationary objects
+
+## Key Events
+- APPEAR: 5 objects total (1 at F1, 2 at F2, 2 at F4)
+- MOVEMENT: Primary object #1 traveled longest path (0.19 units)
+- DIRECTION: Initially RIGHT, then DOWN, finally LEFT (possible person walking)
+
+## Question
+Based on this motion data, describe what is likely happening in the scene. Is there a person present? What are they doing?

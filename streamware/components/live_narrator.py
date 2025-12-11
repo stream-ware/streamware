@@ -1171,10 +1171,10 @@ class LiveNarratorComponent(Component):
         pstats = parallel.stats
         print(f"\n⚡ Parallel stats: {pstats['completed']} tasks, avg {pstats['avg_time_ms']:.0f}ms", flush=True)
         
-        # Export SVG analysis HTML
+        # Export lightweight HTML with DSL-driven player
         if frame_deltas:
             try:
-                from ..dsl_visualizer import generate_dsl_html
+                from ..dsl_visualizer import generate_dsl_html_lightweight
                 from pathlib import Path
                 
                 # Determine output path
@@ -1184,18 +1184,22 @@ class LiveNarratorComponent(Component):
                     html_path = Path(f"motion_analysis_{int(time.time())}.html")
                 
                 dsl_output = dsl_generator.get_full_dsl()
-                generate_dsl_html(
+                generate_dsl_html_lightweight(
                     deltas=frame_deltas,
                     dsl_output=dsl_output,
                     output_path=str(html_path),
                     title=f"Motion Analysis - {self.mode} mode",
                     fps=2.0,
+                    include_backgrounds=True,  # 128px frame thumbnails
+                    embed_assets=True,  # Inline CSS/JS for standalone file
                 )
                 
-                print(f"\n🎯 SVG Analysis saved: {html_path}", flush=True)
+                # Calculate file size
+                html_size = html_path.stat().st_size / 1024
+                print(f"\n🎯 Motion Analysis saved: {html_path} ({html_size:.1f}KB)", flush=True)
                 print(f"   Frames: {len(frame_deltas)}, Tracked: {len(dsl_generator.tracks)}", flush=True)
             except Exception as e:
-                logger.debug(f"SVG export failed: {e}")
+                logger.debug(f"HTML export failed: {e}")
         
         # Wait for any pending TTS to complete before exiting
         if self.tts_enabled:

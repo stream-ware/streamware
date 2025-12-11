@@ -33,7 +33,7 @@ try:
     import numpy as np
     HAS_NUMPY = True
 except ImportError:
-    np = None  # type: ignore
+    np = None
     HAS_NUMPY = False
 
 logger = logging.getLogger(__name__)

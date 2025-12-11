@@ -131,6 +131,10 @@ class FrameDelta:
     # Raw data for visualization
     motion_mask: Optional[np.ndarray] = None
     edge_map: Optional[np.ndarray] = None
+    
+    # Frame path and background for thumbnails
+    frame_path: Optional[str] = None
+    background_base64: Optional[str] = None  # 128px thumbnail captured during analysis
 
 
 @dataclass
@@ -290,6 +294,9 @@ class FrameDiffAnalyzer:
         edges = cv2.Canny(gray, 50, 150)
         edges = cv2.bitwise_and(edges, edges, mask=motion_mask)
         
+        # Capture 128px thumbnail while frame file still exists
+        background_b64 = self._capture_thumbnail(frame_path, frame)
+        
         # Create delta
         delta = FrameDelta(
             frame_num=self._frame_count,
@@ -301,10 +308,32 @@ class FrameDiffAnalyzer:
             events=events,
             motion_mask=motion_mask,
             edge_map=edges,
+            frame_path=str(frame_path),
+            background_base64=background_b64,
         )
         
         self._prev_gray = gray
         return delta
+    
+    def _capture_thumbnail(self, frame_path: Path, frame: np.ndarray, max_size: int = 128) -> str:
+        """Capture 128px thumbnail from frame while it still exists."""
+        try:
+            import cv2
+            import base64
+            
+            h, w = frame.shape[:2]
+            if w > h:
+                new_w = max_size
+                new_h = int(h * max_size / w)
+            else:
+                new_h = max_size
+                new_w = int(w * max_size / h)
+            
+            resized = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            _, buffer = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            return base64.b64encode(buffer).decode()
+        except Exception:
+            return ""
     
     def _track_blobs(
         self,

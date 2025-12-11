@@ -11,12 +11,45 @@ Takes frame_diff_dsl output and creates:
 import logging
 import time
 import math
+import base64
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import json
 
 logger = logging.getLogger(__name__)
+
+
+def resize_frame_to_base64(frame_path: Path, max_size: int = 128) -> str:
+    """Resize frame to max_size and encode as base64.
+    
+    Args:
+        frame_path: Path to frame image
+        max_size: Maximum dimension (width or height)
+        
+    Returns:
+        Base64 encoded JPEG string
+    """
+    try:
+        import cv2
+        img = cv2.imread(str(frame_path))
+        if img is None:
+            return ""
+        
+        h, w = img.shape[:2]
+        if w > h:
+            new_w = max_size
+            new_h = int(h * max_size / w)
+        else:
+            new_h = max_size
+            new_w = int(w * max_size / h)
+        
+        resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        _, buffer = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        return base64.b64encode(buffer).decode()
+        
+    except Exception:
+        return ""
 
 
 # ============================================================================
@@ -151,6 +184,7 @@ class SVGFrameGenerator:
         delta: 'FrameDelta',
         include_motion_mask: bool = True,
         include_edges: bool = True,
+        background_base64: str = "",
     ) -> str:
         """Generate SVG for single frame."""
         from .frame_diff_dsl import FrameDelta, EventType
@@ -162,9 +196,13 @@ class SVGFrameGenerator:
             '    <polygon points="0 0, 10 3.5, 0 7" fill="#ffff00"/>',
             '  </marker>',
             '</defs>',
-            # Background
+            # Background - image or solid color
             f'<rect width="{self.width}" height="{self.height}" fill="#1a1a2e"/>',
         ]
+        
+        # Add background image if available (128px thumbnail)
+        if background_base64:
+            svg_parts.append(f'<image href="data:image/jpeg;base64,{background_base64}" width="{self.width}" height="{self.height}" preserveAspectRatio="xMidYMid slice" opacity="0.4"/>')
         
         # Motion mask as semi-transparent overlay
         if include_motion_mask and delta.motion_mask is not None:
@@ -294,9 +332,18 @@ def generate_dsl_html(
     output_path: str = "dsl_analysis.html",
     title: str = "Frame Diff DSL Analysis",
     fps: float = 2.0,
+    include_backgrounds: bool = True,
 ) -> Path:
     """
     Generate interactive HTML from DSL analysis.
+    
+    Args:
+        deltas: List of FrameDelta objects
+        dsl_output: DSL text output
+        output_path: Output HTML path
+        title: Page title
+        fps: Animation FPS
+        include_backgrounds: Include 128px frame thumbnails as backgrounds
     """
     from .frame_diff_dsl import FrameDelta
     
@@ -304,7 +351,12 @@ def generate_dsl_html(
     svg_frames = []
     
     for delta in deltas:
-        svg = generator.generate_frame_svg(delta)
+        # Get 128px background if frame path available
+        bg_b64 = ""
+        if include_backgrounds and hasattr(delta, 'frame_path') and delta.frame_path:
+            bg_b64 = resize_frame_to_base64(Path(delta.frame_path), max_size=128)
+        
+        svg = generator.generate_frame_svg(delta, background_base64=bg_b64)
         svg_frames.append(svg)
     
     # Calculate statistics
@@ -553,4 +605,153 @@ def generate_dsl_html(
     
     output = Path(output_path)
     output.write_text(html)
+    return output
+
+
+def generate_dsl_html_lightweight(
+    deltas: List['FrameDelta'],
+    dsl_output: str,
+    output_path: str = "motion_analysis.html",
+    title: str = "Motion Analysis",
+    fps: float = 2.0,
+    include_backgrounds: bool = True,
+    embed_assets: bool = True,
+) -> Path:
+    """
+    Generate lightweight HTML using DSL-driven player.
+    
+    Instead of embedding pre-rendered SVGs (~200KB), this embeds only:
+    - DSL text (~5KB)
+    - 128px frame thumbnails as backgrounds
+    - CSS/JS (inline or external)
+    
+    Result: ~95% smaller files.
+    
+    Args:
+        deltas: List of FrameDelta objects
+        dsl_output: DSL text output
+        output_path: Output HTML path
+        title: Page title
+        fps: Animation FPS
+        include_backgrounds: Include 128px frame thumbnails
+        embed_assets: Embed CSS/JS inline (True) or link external files (False)
+    """
+    from .frame_diff_dsl import FrameDelta
+    
+    # Collect 128px backgrounds (already captured during analysis)
+    backgrounds_json = {}
+    if include_backgrounds:
+        for delta in deltas:
+            # Use pre-captured background (captured during analysis when file existed)
+            if hasattr(delta, 'background_base64') and delta.background_base64:
+                backgrounds_json[delta.frame_num] = delta.background_base64
+            # Fallback: try to read from file if it still exists
+            elif hasattr(delta, 'frame_path') and delta.frame_path:
+                bg_b64 = resize_frame_to_base64(Path(delta.frame_path), max_size=128)
+                if bg_b64:
+                    backgrounds_json[delta.frame_num] = bg_b64
+    
+    # Calculate statistics
+    total_frames = len(deltas)
+    avg_motion = sum(d.motion_percent for d in deltas) / total_frames if deltas else 0
+    max_blobs = max(len(d.blobs) for d in deltas) if deltas else 0
+    total_events = sum(len(d.events) for d in deltas)
+    
+    # Load CSS/JS
+    static_dir = Path(__file__).parent / "static"
+    
+    if embed_assets:
+        css_content = ""
+        js_content = ""
+        try:
+            css_content = (static_dir / "motion_player.css").read_text()
+        except:
+            css_content = "/* CSS not found */"
+        try:
+            js_content = (static_dir / "motion_player.js").read_text()
+        except:
+            js_content = "// JS not found"
+        
+        css_block = f"<style>{css_content}</style>"
+        js_block = f"<script>{js_content}</script>"
+    else:
+        css_block = '<link rel="stylesheet" href="motion_player.css">'
+        js_block = '<script src="motion_player.js"></script>'
+    
+    # Escape DSL for embedding
+    dsl_escaped = dsl_output.replace('</script>', '<\\/script>')
+    
+    # Build events HTML
+    events_html = ""
+    for delta in deltas[-5:]:  # Last 5 frames events
+        for evt in delta.events:
+            dir_str = f" {evt.direction.value}" if hasattr(evt, 'direction') else ""
+            events_html += f'<div class="event-item event-{evt.type.value}">F{delta.frame_num}: {evt.type.value} blob={evt.blob_id}{dir_str}</div>'
+    
+    html = f'''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    {css_block}
+</head>
+<body>
+    <div class="motion-container" data-motion-player data-width="800" data-height="600" data-fps="{fps}">
+        <div class="motion-viewer">
+            <h1>🎯 {title}</h1>
+            <div class="motion-canvas" id="motion-canvas"></div>
+            <div class="motion-controls">
+                <button onclick="MotionPlayer.prevFrame()">⏮</button>
+                <button onclick="MotionPlayer.togglePlay()" id="play-btn">▶</button>
+                <button onclick="MotionPlayer.nextFrame()">⏭</button>
+                <input type="range" id="motion-slider" min="0" max="{total_frames-1}" value="0">
+                <span class="frame-info" id="frame-info">1/{total_frames}</span>
+            </div>
+        </div>
+        
+        <div class="motion-sidebar">
+            <div class="motion-panel">
+                <h3>📊 Statistics</h3>
+                <div class="stat-row"><span>Total Frames</span><span class="stat-value">{total_frames}</span></div>
+                <div class="stat-row"><span>Avg Motion</span><span class="stat-value">{avg_motion:.1f}%</span></div>
+                <div class="stat-row"><span>Max Blobs</span><span class="stat-value">{max_blobs}</span></div>
+                <div class="stat-row"><span>Total Events</span><span class="stat-value">{total_events}</span></div>
+            </div>
+            
+            <div class="motion-panel">
+                <h3>⚡ Recent Events</h3>
+                <div class="event-list">{events_html}</div>
+            </div>
+            
+            <div class="dsl-output">
+                <h3 style="color: #00d9ff; font-size: 11px; margin-bottom: 10px;">📝 DSL Output</h3>
+                <pre id="dsl-text">{dsl_output}</pre>
+            </div>
+        </div>
+    </div>
+    
+    <!-- DSL Data -->
+    <script type="text/plain" id="motion-dsl">
+{dsl_escaped}
+    </script>
+    
+    <!-- Background Images (128px thumbnails) -->
+    <script type="application/json" id="motion-backgrounds">
+{json.dumps(backgrounds_json)}
+    </script>
+    
+    {js_block}
+</body>
+</html>'''
+    
+    output = Path(output_path)
+    output.write_text(html)
+    
+    # Log size comparison
+    old_size_estimate = total_frames * 20000  # ~20KB per SVG frame
+    new_size = len(html)
+    savings = (1 - new_size / old_size_estimate) * 100 if old_size_estimate > 0 else 0
+    logger.info(f"Generated lightweight HTML: {new_size/1024:.1f}KB (estimated {savings:.0f}% smaller)")
+    
     return output

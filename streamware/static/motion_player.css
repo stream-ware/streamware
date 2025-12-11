@@ -1,0 +1,217 @@
+/**
+ * Motion Player CSS - Reusable styles for DSL-based motion analysis viewer
+ * 
+ * Usage: <link rel="stylesheet" href="motion_player.css">
+ */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    background: #0a0a1a;
+    color: #eee;
+    min-height: 100vh;
+}
+
+.motion-container {
+    display: grid;
+    grid-template-columns: 1fr 380px;
+    height: 100vh;
+}
+
+/* Main viewer area */
+.motion-viewer {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+}
+
+.motion-viewer h1 {
+    color: #00d9ff;
+    margin-bottom: 15px;
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.motion-canvas {
+    flex: 1;
+    border: 1px solid #333;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #1a1a2e;
+    position: relative;
+}
+
+.motion-canvas svg {
+    width: 100%;
+    height: 100%;
+}
+
+/* Controls */
+.motion-controls {
+    display: flex;
+    gap: 10px;
+    margin-top: 15px;
+    align-items: center;
+}
+
+.motion-controls button {
+    background: #333;
+    border: 1px solid #555;
+    color: white;
+    padding: 8px 15px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 14px;
+    transition: background 0.2s;
+}
+
+.motion-controls button:hover {
+    background: #444;
+}
+
+.motion-controls button:active {
+    background: #555;
+}
+
+.motion-controls input[type="range"] {
+    flex: 1;
+    accent-color: #00d9ff;
+    height: 6px;
+}
+
+.frame-info {
+    color: #888;
+    font-size: 12px;
+    min-width: 80px;
+    text-align: center;
+}
+
+/* Sidebar */
+.motion-sidebar {
+    background: #111;
+    border-left: 1px solid #333;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.motion-panel {
+    padding: 15px;
+    border-bottom: 1px solid #333;
+}
+
+.motion-panel h3 {
+    color: #00d9ff;
+    font-size: 11px;
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    letter-spacing: 0.5px;
+}
+
+/* Stats */
+.stat-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 4px 0;
+    font-size: 12px;
+}
+
+.stat-value {
+    color: #00ff88;
+    font-weight: bold;
+}
+
+/* Events list */
+.event-list {
+    max-height: 150px;
+    overflow-y: auto;
+    font-size: 11px;
+}
+
+.event-item {
+    padding: 3px 6px;
+    border-radius: 3px;
+    margin: 2px 0;
+    font-family: monospace;
+}
+
+.event-ENTER { background: #1a3a1a; color: #00ff88; }
+.event-EXIT { background: #3a1a1a; color: #ff6b6b; }
+.event-MOVE { background: #1a1a3a; color: #4ecdc4; }
+.event-APPEAR { background: #2a2a1a; color: #ffd93d; }
+.event-DISAPPEAR { background: #2a1a2a; color: #b19cd9; }
+
+/* DSL output */
+.dsl-output {
+    flex: 1;
+    overflow-y: auto;
+    padding: 15px;
+}
+
+.dsl-output pre {
+    font-size: 10px;
+    line-height: 1.5;
+    color: #666;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.dsl-output .dsl-highlight {
+    background: #1a3a1a;
+    color: #aaa;
+    display: block;
+    margin: 0 -15px;
+    padding: 0 15px;
+}
+
+/* Blob colors */
+.blob-0 { fill: #ff6b6b; stroke: #ff6b6b; }
+.blob-1 { fill: #4ecdc4; stroke: #4ecdc4; }
+.blob-2 { fill: #45b7d1; stroke: #45b7d1; }
+.blob-3 { fill: #96ceb4; stroke: #96ceb4; }
+.blob-4 { fill: #ffeaa7; stroke: #ffeaa7; }
+.blob-5 { fill: #dfe6e9; stroke: #dfe6e9; }
+.blob-6 { fill: #fd79a8; stroke: #fd79a8; }
+.blob-7 { fill: #a29bfe; stroke: #a29bfe; }
+
+/* Responsive */
+@media (max-width: 900px) {
+    .motion-container {
+        grid-template-columns: 1fr;
+        grid-template-rows: 1fr auto;
+    }
+    
+    .motion-sidebar {
+        border-left: none;
+        border-top: 1px solid #333;
+        max-height: 300px;
+    }
+}
+
+/* Loading state */
+.motion-loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #666;
+}
+
+.motion-loading::after {
+    content: '';
+    width: 30px;
+    height: 30px;
+    border: 3px solid #333;
+    border-top-color: #00d9ff;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-left: 10px;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}

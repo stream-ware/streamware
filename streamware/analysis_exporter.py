@@ -72,6 +72,43 @@ class AnalysisExporter:
             from .motion_tracker import MultiObjectTracker
             self._tracker = MultiObjectTracker()
     
+    def _resize_and_encode_frame(self, frame_path: Path, max_size: int = 128) -> str:
+        """Resize frame to max_size and encode as base64.
+        
+        Args:
+            frame_path: Path to frame image
+            max_size: Maximum dimension (width or height)
+            
+        Returns:
+            Base64 encoded JPEG string
+        """
+        try:
+            import cv2
+            img = cv2.imread(str(frame_path))
+            if img is None:
+                return ""
+            
+            # Calculate new size maintaining aspect ratio
+            h, w = img.shape[:2]
+            if w > h:
+                new_w = max_size
+                new_h = int(h * max_size / w)
+            else:
+                new_h = max_size
+                new_w = int(w * max_size / h)
+            
+            # Resize
+            resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            
+            # Encode to JPEG
+            _, buffer = cv2.imencode('.jpg', resized, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            return base64.b64encode(buffer).decode()
+            
+        except ImportError:
+            # Fallback: read original file
+            with open(frame_path, 'rb') as f:
+                return base64.b64encode(f.read()).decode()
+    
     def add_frame(
         self,
         frame_num: int,
@@ -151,12 +188,11 @@ class AnalysisExporter:
         )
         self.frames.append(frame_data)
         
-        # Add to SVG converter
+        # Add to SVG converter (resize background to 128px for smaller file size)
         background_b64 = ""
         if self.include_background and frame_path and frame_path.exists():
             try:
-                with open(frame_path, 'rb') as f:
-                    background_b64 = base64.b64encode(f.read()).decode()
+                background_b64 = self._resize_and_encode_frame(frame_path, max_size=128)
             except (OSError, IOError):
                 pass
         

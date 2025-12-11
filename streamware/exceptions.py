@@ -2,6 +2,19 @@
 Custom exceptions for Streamware
 """
 
+__all__ = [
+    "StreamwareError",
+    "ComponentError",
+    "MimeTypeError",
+    "RoutingError",
+    "ConfigurationError",
+    "ConnectionError",
+    "TimeoutError",
+    "AuthenticationError",
+    "ValidationError",
+    "ParseError",
+]
+
 
 class StreamwareError(Exception):
     """Base exception for all Streamware errors"""
