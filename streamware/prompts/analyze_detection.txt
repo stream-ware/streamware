@@ -1,0 +1,6 @@
+"{response}"
+
+Is {focus} present? Reply:
+PRESENT: yes/no
+ACTIVITY: sitting/standing/walking/working/none
+SUMMARY: [short TTS text]

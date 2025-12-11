@@ -15,7 +15,7 @@ Usage:
 
 import logging
 import re
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -809,86 +809,376 @@ def is_significant_smart(
     focus: str = "person",
     guarder_model: str = None,
     fallback_to_regex: bool = True,
+    tracking_data: Dict = None,
 ) -> Tuple[bool, str]:
-    """Smart significance check - uses LLM to summarize and filter.
+    """Smart significance check - uses LLM to analyze with tracking metadata.
+    
+    Combines:
+    - Vision LLM response (what the image shows)
+    - Tracking data from DSL (object positions, movement, state)
+    
+    Optimized: skips guarder LLM if vision response is already short/clear.
     
     Args:
-        response: LLM response text (verbose)
+        response: Vision LLM response text
         mode: Analysis mode
         focus: What we're tracking (person, vehicle, etc.)
         guarder_model: Model for summarization (None = use config)
-        fallback_to_regex: If LLM fails, use regex
+        fallback_to_regex: If LLM fails, use simple truncation
+        tracking_data: Dict with tracking metadata from ObjectTracker/DSL
         
     Returns:
         (is_significant, short_summary) tuple
-        - short_summary is either a brief description or the method used
     """
     from .config import config
     
     if not response or not response.strip():
         return False, "No data"
     
-    response_lower = response.lower().strip()
+    response_clean = response.replace('\n', ' ').strip()
+    response_lower = response_clean.lower()
     
-    # FAST PATH: Skip LLM for clear yes/no responses (saves 2-3 seconds!)
-    # These patterns are unambiguous and don't need LLM summarization
-    clear_negative = [
-        "no person visible", "no person detected", "no one visible",
-        "no person", "no people", "empty room", "nobody visible",
-        "not visible", "no human", "no individual",
-    ]
-    clear_positive = [
-        "yes, person visible", "yes, there is a person",
-        "person detected", "person is", "there is a person", "yes person",
-        "a person is", "someone is", "man is", "woman is",
-    ]
+    # OPTIMIZATION: Skip guarder LLM for clear responses
+    # This saves 2-4 seconds per frame
     
-    # Check clear NEGATIVE FIRST (to avoid "no person visible" matching "person visible")
-    for pattern in clear_negative:
-        if pattern in response_lower:
-            return True, "No person visible"  # Still significant - scene info
+    # Check if it's a clear negative (regardless of length)
+    if response_lower.startswith(f"no {focus}") or response_lower.startswith("no person"):
+        return False, f"No {focus} visible"
     
-    # Check clear positive
-    for pattern in clear_positive:
-        if pattern in response_lower:
-            # Extract activity if present
-            if "standing" in response_lower:
-                return True, "Person standing"
-            elif "walking" in response_lower:
-                return True, "Person walking"
-            elif "sitting" in response_lower:
-                return True, "Person sitting"
-            elif "working" in response_lower:
-                return True, "Person working"
+    # For short responses, extract info from tracking data
+    if len(response_clean) < 80:
+        # Check if it's a clear positive with activity
+        if response_lower.startswith("yes") or f"yes, there is a {focus}" in response_lower:
+            # Extract activity from tracking data
+            tracking_data = tracking_data or {}
+            direction = tracking_data.get("direction", "")
+            state = tracking_data.get("person_state", "")
+            dsl_desc = tracking_data.get("description", "")
+            
+            # Build summary from tracking
+            if dsl_desc and len(dsl_desc) < 50:
+                return True, dsl_desc
+            elif direction and direction not in ("unknown", "stationary"):
+                return True, f"{focus.title()} {direction}"
+            elif state and state not in ("unknown", "not_visible"):
+                return True, f"{focus.title()} {state.replace('_', ' ')}"
             else:
-                return True, "Person visible"
+                return True, f"{focus.title()} visible"
     
-    # Get guarder model from config if not specified
+    # For longer responses, use guarder LLM with tracking data
     if guarder_model is None:
-        guarder_model = config.get("SQ_GUARDER_MODEL", "qwen2.5:3b")
+        guarder_model = config.get("SQ_GUARDER_MODEL", "gemma:2b")
     
-    # Check if guarder model is available
     available, actual_model = check_guarder_model_available(guarder_model)
     
     if available:
-        # Use LLM to summarize into short sentence
-        is_significant_result, summary = summarize_detection(
+        is_significant_result, summary = _analyze_with_tracking_llm(
             response, 
             focus=focus, 
-            model=actual_model  # Use actual available model
+            model=actual_model,
+            tracking_data=tracking_data or {}
         )
         return is_significant_result, summary
     else:
-        # No guarder model, use regex + truncate
-        if fallback_to_regex:
-            is_sig = is_significant(response, mode)
-            # Simple truncation for fallback
-            short = response.replace('\n', ' ').strip()[:60]
-            if len(response) > 60:
-                short += "..."
-            return is_sig, short
+        # Fallback: simple truncation
+        short = response_clean[:80]
+        if len(response_clean) > 80:
+            short += "..."
+        return True, short
+
+
+def _analyze_with_tracking_llm(
+    response: str,
+    focus: str = "person",
+    model: str = "gemma:2b",
+    tracking_data: Dict = None,
+    timeout: int = 10,
+) -> Tuple[bool, str]:
+    """Use LLM to analyze vision response with tracking metadata from DSL.
+    
+    Combines:
+    - Vision description (what the image shows)
+    - Tracking data (object positions, movement direction, state)
+    
+    Returns:
+        (is_target_present, short_summary)
+    """
+    import requests
+    from .config import config
+    from .prompts import get_prompt
+    
+    ollama_url = config.get("SQ_OLLAMA_URL", "http://localhost:11434")
+    tracking_data = tracking_data or {}
+    
+    # Build tracking context from DSL data
+    tracking_context = _build_tracking_context(tracking_data, focus)
+    
+    # Load prompt from file or use default
+    prompt_template = get_prompt("analyze_with_tracking")
+    if not prompt_template:
+        prompt_template = """Analyze this scene:
+
+VISION: {vision_description}
+
+TRACKING DATA:
+{tracking_context}
+
+TARGET: {focus}
+
+Based on both vision and tracking data:
+1. Is {focus} present? (yes/no)
+2. What is their activity/state?
+3. Movement direction?
+
+Reply format:
+PRESENT: yes/no
+SUMMARY: [short description for TTS, max 10 words]"""
+    
+    prompt = prompt_template.format(
+        vision_description=response[:300],
+        tracking_context=tracking_context,
+        focus=focus
+    )
+    
+    try:
+        resp = requests.post(
+            f"{ollama_url}/api/generate",
+            json={
+                "model": model,
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "num_predict": 50,
+                    "temperature": 0.1,
+                }
+            },
+            timeout=timeout,
+        )
+        
+        if resp.ok:
+            data = resp.json()
+            llm_response = data.get("response", "").strip()
+            return _parse_tracking_response(llm_response, focus, original_vision=response)
         else:
             return True, response[:60]
+            
+    except Exception as e:
+        return True, response[:60]
+
+
+def _build_tracking_context(tracking_data: Dict, focus: str) -> str:
+    """Build human-readable tracking context from DSL data."""
+    parts = []
+    
+    # Object count
+    obj_count = tracking_data.get("object_count", 0)
+    if obj_count > 0:
+        parts.append(f"Objects detected: {obj_count}")
+    else:
+        parts.append("No objects detected by tracker")
+    
+    # Movement direction
+    direction = tracking_data.get("direction", "unknown")
+    if direction and direction != "unknown":
+        parts.append(f"Movement: {direction}")
+    
+    # Person/object state
+    state = tracking_data.get("person_state", tracking_data.get("state", "unknown"))
+    if state and state != "unknown":
+        parts.append(f"State: {state}")
+    
+    # Position
+    position = tracking_data.get("position")
+    if position:
+        x = position.get("x", 0)
+        y = position.get("y", 0)
+        # Convert to human-readable position
+        h_pos = "center"
+        if x < 0.33:
+            h_pos = "left"
+        elif x > 0.66:
+            h_pos = "right"
+        v_pos = "middle"
+        if y < 0.33:
+            v_pos = "top"
+        elif y > 0.66:
+            v_pos = "bottom"
+        parts.append(f"Position: {v_pos}-{h_pos}")
+    
+    # Tracked objects details
+    tracked_objects = tracking_data.get("tracked_objects", [])
+    if tracked_objects:
+        for obj in tracked_objects[:3]:  # Max 3 objects
+            obj_type = getattr(obj, 'object_type', focus)
+            obj_id = getattr(obj, 'id', '?')
+            obj_dir = getattr(obj, 'direction', None)
+            if obj_dir:
+                obj_dir = obj_dir.value if hasattr(obj_dir, 'value') else str(obj_dir)
+            obj_state = getattr(obj, 'state', None)
+            if obj_state:
+                obj_state = obj_state.value if hasattr(obj_state, 'value') else str(obj_state)
+            
+            obj_desc = f"  - {obj_type} #{obj_id}"
+            if obj_dir:
+                obj_desc += f", moving {obj_dir}"
+            if obj_state:
+                obj_desc += f", {obj_state}"
+            parts.append(obj_desc)
+    
+    # Motion info
+    motion_pct = tracking_data.get("motion_percent", 0)
+    if motion_pct > 0:
+        parts.append(f"Motion: {motion_pct:.1f}% of frame")
+    
+    # DSL description if available
+    dsl_desc = tracking_data.get("description", "")
+    if dsl_desc:
+        parts.append(f"Tracker says: {dsl_desc}")
+    
+    return "\n".join(parts) if parts else "No tracking data available"
+
+
+def _parse_tracking_response(llm_response: str, focus: str, original_vision: str = "") -> Tuple[bool, str]:
+    """Parse LLM response with tracking analysis.
+    
+    Prioritizes vision LLM's determination of presence over guarder's interpretation.
+    """
+    # Clean markdown formatting
+    clean_response = llm_response.replace("**", "").replace("*", "").strip()
+    original_lower = original_vision.lower() if original_vision else ""
+    
+    # FIRST: Check if original vision response clearly says no target
+    # This takes priority over guarder's interpretation
+    if original_lower.startswith(f"no {focus}") or f"no {focus} visible" in original_lower:
+        return False, f"No {focus} visible"
+    
+    is_present = False
+    summary = ""
+    
+    # Try to parse structured format: PRESENT: yes/no | SUMMARY: ...
+    if "|" in clean_response:
+        parts = clean_response.split("|")
+        for part in parts:
+            part_lower = part.strip().lower()
+            if part_lower.startswith("present:"):
+                value = part_lower.replace("present:", "").strip()
+                is_present = value.startswith("yes") or value == "true"
+            elif part_lower.startswith("summary:"):
+                summary = part.split(":", 1)[1].strip() if ":" in part else ""
+    else:
+        # Try line-by-line parsing
+        for line in clean_response.split('\n'):
+            line_lower = line.lower().strip()
+            if line_lower.startswith("present:"):
+                value = line_lower.replace("present:", "").strip()
+                is_present = value.startswith("yes") or value == "true"
+            elif line_lower.startswith("summary:"):
+                summary = line.split(":", 1)[1].strip() if ":" in line else ""
+    
+    # If no structured response, extract from text
+    if not summary:
+        resp_lower = clean_response.lower()
+        
+        # Detect presence - check for negatives first
+        if f"no {focus}" in resp_lower or "not present" in resp_lower or "not visible" in resp_lower:
+            is_present = False
+            summary = f"No {focus} visible"
+        elif "yes" in resp_lower or (focus in resp_lower and f"no {focus}" not in resp_lower):
+            is_present = True
+            # Extract activity words
+            activities = ["sitting", "standing", "walking", "working", "moving", "entering", "leaving"]
+            for act in activities:
+                if act in resp_lower:
+                    summary = f"{focus.title()} {act}"
+                    break
+            if not summary:
+                summary = f"{focus.title()} present"
+    
+    # Clean up summary
+    summary = summary.strip().replace("[", "").replace("]", "")
+    if not summary or summary == "5 words max":
+        summary = f"{focus.title()} detected" if is_present else f"No {focus} visible"
+    
+    return is_present, summary
+
+
+def _analyze_with_llm(
+    response: str,
+    focus: str = "person",
+    model: str = "gemma:2b",
+    timeout: int = 8,
+) -> Tuple[bool, str]:
+    """Legacy: Use small LLM to analyze vision response (without tracking).
+    
+    Returns:
+        (is_target_present, short_summary)
+    """
+    # Delegate to new function without tracking data
+    return _analyze_with_tracking_llm(response, focus, model, {}, timeout)
+
+
+def _parse_simple_response(llm_summary: str, original_response: str, focus: str) -> Tuple[bool, str]:
+    """Parse simple LLM summary response.
+    
+    The LLM was asked to summarize in 5 words and say if target is present.
+    We analyze both the summary and original response.
+    """
+    llm_lower = llm_summary.lower()
+    orig_lower = original_response.lower()
+    
+    # Check if target is NOT present (negative indicators)
+    negative_indicators = ["no", "not", "none", "absent", "empty", "without"]
+    is_negative = any(f"{ind} {focus}" in llm_lower or f"{ind} {focus}" in orig_lower 
+                      for ind in negative_indicators)
+    
+    # Also check original response for clear negatives
+    if orig_lower.startswith("no ") or "no person visible" in orig_lower or "not visible" in orig_lower:
+        is_negative = True
+    
+    # Check for positive presence
+    is_present = not is_negative and (
+        focus in llm_lower or 
+        focus in orig_lower or
+        "yes" in llm_lower
+    )
+    
+    # Use LLM summary if short enough, otherwise truncate original
+    summary = llm_summary if len(llm_summary) < 60 else llm_summary[:57] + "..."
+    
+    # If negative, make it clear
+    if is_negative:
+        summary = f"No {focus} visible"
+    
+    return is_present, summary
+
+
+def _parse_analysis_response(llm_response: str, focus: str) -> Tuple[bool, str]:
+    """Parse the structured LLM analysis response."""
+    lines = llm_response.strip().split('\n')
+    
+    is_present = False
+    activity = "none"
+    summary = ""
+    
+    for line in lines:
+        line_lower = line.lower().strip()
+        if line_lower.startswith("present:"):
+            value = line_lower.replace("present:", "").strip()
+            is_present = value in ("yes", "true", "1")
+        elif line_lower.startswith("activity:"):
+            activity = line.split(":", 1)[1].strip() if ":" in line else "none"
+        elif line_lower.startswith("summary:"):
+            summary = line.split(":", 1)[1].strip() if ":" in line else ""
+    
+    # Build final summary
+    if not summary:
+        if is_present:
+            summary = f"{focus.title()}: {activity}" if activity != "none" else f"{focus.title()} visible"
+        else:
+            summary = f"No {focus} visible"
+    
+    # Determine if significant (target present = significant)
+    return is_present, summary
 
 
 def is_significant_with_llm(

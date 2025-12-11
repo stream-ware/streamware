@@ -1,0 +1,5 @@
+Vision: {vision_description}
+Tracking: {tracking_context}
+
+Is {focus} present? What are they doing?
+Reply: PRESENT: yes/no | SUMMARY: [5 words max]

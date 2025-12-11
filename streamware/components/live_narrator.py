@@ -965,8 +965,20 @@ class LiveNarratorComponent(Component):
             
             # Check for duplicates and filter noise
             if description:
-                # Smart filtering - uses LLM to summarize into short sentence
+                # Smart filtering - uses LLM with tracking data to summarize
                 from ..response_filter import is_significant_smart, should_notify, format_for_tts
+                
+                # Build tracking data from analysis and movement
+                movement_data = self._analyze_movement(frame_analysis or {})
+                tracking_data = {
+                    "object_count": movement_data.get("object_count", 0),
+                    "direction": movement_data.get("direction", "unknown"),
+                    "person_state": movement_data.get("person_state", "unknown"),
+                    "position": movement_data.get("position"),
+                    "tracked_objects": movement_data.get("tracked_objects", []),
+                    "description": movement_data.get("description", ""),
+                    "motion_percent": frame_analysis.get("motion_percent", 0) if frame_analysis else 0,
+                }
                 
                 tlog.start("guarder_llm")
                 guarder_model = config.get("SQ_GUARDER_MODEL", "gemma:2b")
@@ -974,7 +986,8 @@ class LiveNarratorComponent(Component):
                     description, 
                     mode=self.mode,
                     focus=self.focus or "person",
-                    guarder_model=guarder_model
+                    guarder_model=guarder_model,
+                    tracking_data=tracking_data,
                 )
                 tlog.end("guarder_llm", short_description[:40] if short_description else "")
                 
