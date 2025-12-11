@@ -24,7 +24,7 @@ Usage:
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Tuple, List
@@ -68,8 +68,10 @@ class DetectionResult:
     confidence: float = 0.0
     
     # YOLO detections (if available)
-    detections: List = None  # List of Detection objects
+    detections: List = field(default_factory=list)  # List of Detection objects
     detection_count: int = 0
+    # Motion regions from OpenCV detector (list of (x, y, w, h))
+    motion_regions: List = field(default_factory=list)
     
     # Timing
     opencv_ms: float = 0.0
@@ -203,6 +205,7 @@ class SmartDetector:
         result.opencv_ms = (time.time() - start) * 1000
         result.motion_percent = motion_pct
         result.motion_level = self._classify_motion(motion_pct)
+        result.motion_regions = motion_regions
         
         # Skip if no motion - but do periodic checks even without motion
         # to catch slow movements or stationary people

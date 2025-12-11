@@ -182,8 +182,8 @@ class FrameDiffAnalyzer:
     def __init__(
         self,
         motion_threshold: int = 20,  # Lowered from 25 for better sensitivity
-        min_blob_area: int = 300,    # Lowered from 500 for smaller objects
-        max_blobs: int = 10,
+        min_blob_area: int = 500,    # Higher default to ignore tiny flicker/noise
+        max_blobs: int = 20,
         blur_size: int = 5,
         dilate_iterations: int = 2,
         # Filtering for truly moving objects
@@ -194,6 +194,21 @@ class FrameDiffAnalyzer:
         # Heuristic for global camera motion
         camera_motion_threshold: float = 40.0,  # % of pixels changed to treat as camera move
     ):
+        # Allow config to override blob area / count and camera motion threshold
+        if _sq_config is not None:
+            try:
+                cfg_val = _sq_config.get("SQ_DSL_MIN_BLOB_AREA", None)
+                if cfg_val is not None:
+                    min_blob_area = int(cfg_val)
+                cfg_val = _sq_config.get("SQ_DSL_MAX_BLOBS", None)
+                if cfg_val is not None:
+                    max_blobs = int(cfg_val)
+                cfg_val = _sq_config.get("SQ_DSL_CAMERA_MOTION_THRESHOLD", None)
+                if cfg_val is not None:
+                    camera_motion_threshold = float(cfg_val)
+            except Exception:
+                pass
+
         self.motion_threshold = motion_threshold
         self.min_blob_area = min_blob_area
         self.max_blobs = max_blobs
@@ -205,14 +220,6 @@ class FrameDiffAnalyzer:
         self.max_blob_size_ratio = max_blob_size_ratio
         self.min_moving_frames = min_moving_frames
         self.filter_static = filter_static
-        # Camera motion threshold (can be overridden via config)
-        if _sq_config is not None:
-            try:
-                cfg_val = _sq_config.get("SQ_DSL_CAMERA_MOTION_THRESHOLD", None)
-                if cfg_val is not None:
-                    camera_motion_threshold = float(cfg_val)
-            except Exception:
-                pass
         self.camera_motion_threshold = camera_motion_threshold
         
         self._prev_gray = None
@@ -360,7 +367,14 @@ class FrameDiffAnalyzer:
             rects.append((x1, y1, x2, y2, int(area), len(contour)))
         
         # Group nearby / overlapping rectangles into larger motion fragments
-        gap_px = max(5, int(0.01 * min(w, h)))
+        gap_px = max(20, int(0.01 * min(w, h)))
+        if _sq_config is not None:
+            try:
+                cfg_gap = _sq_config.get("SQ_DSL_GAP_PX", None)
+                if cfg_gap is not None:
+                    gap_px = int(cfg_gap)
+            except Exception:
+                pass
         merged_rects = self._merge_motion_rects(rects, gap_px=gap_px)
         
         blobs: List[MotionBlob] = []

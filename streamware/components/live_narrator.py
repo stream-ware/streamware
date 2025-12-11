@@ -514,6 +514,7 @@ class LiveNarratorComponent(Component):
         # Last spoken short summary for diff-only TTS mode
         self._last_tts_summary = ""
         self._track_labels: Dict[int, Dict[str, Any]] = {}
+        self._last_dsl_tts = ""
         
         # Movement tracking state (for smart track mode)
         self._position_history: List[Dict] = []  # [{x, y, timestamp, regions}]
@@ -523,6 +524,7 @@ class LiveNarratorComponent(Component):
         
         # Object tracker for multi-object tracking across frames
         self._object_tracker = None  # Lazy init
+        self.min_stable_track_frames = int(config.get("SQ_TRACK_MIN_STABLE_FRAMES", "2"))
     
     def _parse_triggers(self, trigger_str: str) -> List[Trigger]:
         """Parse trigger conditions from string"""
@@ -596,8 +598,24 @@ class LiveNarratorComponent(Component):
             self._last_position = None
             return result
         
-        # Get primary object (largest or first)
-        primary_obj = max(tracking_result.objects, key=lambda o: o.bbox.area)
+        min_stable = getattr(self, "min_stable_track_frames", 2)
+        stable_objects = [
+            o for o in tracking_result.objects
+            if getattr(o, "frames_tracked", 0) >= min_stable
+        ]
+        if not stable_objects:
+            if has_motion:
+                result["person_state"] = "just_appeared"
+                result["direction"] = "entering"
+                result["description"] = f"{self.focus.title()} just appeared (stabilizing track)"
+            else:
+                result["person_state"] = "not_visible"
+                result["description"] = "Scene is still"
+            self._last_position = None
+            return result
+        
+        # Get primary object (largest stable one)
+        primary_obj = max(stable_objects, key=lambda o: o.bbox.area)
         
         # Update position
         center_x = primary_obj.bbox.x * frame_width
@@ -671,6 +689,28 @@ class LiveNarratorComponent(Component):
             return
         tracked_objects = movement_data.get("tracked_objects") or []
         if not tracked_objects:
+            # No active tracks, but we may still have an aggregate state
+            person_state = movement_data.get("person_state", "")
+            if person_state in ("just_left", "exiting"):
+                label = (self.focus or "person").strip() or "person"
+                label_title = label.title()
+                text = f"{label_title} left the frame"
+                # Simple de-duplication so we don't repeat the same exit
+                if text == getattr(self, "_last_tracker_exit_tts", ""):
+                    return
+                self._last_tracker_exit_tts = text
+                if self.quiet:
+                    return
+                try:
+                    from ..tts_worker_process import get_tts_worker
+                    worker = get_tts_worker(
+                        engine=self.tts_engine,
+                        rate=self.tts_rate,
+                        voice=self.tts_voice,
+                    )
+                    worker.speak(text)
+                except Exception as e:
+                    logger.debug(f"Tracker TTS worker error: {e}")
             return
         primary = max(tracked_objects, key=lambda o: getattr(o.bbox, "area", 0))
         label = self._update_track_label_from_tracker(primary)
@@ -721,6 +761,57 @@ class LiveNarratorComponent(Component):
             worker.speak(text)
         except Exception as e:
             logger.debug(f"Tracker TTS worker error: {e}")
+    
+    def _handle_dsl_events(self, delta) -> None:
+        if not self.tts_enabled:
+            return
+        if not delta or not getattr(delta, "events", None):
+            return
+        try:
+            from ..frame_diff_dsl import EventType, Direction
+        except Exception:
+            return
+        primary = None
+        for event in delta.events:
+            if event.type == EventType.EXIT:
+                primary = event
+                break
+            if event.type == EventType.ENTER and primary is None:
+                primary = event
+        if primary is None:
+            return
+        label = (self.focus or "object").strip() or "object"
+        direction = getattr(primary, "direction", None)
+        direction_text = ""
+        if direction and direction != Direction.STATIC:
+            direction_text = str(getattr(direction, "value", direction)).lower()
+        if primary.type == EventType.ENTER:
+            if direction_text:
+                text = f"{label.title()} entered from the {direction_text}"
+            else:
+                text = f"{label.title()} entered the frame"
+        elif primary.type == EventType.EXIT:
+            if direction_text:
+                text = f"{label.title()} left to the {direction_text}"
+            else:
+                text = f"{label.title()} left the frame"
+        else:
+            return
+        if text == getattr(self, "_last_dsl_tts", ""):
+            return
+        self._last_dsl_tts = text
+        if self.quiet:
+            return
+        try:
+            from ..tts_worker_process import get_tts_worker
+            worker = get_tts_worker(
+                engine=self.tts_engine,
+                rate=self.tts_rate,
+                voice=self.tts_voice,
+            )
+            worker.speak(text)
+        except Exception as e:
+            logger.debug(f"DSL TTS worker error: {e}")
     
     def process(self, data: Any) -> Dict:
         """Process live narration"""
@@ -985,6 +1076,8 @@ class LiveNarratorComponent(Component):
                 if self._realtime_server and svg_delta:
                     bg = svg_delta.background_base64 if hasattr(svg_delta, 'background_base64') else ""
                     self._realtime_server.add_frame(svg_delta, bg)
+                # Immediate ENTER/EXIT TTS from DSL events
+                self._handle_dsl_events(svg_delta)
             except Exception as e:
                 logger.debug(f"SVG analysis failed: {e}")
             
@@ -1120,6 +1213,15 @@ class LiveNarratorComponent(Component):
                     time.sleep(current_interval)
                     continue
                 
+                # Normalize motion regions into dicts for ObjectTracker
+                norm_regions = []
+                for r in detection.motion_regions or []:
+                    if isinstance(r, dict):
+                        norm_regions.append(dict(r))
+                    elif isinstance(r, (list, tuple)) and len(r) == 4:
+                        x, y, w, h = r
+                        norm_regions.append({"x": int(x), "y": int(y), "w": int(w), "h": int(h)})
+
                 # Store motion and detection info for later
                 frame_analysis = {
                     "motion_percent": detection.motion_percent,
@@ -1129,8 +1231,50 @@ class LiveNarratorComponent(Component):
                     "detection_count": detection.detection_count,
                     "quick_summary": detection.quick_summary,
                     "detections": detection.detections,
+                    # Motion regions from OpenCV (for ObjectTracker-based movement)
+                    "motion_regions": norm_regions,
                 }
                 self._last_analysis = frame_analysis
+
+                # Optional LLM gating: skip heavy vision LLM when there is no
+                # stable moving track and motion is below a small threshold.
+                try:
+                    movement_data = self._analyze_movement(frame_analysis or {})
+                except Exception as e:
+                    logger.debug(f"Movement analysis failed: {e}")
+                    movement_data = {"tracked_objects": [], "object_count": 0}
+
+                frame_analysis["movement_data"] = movement_data
+
+                motion_pct = frame_analysis.get("motion_percent", 0.0)
+                tracked_objects = movement_data.get("tracked_objects") or []
+                min_stable = getattr(self, "min_stable_track_frames", 2)
+                moving_tracks = [
+                    o for o in tracked_objects
+                    if getattr(o, "frames_tracked", 0) >= min_stable
+                    and bool(getattr(o, "is_moving", False))
+                ]
+
+                # Configurable minimal motion threshold for calling vision LLM
+                min_motion_pct = float(config.get("SQ_LLM_MIN_MOTION_PERCENT", "1.0"))
+
+                if not moving_tracks and motion_pct < min_motion_pct:
+                    if not self.quiet:
+                        ts = datetime.now().strftime("%H:%M:%S")
+                        print(f"⚪ [{ts}] No significant tracked movement (motion={motion_pct:.1f}%)", flush=True)
+
+                    tlog.log_decision(
+                        frame_num,
+                        "llm_gating",
+                        "skipped",
+                        f"no_moving_tracks motion={motion_pct:.1f}%",
+                        {"motion_percent": motion_pct, "object_count": movement_data.get("object_count", 0)},
+                    )
+                    tlog.increment_frame_count(skipped=True)
+                    tlog.end_frame("no_significant_motion")
+                    self._prev_frame = frame_path
+                    time.sleep(current_interval)
+                    continue
                 
             elif self.use_advanced:
                 # Legacy advanced analysis for non-tracking modes
@@ -1815,6 +1959,7 @@ class LiveNarratorComponent(Component):
             print(f"   🔄 [LLM] Starting analysis for F{frame_num}...", flush=True)
             
             # Optional advanced analysis for tracker-based movement TTS
+            movement_data = None
             if self.use_advanced:
                 try:
                     if not frame_analysis:
@@ -1839,14 +1984,25 @@ class LiveNarratorComponent(Component):
                 return
             
             if description:
-                # Filter and check significance
+                # Filter and check significance (use tracking data if available)
                 guarder_model = config.get("SQ_GUARDER_MODEL", "gemma:2b")
+                tracking_data = {}
+                if movement_data is not None:
+                    tracking_data = {
+                        "object_count": movement_data.get("object_count", 0),
+                        "direction": movement_data.get("direction", "unknown"),
+                        "person_state": movement_data.get("person_state", "unknown"),
+                        "position": movement_data.get("position"),
+                        "tracked_objects": movement_data.get("tracked_objects", []),
+                        "description": movement_data.get("description", ""),
+                        "motion_percent": frame_analysis.get("motion_percent", 0) if frame_analysis else 0,
+                    }
                 is_worth, short_desc = is_significant_smart(
                     description,
                     mode=self.mode,
                     focus=self.focus or "person",
                     guarder_model=guarder_model,
-                    tracking_data={},
+                    tracking_data=tracking_data,
                 )
 
                 # Decide if we should speak based on TTS mode
