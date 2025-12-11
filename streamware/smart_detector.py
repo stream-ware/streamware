@@ -381,19 +381,23 @@ class SmartDetector:
                                 # Determine movement
                                 if abs(dx) > 30:  # Horizontal movement
                                     if dx > 0:
+                                        self._last_movement_direction = "right"
                                         if near_right_edge:
                                             result.quick_summary = f"{d.class_name.title()} exiting right"
                                         else:
                                             result.quick_summary = f"{d.class_name.title()} moving right"
                                     else:
+                                        self._last_movement_direction = "left"
                                         if near_left_edge:
                                             result.quick_summary = f"{d.class_name.title()} exiting left"
                                         else:
                                             result.quick_summary = f"{d.class_name.title()} moving left"
                                 elif abs(dy) > 30:  # Vertical movement
                                     if dy > 0:
+                                        self._last_movement_direction = "down"
                                         result.quick_summary = f"{d.class_name.title()} moving away"
                                     else:
+                                        self._last_movement_direction = "up"
                                         result.quick_summary = f"{d.class_name.title()} approaching"
                             else:
                                 # New detection - check if entering
@@ -434,7 +438,41 @@ class SmartDetector:
                         # Notify when target disappears (was visible before)
                         had_target = getattr(self, '_prev_had_target', False)
                         if had_target:
-                            result.quick_summary = f"{self.focus.title()} left the frame"
+                            # Determine exit direction from last known position
+                            prev_positions = getattr(self, '_prev_positions', {})
+                            exit_direction = "the frame"
+                            
+                            if prev_positions:
+                                # Get last position of focus target
+                                last_pos = None
+                                for key, pos in prev_positions.items():
+                                    if self.focus in key.lower():
+                                        last_pos = pos
+                                        break
+                                
+                                if last_pos:
+                                    last_x, last_y = last_pos
+                                    # Determine exit direction based on last position
+                                    # Frame assumed ~1920x1080
+                                    if last_x < 200:
+                                        exit_direction = "to the left"
+                                    elif last_x > 1720:
+                                        exit_direction = "to the right"
+                                    elif last_y < 150:
+                                        exit_direction = "upward"
+                                    elif last_y > 930:
+                                        exit_direction = "downward"
+                                    else:
+                                        # Was in center - guess from movement
+                                        prev_movement = getattr(self, '_last_movement_direction', None)
+                                        if prev_movement == "right":
+                                            exit_direction = "to the right"
+                                        elif prev_movement == "left":
+                                            exit_direction = "to the left"
+                                        else:
+                                            exit_direction = "the frame"
+                            
+                            result.quick_summary = f"{self.focus.title()} left {exit_direction}"
                             result.should_notify = True  # Target left
                             self._prev_summary = result.quick_summary
                             self._prev_had_target = False

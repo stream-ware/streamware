@@ -413,7 +413,9 @@ Shortcuts:
     
     # Watch command - qualitative parameters (NEW!)
     watch_parser = subparsers.add_parser('watch', help='Watch stream with intuitive settings', parents=[format_parser])
-    watch_parser.add_argument('--url', '-u', required=True, help='Video source')
+    watch_parser.add_argument('intent', nargs='?', default=None, 
+                              help='Natural language intent (e.g., "track person", "count cars")')
+    watch_parser.add_argument('--url', '-u', required=False, help='Video source (or use SQ_DEFAULT_URL env)')
     watch_parser.add_argument('--sensitivity', '-s',
                               choices=['ultra', 'high', 'medium', 'low', 'minimal'],
                               default='medium', help='Detection sensitivity')
@@ -2633,10 +2635,57 @@ def _save_smart_html_report(result: dict, output_file: str):
 
 
 def handle_watch(args) -> int:
-    """Handle watch command with qualitative parameters"""
+    """Handle watch command with qualitative parameters or natural language"""
     from .core import flow
     from .presets import get_preset, describe_settings
+    from .config import config
     import json
+    
+    # Check for natural language intent
+    if args.intent:
+        from .intent import parse_intent, apply_intent
+        
+        intent = parse_intent(args.intent)
+        apply_intent(intent)
+        
+        # Get URL from args or env
+        url = args.url or config.get("SQ_DEFAULT_URL") or config.get("SQ_STREAM_URL")
+        if not url:
+            print("❌ Error: No URL provided. Use --url or set SQ_DEFAULT_URL in .env")
+            return 1
+        
+        # Run with intent config
+        print(f"\n🎯 Intent: {intent.describe()}")
+        print(f"   Source: {url[:50]}...")
+        print(f"   Duration: {args.duration}s")
+        print()
+        
+        # Use flow() with intent settings - same pattern as handle_live
+        from .components.live_narrator import LiveNarratorComponent
+        
+        # Build URI with intent parameters
+        uri = f"live://narrator?source={url}"
+        uri += f"&mode={intent.mode}"
+        uri += f"&focus={intent.target}"
+        uri += f"&duration={args.duration}"
+        if intent.tts:
+            uri += "&tts=true"
+            uri += f"&tts_mode={intent.tts_mode}"
+        
+        try:
+            # Run using flow()
+            result = flow(uri).run()
+            return 0
+        except Exception as e:
+            print(f"Error: {e}")
+            return 1
+    
+    # Require URL for non-intent mode
+    if not args.url:
+        print("❌ Error: --url is required (or use natural language intent)")
+        print("   Example: sq watch 'track person' --url rtsp://...")
+        print("   Example: sq watch --url rtsp://... --detect person")
+        return 1
     
     # Get optimized settings from qualitative params
     settings = get_preset(

@@ -48,6 +48,7 @@ DEFAULTS = {
     "SQ_STREAM_DURATION": "30",        # 30 seconds default
     "SQ_STREAM_FOCUS": "person",       # default focus on person tracking
     "SQ_STREAM_FRAMES_DIR": "",
+    "SQ_DEFAULT_URL": "",              # Default video URL for natural language commands
     "SQ_RAMDISK_PATH": "/dev/shm/streamware",
     "SQ_RAMDISK_ENABLED": "true",
     "SQ_RAMDISK_SIZE_MB": "512",
