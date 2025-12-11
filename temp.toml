@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "streamware"
-version = "0.2.81"
+version = "0.2.79"
 description = "Modern Python stream processing framework inspired by Apache Camel"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -84,6 +84,8 @@ include-package-data = true
 [tool.setuptools.package-data]
 streamware = ["prompts/*.txt", "prompts/*.prompt", "templates/*.html", "templates/*.j2"]
 
+[tool.setuptools]
+include-package-data = true
 
 [tool.black]
 line-length = 100
@@ -96,6 +98,3 @@ addopts = "--cov=streamware --cov-report=term-missing"
 
 [tool.mypy]
 python_version = "3.8"
-warn_return_any = true
-warn_unused_configs = true
-ignore_missing_imports = true
