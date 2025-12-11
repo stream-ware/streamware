@@ -978,75 +978,60 @@ SUMMARY: [short description for TTS, max 10 words]"""
 
 
 def _build_tracking_context(tracking_data: Dict, focus: str) -> str:
-    """Build human-readable tracking context from DSL data."""
+    """Build compact tracking context from DSL data.
+    
+    Uses new LLM-optimized format (~60 bytes vs ~500 bytes old format).
+    """
+    # Try to use frame_deltas if available for ultra-compact format
+    frame_deltas = tracking_data.get("frame_deltas")
+    if frame_deltas:
+        try:
+            from .llm_motion_prompt import generate_motion_context
+            return generate_motion_context(frame_deltas, focus=focus)
+        except Exception:
+            pass  # Fall through to legacy format
+    
+    # Compact legacy format
     parts = []
     
-    # Object count
+    # Motion + objects (most important)
+    motion_pct = tracking_data.get("motion_percent", 0)
     obj_count = tracking_data.get("object_count", 0)
+    direction = tracking_data.get("direction", "")
+    state = tracking_data.get("person_state", "")
+    
+    # Build one-liner: "Motion: 5% | 2 objects | moving RIGHT | walking"
+    info = []
+    if motion_pct > 0:
+        info.append(f"Motion:{motion_pct:.0f}%")
     if obj_count > 0:
-        parts.append(f"Objects detected: {obj_count}")
-    else:
-        parts.append("No objects detected by tracker")
+        info.append(f"{obj_count}obj")
+    if direction and direction not in ("unknown", "stationary"):
+        info.append(direction)
+    if state and state not in ("unknown", "not_visible"):
+        info.append(state.replace("_", " "))
     
-    # Movement direction
-    direction = tracking_data.get("direction", "unknown")
-    if direction and direction != "unknown":
-        parts.append(f"Movement: {direction}")
+    if info:
+        parts.append(" | ".join(info))
     
-    # Person/object state
-    state = tracking_data.get("person_state", tracking_data.get("state", "unknown"))
-    if state and state != "unknown":
-        parts.append(f"State: {state}")
-    
-    # Position
+    # Position (compact)
     position = tracking_data.get("position")
     if position:
-        x = position.get("x", 0)
-        y = position.get("y", 0)
-        # Convert to human-readable position
-        h_pos = "center"
-        if x < 0.33:
-            h_pos = "left"
-        elif x > 0.66:
-            h_pos = "right"
-        v_pos = "middle"
-        if y < 0.33:
-            v_pos = "top"
-        elif y > 0.66:
-            v_pos = "bottom"
-        parts.append(f"Position: {v_pos}-{h_pos}")
+        x, y = position.get("x", 0.5), position.get("y", 0.5)
+        pos_str = ""
+        if x < 0.33: pos_str = "L"
+        elif x > 0.66: pos_str = "R"
+        else: pos_str = "C"
+        if y < 0.33: pos_str = "top-" + pos_str
+        elif y > 0.66: pos_str = "bot-" + pos_str
+        parts.append(f"@{pos_str}")
     
-    # Tracked objects details
-    tracked_objects = tracking_data.get("tracked_objects", [])
-    if tracked_objects:
-        for obj in tracked_objects[:3]:  # Max 3 objects
-            obj_type = getattr(obj, 'object_type', focus)
-            obj_id = getattr(obj, 'id', '?')
-            obj_dir = getattr(obj, 'direction', None)
-            if obj_dir:
-                obj_dir = obj_dir.value if hasattr(obj_dir, 'value') else str(obj_dir)
-            obj_state = getattr(obj, 'state', None)
-            if obj_state:
-                obj_state = obj_state.value if hasattr(obj_state, 'value') else str(obj_state)
-            
-            obj_desc = f"  - {obj_type} #{obj_id}"
-            if obj_dir:
-                obj_desc += f", moving {obj_dir}"
-            if obj_state:
-                obj_desc += f", {obj_state}"
-            parts.append(obj_desc)
-    
-    # Motion info
-    motion_pct = tracking_data.get("motion_percent", 0)
-    if motion_pct > 0:
-        parts.append(f"Motion: {motion_pct:.1f}% of frame")
-    
-    # DSL description if available
+    # DSL description (if short)
     dsl_desc = tracking_data.get("description", "")
-    if dsl_desc:
-        parts.append(f"Tracker says: {dsl_desc}")
+    if dsl_desc and len(dsl_desc) < 40:
+        parts.append(f'"{dsl_desc}"')
     
-    return "\n".join(parts) if parts else "No tracking data available"
+    return " ".join(parts) if parts else "No tracking"
 
 
 def _parse_tracking_response(llm_response: str, focus: str, original_vision: str = "") -> Tuple[bool, str]:

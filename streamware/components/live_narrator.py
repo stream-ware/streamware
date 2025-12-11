@@ -462,6 +462,29 @@ class LiveNarratorComponent(Component):
         self.lite_mode = str_to_bool(uri.get_param("lite", "false"))
         self.quiet = str_to_bool(uri.get_param("quiet", "false"))
         
+        # Real-time DSL streaming (WebSocket server for live animation)
+        self.realtime = str_to_bool(uri.get_param("realtime", "false"))
+        self._realtime_server = None
+        
+        # DSL-only mode: skip LLM, use only OpenCV tracking (fast, up to 20 FPS)
+        self.dsl_only = str_to_bool(uri.get_param("dsl_only", "false"))
+        
+        # Target FPS for real-time mode
+        target_fps_str = uri.get_param("target_fps", "")
+        if target_fps_str:
+            self.target_fps = float(target_fps_str)
+        elif self.dsl_only and self.realtime:
+            self.target_fps = 10.0  # Default 10 FPS for DSL-only realtime
+        elif self.realtime:
+            self.target_fps = 2.0  # Default 2 FPS for normal realtime
+        else:
+            self.target_fps = 1.0 / self.interval  # Based on interval
+        
+        # Async LLM mode: non-blocking inference for higher throughput
+        self.async_llm = str_to_bool(uri.get_param("async_llm", "true"))  # Default ON
+        self._async_llm_instance = None
+        self._pending_llm_frame = None  # Frame waiting for LLM result
+        
         # Language
         self.language = uri.get_param("lang", "en")
         
@@ -667,6 +690,41 @@ class LiveNarratorComponent(Component):
         svg_generator = SVGFrameGenerator(width=640, height=480)
         frame_deltas = []  # Collect all deltas for final export
         
+        # Start real-time DSL server if enabled
+        # Use separate process for complete isolation from LLM
+        self._dsl_streamer_process = None
+        if self.realtime:
+            try:
+                from ..dsl_streamer_process import start_dsl_streamer
+                self._dsl_streamer_process = start_dsl_streamer(
+                    rtsp_url=self.source,
+                    fps=max(5, self.target_fps),  # Min 5 FPS for smooth viewer
+                    ws_port=8765,
+                    http_port=8766,
+                )
+                print(f"🚀 DSL Streamer running in separate process (isolated from LLM)", flush=True)
+            except Exception as e:
+                logger.warning(f"DSL streamer process failed, using in-process: {e}")
+                # Fallback to in-process server
+                try:
+                    from ..realtime_dsl_server import get_realtime_server
+                    self._realtime_server = get_realtime_server(auto_start=True)
+                    if self._realtime_server:
+                        print(f"🌐 Real-time viewer: http://localhost:8766", flush=True)
+                except Exception as e2:
+                    logger.debug(f"Real-time server failed: {e2}")
+        
+        # Initialize DSL timing logger for performance analysis
+        dsl_timing = None
+        if self.dsl_only or self.realtime:
+            try:
+                from ..dsl_timing_logger import DSLTimingLogger
+                timing_file = f"dsl_timing_{int(time.time())}.csv"
+                dsl_timing = DSLTimingLogger(log_file=timing_file, print_realtime=True)
+                print(f"📊 DSL timing log: {timing_file}", flush=True)
+            except Exception as e:
+                logger.debug(f"DSL timing logger failed: {e}")
+        
         # Initialize parallel processor for multi-threaded execution
         from ..parallel_processor import get_processor, TaskPriority
         import os
@@ -674,24 +732,37 @@ class LiveNarratorComponent(Component):
         parallel = get_processor(max_workers=max(4, cpu_count // 2))
         print(f"⚡ Parallel processing enabled ({parallel.max_workers} workers)", flush=True)
         
+        # Initialize async LLM for non-blocking inference
+        if self.async_llm and not self.dsl_only:
+            try:
+                from ..async_llm import get_async_llm
+                self._async_llm_instance = get_async_llm(max_workers=2, ollama_url=self.ollama_url)
+                print("🚀 Async LLM enabled (non-blocking inference)", flush=True)
+            except Exception as e:
+                logger.debug(f"Async LLM init failed: {e}")
+                self._async_llm_instance = None
+        
         # FastCapture for low-latency RTSP streaming (10x faster than subprocess)
         from ..fast_capture import FastCapture
         fast_capture = None
         use_fast_capture = config.get("SQ_FAST_CAPTURE", "true").lower() == "true"
         
+        # Calculate capture FPS based on target - use target_fps for realtime or dsl_only modes
+        capture_fps = self.target_fps if (self.dsl_only or self.realtime) else 1.0 / max(1.0, self.interval)
+        
         if use_fast_capture and self.source.startswith("rtsp://"):
             try:
                 fast_capture = FastCapture(
                     rtsp_url=self.source,
-                    fps=1.0 / max(1.0, self.interval),
+                    fps=min(30, capture_fps),  # Cap at 30 FPS
                     use_gpu=True,
-                    buffer_size=3,
+                    buffer_size=5 if self.realtime else 3,  # Larger buffer for realtime
                 )
                 fast_capture.start()
-                print("🚀 FastCapture enabled (persistent RTSP connection)", flush=True)
+                print(f"🚀 FastCapture enabled ({capture_fps:.1f} FPS, buffer={fast_capture.buffer_size})", flush=True)
                 # Wait for first frame
                 import time as _time
-                _time.sleep(1.0)
+                _time.sleep(0.5)  # Shorter wait
             except Exception as e:
                 logger.warning(f"FastCapture init failed, using fallback: {e}")
                 fast_capture = None
@@ -746,7 +817,26 @@ class LiveNarratorComponent(Component):
         frame_num = 0
         current_interval = self.interval
         
-        print(f"\n🎬 Starting narrator loop (duration={self.duration}s, interval={self.interval}s)", flush=True)
+        # Register cleanup handler for Ctrl+C
+        import signal
+        import threading
+        def cleanup_handler(signum, frame):
+            print("\n🛑 Interrupted - cleaning up...", flush=True)
+            self._running = False
+            if self._realtime_server:
+                try:
+                    from ..realtime_dsl_server import stop_realtime_server
+                    stop_realtime_server()
+                except:
+                    pass
+        
+        original_handler = signal.signal(signal.SIGINT, cleanup_handler)
+        
+        # Show configuration
+        if self.realtime or self.dsl_only:
+            print(f"\n🎬 Starting real-time loop (target={self.target_fps:.1f} FPS, duration={self.duration}s)", flush=True)
+        else:
+            print(f"\n🎬 Starting narrator loop (duration={self.duration}s, interval={self.interval}s)", flush=True)
         
         while time.time() - start_time < self.duration and self._running:
             frame_num += 1
@@ -785,11 +875,84 @@ class LiveNarratorComponent(Component):
             
             # === SVG ANALYSIS (runs in parallel, doesn't block) ===
             try:
-                svg_delta = svg_analyzer.analyze(frame_path)
+                svg_delta = svg_analyzer.analyze(frame_path, timing_logger=dsl_timing)
                 dsl_generator.add_delta(svg_delta)
                 frame_deltas.append(svg_delta)
+                
+                # Stream to real-time server IMMEDIATELY (non-blocking)
+                if self._realtime_server and svg_delta:
+                    bg = svg_delta.background_base64 if hasattr(svg_delta, 'background_base64') else ""
+                    self._realtime_server.add_frame(svg_delta, bg)
             except Exception as e:
                 logger.debug(f"SVG analysis failed: {e}")
+            
+            # === REAL-TIME MODE with separate DSL process ===
+            # DSL streaming is handled by separate process - main loop only does LLM
+            if self.realtime and self._dsl_streamer_process:
+                # DSL streaming is in separate process - only do LLM here (throttled)
+                if not hasattr(self, '_llm_thread') or self._llm_thread is None or not self._llm_thread.is_alive():
+                    def process_llm_async(fp, fn):
+                        try:
+                            self._process_frame_with_llm(fp, {}, fn, tlog, parallel, optimizer)
+                        except Exception as e:
+                            logger.debug(f"Async LLM error: {e}")
+                    
+                    self._llm_thread = threading.Thread(
+                        target=process_llm_async, 
+                        args=(frame_path, frame_num),
+                        daemon=True
+                    )
+                    self._llm_thread.start()
+                    if self.verbose:
+                        print(f"   🧠 LLM processing F{frame_num} in background", flush=True)
+                
+                # Main loop runs at slower rate for LLM (every few seconds)
+                self._prev_frame = frame_path
+                tlog.end_frame("realtime_process")
+                time.sleep(max(1.0, self.interval))  # LLM rate, not DSL rate
+                continue
+            
+            # === REAL-TIME MODE without separate process (fallback) ===
+            if self.realtime and not self.dsl_only:
+                # Track LLM thread state
+                if not hasattr(self, '_llm_thread') or self._llm_thread is None or not self._llm_thread.is_alive():
+                    # LLM is idle - submit new frame for processing
+                    def process_llm_async(fp, fa, fn):
+                        try:
+                            self._process_frame_with_llm(fp, fa, fn, tlog, parallel, optimizer)
+                        except Exception as e:
+                            logger.debug(f"Async LLM error: {e}")
+                    
+                    self._llm_thread = threading.Thread(
+                        target=process_llm_async, 
+                        args=(frame_path, {}, frame_num),
+                        daemon=True
+                    )
+                    self._llm_thread.start()
+                    if self.verbose:
+                        print(f"   🧠 LLM processing F{frame_num} in background", flush=True)
+                else:
+                    # LLM is busy - skip this frame for LLM, but DSL already streamed
+                    if self.verbose and frame_num % 10 == 0:
+                        print(f"   ⏭️ LLM busy, skipping F{frame_num} for analysis", flush=True)
+                
+                # Continue immediately to next frame at target FPS
+                self._prev_frame = frame_path
+                tlog.end_frame("realtime_async")
+                frame_interval = 1.0 / self.target_fps
+                time.sleep(max(0.02, frame_interval))  # Min 50 FPS
+                continue
+            
+            # === DSL-ONLY MODE: Skip LLM, just use OpenCV tracking ===
+            if self.dsl_only:
+                # Fast path: only DSL analysis, no LLM calls (~10ms per frame)
+                self._prev_frame = frame_path
+                tlog.end_frame("dsl_only")
+                
+                # Use target_fps for timing
+                frame_interval = 1.0 / self.target_fps
+                time.sleep(max(0.02, frame_interval))  # Min 50 FPS cap
+                continue
             
             # === SMART DETECTION PIPELINE ===
             # Priority: OpenCV (fast) → Small LLM (medium) → Large LLM (slow)
@@ -932,13 +1095,45 @@ class LiveNarratorComponent(Component):
                     tlog.start("vision_llm")
                     tlog.end("vision_llm", "cache_hit")
                 else:
-                    # Get AI description with analysis context
-                    tlog.start("vision_llm")
-                    description = self._describe_frame_advanced(
-                        optimized_path, 
-                        frame_analysis
-                    )
-                    tlog.end("vision_llm", f"len={len(description) if description else 0}")
+                    # Check for pending async LLM result from previous frame
+                    if self._async_llm_instance and self._pending_llm_frame:
+                        prev_result = self._async_llm_instance.get_result(
+                            self._pending_llm_frame, timeout=0.1
+                        )
+                        if prev_result and prev_result.success:
+                            # Process previous frame's result in background
+                            logger.debug(f"Got async result for frame {self._pending_llm_frame}")
+                    
+                    # Submit async LLM request (non-blocking)
+                    if self._async_llm_instance:
+                        tlog.start("vision_llm")
+                        # Build prompt (reuse advanced prompt builder)
+                        prompt = self._build_advanced_prompt(frame_analysis or {})
+                        self._async_llm_instance.submit(
+                            prompt=prompt,
+                            image_path=str(optimized_path),
+                            model=self.model,
+                            frame_num=frame_num,
+                        )
+                        self._pending_llm_frame = frame_num
+                        
+                        # Wait briefly for result (allows pipelining)
+                        result = self._async_llm_instance.get_result(frame_num, timeout=3.0)
+                        if result and result.success:
+                            description = result.text
+                            tlog.end("vision_llm", f"async len={len(description)}")
+                        else:
+                            # Fall back to sync if async not ready
+                            description = self._describe_frame_advanced(optimized_path, frame_analysis)
+                            tlog.end("vision_llm", f"sync len={len(description) if description else 0}")
+                    else:
+                        # Sync fallback
+                        tlog.start("vision_llm")
+                        description = self._describe_frame_advanced(
+                            optimized_path, 
+                            frame_analysis
+                        )
+                        tlog.end("vision_llm", f"len={len(description) if description else 0}")
                     
                     # Cache the result in background (but not in track mode)
                     if description and use_cache:
@@ -1200,6 +1395,42 @@ class LiveNarratorComponent(Component):
                 print(f"   Frames: {len(frame_deltas)}, Tracked: {len(dsl_generator.tracks)}", flush=True)
             except Exception as e:
                 logger.debug(f"HTML export failed: {e}")
+        
+        # Stop DSL streamer process if running
+        if hasattr(self, '_dsl_streamer_process') and self._dsl_streamer_process:
+            try:
+                from ..dsl_streamer_process import stop_dsl_streamer
+                stop_dsl_streamer()
+                print("🔌 DSL Streamer process stopped", flush=True)
+            except Exception as e:
+                logger.debug(f"Error stopping DSL streamer: {e}")
+        
+        # Stop real-time server if running (fallback mode)
+        if self._realtime_server:
+            try:
+                from ..realtime_dsl_server import stop_realtime_server
+                stop_realtime_server()
+                print("🔌 Real-time server stopped", flush=True)
+            except Exception as e:
+                logger.debug(f"Error stopping realtime server: {e}")
+        
+        # Shutdown async LLM
+        if self._async_llm_instance:
+            try:
+                from ..async_llm import shutdown_async_llm
+                stats = self._async_llm_instance.stats
+                shutdown_async_llm()
+                print(f"🔌 Async LLM stopped (completed: {stats['completed']}, avg: {stats['avg_latency_ms']:.0f}ms)", flush=True)
+            except Exception as e:
+                logger.debug(f"Error stopping async LLM: {e}")
+        
+        # Close DSL timing logger and print summary
+        if dsl_timing:
+            try:
+                dsl_timing.print_summary()
+                dsl_timing.close()
+            except Exception as e:
+                logger.debug(f"Error closing DSL timing logger: {e}")
         
         # Wait for any pending TTS to complete before exiting
         if self.tts_enabled:
@@ -1468,6 +1699,66 @@ class LiveNarratorComponent(Component):
             logger.debug(f"Change computation: {e}")
             return 100  # Assume change on error
 
+    def _process_frame_with_llm(self, frame_path: Path, frame_analysis: Dict, frame_num: int, tlog, parallel, optimizer):
+        """Process frame with LLM in background thread (for async realtime mode)."""
+        try:
+            from ..image_optimizer import optimize_for_llm, get_optimal_size_for_model, get_description_cache
+            from ..response_filter import is_significant_smart
+            from ..config import config
+            
+            # Optimize image
+            optimal_size = get_optimal_size_for_model(self.model)
+            optimized_path = optimize_for_llm(frame_path, max_size=optimal_size, quality=75)
+            if not optimized_path:
+                optimized_path = frame_path
+            
+            # Get AI description
+            description = self._describe_frame_advanced(optimized_path, frame_analysis)
+            
+            if description:
+                # Filter and check significance
+                guarder_model = config.get("SQ_GUARDER_MODEL", "gemma:2b")
+                is_worth, short_desc = is_significant_smart(
+                    description,
+                    mode=self.mode,
+                    focus=self.focus or "person",
+                    guarder_model=guarder_model,
+                    tracking_data={},
+                )
+                
+                if is_worth and short_desc:
+                    # Log significant detection
+                    if not self.quiet:
+                        print(f"   🎯 [LLM F{frame_num}] {short_desc}", flush=True)
+                    
+                    # Handle TTS, webhooks etc in background
+                    self._handle_detection(short_desc, frame_path, frame_num)
+                    
+        except Exception as e:
+            logger.debug(f"Background LLM processing error: {e}")
+    
+    def _handle_detection(self, description: str, frame_path: Path, frame_num: int):
+        """Handle detection event (TTS, webhook, etc) - called from background thread."""
+        try:
+            # TTS if enabled
+            if self.tts_enabled:
+                from ..tts import speak_async
+                speak_async(description)
+            
+            # Webhook if configured
+            if self.webhook_url:
+                import requests
+                try:
+                    requests.post(self.webhook_url, json={
+                        "event": "detection",
+                        "description": description,
+                        "frame_num": frame_num,
+                    }, timeout=2)
+                except:
+                    pass
+        except Exception as e:
+            logger.debug(f"Detection handler error: {e}")
+    
     def _crop_to_motion_regions(self, frame_path: Path, analysis: Dict) -> Path:
         """Return cropped frame focusing on motion regions, or original frame if none.
 

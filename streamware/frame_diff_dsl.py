@@ -170,11 +170,16 @@ class FrameDiffAnalyzer:
     
     def __init__(
         self,
-        motion_threshold: int = 25,
-        min_blob_area: int = 500,
+        motion_threshold: int = 20,  # Lowered from 25 for better sensitivity
+        min_blob_area: int = 300,    # Lowered from 500 for smaller objects
         max_blobs: int = 10,
         blur_size: int = 5,
         dilate_iterations: int = 2,
+        # Filtering for truly moving objects
+        min_velocity: float = 0.008,  # Lowered from 0.01 for more sensitive detection
+        max_blob_size_ratio: float = 0.8,  # Raised from 0.7 to allow larger objects
+        min_moving_frames: int = 1,  # Lowered from 2 for faster detection
+        filter_static: bool = True,  # Filter out static objects (monitors, pictures)
     ):
         self.motion_threshold = motion_threshold
         self.min_blob_area = min_blob_area
@@ -182,21 +187,37 @@ class FrameDiffAnalyzer:
         self.blur_size = blur_size
         self.dilate_iterations = dilate_iterations
         
+        # Filtering parameters
+        self.min_velocity = min_velocity
+        self.max_blob_size_ratio = max_blob_size_ratio
+        self.min_moving_frames = min_moving_frames
+        self.filter_static = filter_static
+        
         self._prev_gray = None
         self._prev_blobs: Dict[int, MotionBlob] = {}
         self._next_blob_id = 1
         self._frame_count = 0
         
+        # Track movement history per blob (for filtering static objects)
+        self._blob_movement_history: Dict[int, List[float]] = {}  # blob_id -> [velocity magnitudes]
+        
         # Background model for more stable detection
         self._bg_model = None
         self._use_bg_subtraction = True
     
-    def analyze(self, frame_path: Path) -> FrameDelta:
+    def analyze(self, frame_path: Path, timing_logger=None) -> FrameDelta:
         """
         Analyze frame and return delta from previous.
         
         Pure OpenCV operations - no LLM.
+        
+        Args:
+            frame_path: Path to frame image
+            timing_logger: Optional DSLTimingLogger for performance tracking
         """
+        import time
+        t0 = time.perf_counter()
+        
         try:
             import cv2
         except ImportError:
@@ -204,17 +225,31 @@ class FrameDiffAnalyzer:
         
         self._frame_count += 1
         
+        # Start timing
+        if timing_logger:
+            timing_logger.start_frame(self._frame_count)
+        
         # Load frame
+        t_step = time.perf_counter()
         frame = cv2.imread(str(frame_path))
         if frame is None:
             return self._empty_delta()
+        if timing_logger:
+            timing_logger.log_step("capture", (time.perf_counter() - t_step) * 1000)
         
         h, w = frame.shape[:2]
         total_pixels = h * w
         
         # Convert to grayscale
+        t_step = time.perf_counter()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        if timing_logger:
+            timing_logger.log_step("grayscale", (time.perf_counter() - t_step) * 1000)
+        
+        t_step = time.perf_counter()
         gray = cv2.GaussianBlur(gray, (self.blur_size, self.blur_size), 0)
+        if timing_logger:
+            timing_logger.log_step("blur", (time.perf_counter() - t_step) * 1000)
         
         # Initialize background model
         if self._bg_model is None and self._use_bg_subtraction:
@@ -223,6 +258,7 @@ class FrameDiffAnalyzer:
             )
         
         # Get motion mask
+        t_step = time.perf_counter()
         if self._use_bg_subtraction and self._bg_model is not None:
             motion_mask = self._bg_model.apply(frame)
         elif self._prev_gray is not None:
@@ -232,21 +268,29 @@ class FrameDiffAnalyzer:
         else:
             self._prev_gray = gray
             return self._empty_delta()
+        if timing_logger:
+            timing_logger.log_step("diff", (time.perf_counter() - t_step) * 1000)
         
         # Clean up mask
+        t_step = time.perf_counter()
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
         motion_mask = cv2.morphologyEx(motion_mask, cv2.MORPH_OPEN, kernel)
         motion_mask = cv2.morphologyEx(motion_mask, cv2.MORPH_CLOSE, kernel)
         motion_mask = cv2.dilate(motion_mask, kernel, iterations=self.dilate_iterations)
+        if timing_logger:
+            timing_logger.log_step("threshold", (time.perf_counter() - t_step) * 1000)
         
         # Calculate motion percentage
         changed_pixels = cv2.countNonZero(motion_mask)
         motion_percent = (changed_pixels / total_pixels) * 100
         
         # Find contours (blobs)
+        t_step = time.perf_counter()
         contours, _ = cv2.findContours(
             motion_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
+        if timing_logger:
+            timing_logger.log_step("contours", (time.perf_counter() - t_step) * 1000)
         
         # Extract blobs
         blobs = []
@@ -271,6 +315,11 @@ class FrameDiffAnalyzer:
             perimeter = cv2.arcLength(contour, True)
             complexity = min(1.0, (perimeter ** 2) / (4 * math.pi * area) / 10)
             
+            # Filter out very large blobs (likely background/full frame)
+            blob_size_ratio = (bw * bh) / (w * h)
+            if self.filter_static and blob_size_ratio > self.max_blob_size_ratio:
+                continue  # Skip - too large, probably background
+            
             blob = MotionBlob(
                 id=0,  # Will be assigned during tracking
                 center=Point2D(cx / w, cy / h),
@@ -288,14 +337,20 @@ class FrameDiffAnalyzer:
         blobs = blobs[:self.max_blobs]
         
         # Track blobs (assign IDs, calculate velocity)
+        t_step = time.perf_counter()
         tracked_blobs, events = self._track_blobs(blobs)
+        if timing_logger:
+            timing_logger.log_step("tracking", (time.perf_counter() - t_step) * 1000)
         
         # Edge detection on motion regions
         edges = cv2.Canny(gray, 50, 150)
         edges = cv2.bitwise_and(edges, edges, mask=motion_mask)
         
         # Capture 128px thumbnail while frame file still exists
+        t_step = time.perf_counter()
         background_b64 = self._capture_thumbnail(frame_path, frame)
+        if timing_logger:
+            timing_logger.log_step("thumbnail", (time.perf_counter() - t_step) * 1000)
         
         # Create delta
         delta = FrameDelta(
@@ -311,6 +366,15 @@ class FrameDiffAnalyzer:
             frame_path=str(frame_path),
             background_base64=background_b64,
         )
+        
+        # Set metrics and end frame timing
+        if timing_logger:
+            timing_logger.set_metrics(
+                blobs=len(tracked_blobs),
+                motion_pct=motion_percent,
+                events=len(events)
+            )
+            timing_logger.end_frame()
         
         self._prev_gray = gray
         return delta
@@ -378,16 +442,33 @@ class FrameDiffAnalyzer:
                 new_blob.classification = old_blob.classification
                 new_blob.confidence = old_blob.confidence
                 
-                # Detect direction
-                direction = self._get_direction(new_blob.velocity)
+                # Track movement history for this blob
+                vel_mag = new_blob.velocity.magnitude()
+                if old_id not in self._blob_movement_history:
+                    self._blob_movement_history[old_id] = []
+                self._blob_movement_history[old_id].append(vel_mag)
+                # Keep only last 5 frames
+                self._blob_movement_history[old_id] = self._blob_movement_history[old_id][-5:]
                 
-                # Create MOVE event
-                events.append(MetaEvent(
-                    type=EventType.MOVE,
-                    blob_id=old_id,
-                    direction=direction,
-                    details=f"speed={new_blob.velocity.magnitude():.4f}"
-                ))
+                # Check if this object is truly moving (not just noise/flicker)
+                is_truly_moving = vel_mag >= self.min_velocity
+                if self.filter_static and self.min_moving_frames > 1:
+                    # Check if it has moved consistently across multiple frames
+                    history = self._blob_movement_history[old_id]
+                    moving_frames = sum(1 for v in history if v >= self.min_velocity)
+                    is_truly_moving = moving_frames >= min(self.min_moving_frames, len(history))
+                
+                # Detect direction
+                direction = self._get_direction(new_blob.velocity) if is_truly_moving else Direction.STATIC
+                
+                # Create MOVE event only if truly moving
+                if is_truly_moving:
+                    events.append(MetaEvent(
+                        type=EventType.MOVE,
+                        blob_id=old_id,
+                        direction=direction,
+                        details=f"speed={vel_mag:.4f}"
+                    ))
                 
                 tracked.append(new_blob)
                 used_new.add(new_idx)

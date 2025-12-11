@@ -477,6 +477,9 @@ Shortcuts:
     live_parser.add_argument('--no-ramdisk', action='store_true', help='Disable RAM disk, use temp files')
     live_parser.add_argument('--skip-checks', action='store_true', help='Skip dependency checks for faster startup')
     live_parser.add_argument('--turbo', action='store_true', help='Turbo mode: skip checks + fast model + aggressive caching')
+    live_parser.add_argument('--realtime', action='store_true', help='Real-time viewer: stream DSL to browser (http://localhost:8766)')
+    live_parser.add_argument('--dsl-only', action='store_true', help='DSL-only mode: skip LLM, use only OpenCV tracking (fast, up to 20 FPS)')
+    live_parser.add_argument('--fps', type=float, default=None, help='Target FPS for real-time mode (default: 2 for normal, 10 for dsl-only)')
     
     # Visualize command - real-time SVG visualization
     viz_parser = subparsers.add_parser('visualize', help='Real-time SVG visualization in browser')
@@ -2956,8 +2959,21 @@ def handle_live(args) -> int:
         args.skip_checks = True
         args.fast = True
         if not getattr(args, 'model', None):
-            args.model = 'llava:7b'
+            # Use smaller/faster model for turbo mode
+            args.model = 'llava:7b'  # Default fast model
         vision_model = args.model
+    
+    # FAST mode: auto-select smaller model if not specified
+    if getattr(args, 'fast', False) and not getattr(args, 'model', None):
+        # Try to use fastest available vision model
+        fast_models = ['moondream', 'moondream:latest', 'llava:7b', 'bakllava']
+        from .setup_utils import check_ollama_model
+        for fast_model in fast_models:
+            if check_ollama_model(fast_model):
+                args.model = fast_model
+                vision_model = fast_model
+                print(f"⚡ Fast mode enabled: using {fast_model} model, aggressive caching")
+                break
     
     # Skip checks if --skip-checks or model is not valid
     skip_checks = getattr(args, 'skip_checks', False)
@@ -3088,6 +3104,12 @@ def handle_live(args) -> int:
         uri += "&lite=true"
     if getattr(args, 'quiet', False):
         uri += "&quiet=true"
+    if getattr(args, 'realtime', False):
+        uri += "&realtime=true"
+    if getattr(args, 'dsl_only', False):
+        uri += "&dsl_only=true"
+    if getattr(args, 'fps', None):
+        uri += f"&target_fps={args.fps}"
     
     # Enable guarder if requested
     if getattr(args, 'guarder', False):
