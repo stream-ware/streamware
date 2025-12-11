@@ -513,6 +513,7 @@ class LiveNarratorComponent(Component):
         self._last_analysis = {}
         # Last spoken short summary for diff-only TTS mode
         self._last_tts_summary = ""
+        self._track_labels: Dict[int, Dict[str, Any]] = {}
         
         # Movement tracking state (for smart track mode)
         self._position_history: List[Dict] = []  # [{x, y, timestamp, regions}]
@@ -635,6 +636,91 @@ class LiveNarratorComponent(Component):
         self._person_state = result["person_state"]
         
         return result
+    
+    def _matches_focus(self, label: str) -> bool:
+        if not self.focus:
+            return True
+        focus = self.focus.strip().lower()
+        label = (label or "").strip().lower()
+        aliases = {
+            "person": {"person", "human", "man", "woman", "people"},
+            "car": {"car", "automobile", "vehicle"},
+            "dog": {"dog", "puppy"},
+            "cat": {"cat", "kitty"},
+        }
+        if focus in aliases:
+            return label in aliases[focus]
+        return focus == label
+
+    def _update_track_label_from_tracker(self, obj) -> str:
+        track_id = getattr(obj, "id", None)
+        object_type = getattr(obj, "object_type", "") or ""
+        if track_id is None:
+            return object_type
+        entry = self._track_labels.get(track_id)
+        if entry is None:
+            entry = {"label": object_type or "object", "last_summary": "", "last_state": ""}
+            self._track_labels[track_id] = entry
+        else:
+            if object_type and object_type.lower() != entry["label"].lower():
+                entry["label"] = object_type
+        return entry["label"]
+
+    def _narrate_tracker_movement(self, movement_data: Dict) -> None:
+        if not self.tts_enabled:
+            return
+        tracked_objects = movement_data.get("tracked_objects") or []
+        if not tracked_objects:
+            return
+        primary = max(tracked_objects, key=lambda o: getattr(o.bbox, "area", 0))
+        label = self._update_track_label_from_tracker(primary)
+        if not self._matches_focus(label):
+            return
+        track_id = getattr(primary, "id", None)
+        direction = getattr(primary, "direction", None)
+        state = getattr(primary, "state", None)
+        label_title = label.title() if label else "Object"
+        state_val = getattr(state, "value", str(state)) if state is not None else ""
+        dir_val = getattr(direction, "value", str(direction)) if direction is not None else ""
+        summary_parts: List[str] = []
+        if state_val in ("entering", "just_appeared"):
+            if dir_val:
+                summary_parts.append(f"{label_title} entered from the {dir_val.lower()}")
+            else:
+                summary_parts.append(f"{label_title} entered the frame")
+        elif state_val in ("exiting", "just_left"):
+            if dir_val:
+                summary_parts.append(f"{label_title} left to the {dir_val.lower()}")
+            else:
+                summary_parts.append(f"{label_title} left the frame")
+        else:
+            try:
+                summary = primary.get_summary()
+            except Exception:
+                summary = ""
+            if summary:
+                summary_parts.append(f"{label_title} {summary}")
+        if not summary_parts:
+            return
+        text = " ".join(summary_parts)
+        if track_id is not None:
+            entry = self._track_labels.setdefault(track_id, {"label": label, "last_summary": "", "last_state": ""})
+            if text == entry.get("last_summary", ""):
+                return
+            entry["last_summary"] = text
+            entry["last_state"] = state_val
+        if self.quiet:
+            return
+        try:
+            from ..tts_worker_process import get_tts_worker
+            worker = get_tts_worker(
+                engine=self.tts_engine,
+                rate=self.tts_rate,
+                voice=self.tts_voice,
+            )
+            worker.speak(text)
+        except Exception as e:
+            logger.debug(f"Tracker TTS worker error: {e}")
     
     def process(self, data: Any) -> Dict:
         """Process live narration"""
@@ -1179,6 +1265,7 @@ class LiveNarratorComponent(Component):
                 
                 # Build tracking data from analysis and movement
                 movement_data = self._analyze_movement(frame_analysis or {})
+                self._narrate_tracker_movement(movement_data)
                 tracking_data = {
                     "object_count": movement_data.get("object_count", 0),
                     "direction": movement_data.get("direction", "unknown"),
@@ -1726,6 +1813,17 @@ class LiveNarratorComponent(Component):
             from ..config import config
             
             print(f"   🔄 [LLM] Starting analysis for F{frame_num}...", flush=True)
+            
+            # Optional advanced analysis for tracker-based movement TTS
+            if self.use_advanced:
+                try:
+                    if not frame_analysis:
+                        frame_analysis, _ = self._frame_analyzer.analyze(frame_path)
+                    movement_data = self._analyze_movement(frame_analysis or {})
+                    self._narrate_tracker_movement(movement_data)
+                    self._last_analysis = frame_analysis
+                except Exception as e:
+                    logger.debug(f"Realtime movement analysis failed: {e}")
             
             # Optimize image
             optimal_size = get_optimal_size_for_model(self.model)
