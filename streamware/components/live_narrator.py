@@ -1503,6 +1503,7 @@ class LiveNarratorComponent(Component):
             
             frame_analysis = {}
             annotated_frame = frame_path
+            detection = None  # Initialize detection for all modes
             
             if self.mode == "track":
                 # Use SmartDetector for tracking mode

@@ -348,3 +348,74 @@ def handle_test(args: argparse.Namespace) -> int:
             print(f"   ❌ LLM failed: {e}")
     
     return 0
+
+
+# =============================================================================
+# SHELL HANDLER
+# =============================================================================
+
+def handle_shell(args: argparse.Namespace) -> int:
+    """Handle the 'shell' command - interactive LLM shell."""
+    from ..llm_shell import LLMShell
+    
+    shell = LLMShell(
+        model=args.model,
+        provider=args.provider,
+        auto_execute=args.auto,
+        verbose=args.verbose,
+    )
+    
+    shell.run()
+    return 0
+
+
+# =============================================================================
+# FUNCTIONS HANDLER
+# =============================================================================
+
+def handle_functions(args: argparse.Namespace) -> int:
+    """Handle the 'functions' command - list available functions."""
+    from ..function_registry import registry, get_llm_context
+    
+    if args.json:
+        print(registry.to_json())
+        return 0
+    
+    if args.llm:
+        print(get_llm_context())
+        return 0
+    
+    # Default: human-readable list
+    print("=" * 60)
+    print("Available Functions for LLM")
+    print("=" * 60)
+    print()
+    
+    for cat in registry.categories():
+        if args.category and cat != args.category:
+            continue
+        
+        print(f"📂 {cat.upper()}")
+        print("-" * 40)
+        
+        for fn in registry.get_by_category(cat):
+            print(f"  {fn.name}")
+            print(f"    {fn.description}")
+            
+            if fn.params:
+                params = ", ".join(
+                    f"{p.name}{'*' if p.required else ''}"
+                    for p in fn.params
+                )
+                print(f"    Params: {params}")
+            
+            if fn.shell_template:
+                print(f"    Shell: {fn.shell_template}")
+            
+            print()
+    
+    print("=" * 60)
+    print("Use 'sq shell' for interactive mode with LLM understanding")
+    print("=" * 60)
+    
+    return 0

@@ -436,6 +436,24 @@ Shortcuts:
     watch_parser.add_argument('--duration', type=int, default=60, help='Duration in seconds')
     watch_parser.add_argument('--file', '-o', help='Save report to file (HTML or Markdown)')
     watch_parser.add_argument('--log', choices=['md'], help='Generate Markdown log (md)')
+    # Notification options
+    watch_parser.add_argument('--email', help='Email address for notifications')
+    watch_parser.add_argument('--slack', help='Slack channel for notifications')
+    watch_parser.add_argument('--telegram', help='Telegram chat ID for notifications')
+    watch_parser.add_argument('--webhook', help='Webhook URL for notifications')
+    watch_parser.add_argument('--notify-mode', choices=['instant', 'digest', 'summary'], 
+                              default='digest', help='Notification mode')
+    watch_parser.add_argument('--notify-interval', type=int, default=60, 
+                              help='Digest interval in seconds')
+    # Additional options
+    watch_parser.add_argument('--tts', action='store_true', help='Enable text-to-speech')
+    watch_parser.add_argument('--screenshot', action='store_true', help='Save screenshots')
+    watch_parser.add_argument('--track', help='Track specific object type')
+    watch_parser.add_argument('--count', help='Count specific object type')
+    watch_parser.add_argument('--mode', choices=['yolo', 'llm', 'hybrid'], default='yolo',
+                              help='Detection mode')
+    watch_parser.add_argument('--fps', type=float, default=2.0, help='Frames per second')
+    watch_parser.add_argument('--confidence', type=float, default=0.5, help='Detection confidence 0-1')
     
     # Live narrator command (TTS, triggers)
     live_parser = subparsers.add_parser('live', help='Live narration with TTS and triggers', parents=[format_parser])
@@ -518,6 +536,26 @@ Shortcuts:
     mqtt_parser.add_argument('--transport', choices=['tcp', 'udp'], default='tcp',
                             help='RTSP transport: tcp (stable) or udp (lower latency)')
     
+    # Shell command - interactive LLM shell (NEW!)
+    shell_parser = subparsers.add_parser('shell', help='Interactive LLM shell for natural language commands')
+    shell_parser.add_argument('--model', '-m', default='llama3.2', help='LLM model (default: llama3.2)')
+    shell_parser.add_argument('--provider', '-p', choices=['ollama', 'openai'], default='ollama',
+                              help='LLM provider (default: ollama)')
+    shell_parser.add_argument('--auto', '-a', action='store_true', help='Auto-execute commands without confirmation')
+    shell_parser.add_argument('--verbose', '-v', action='store_true', help='Show LLM responses')
+    
+    # Functions command - list available functions (NEW!)
+    funcs_parser = subparsers.add_parser('functions', help='List available functions for LLM')
+    funcs_parser.add_argument('--category', '-c', help='Filter by category')
+    funcs_parser.add_argument('--json', action='store_true', help='Output as JSON')
+    funcs_parser.add_argument('--llm', action='store_true', help='Output for LLM context')
+    
+    # Voice Shell command - WebSocket voice interface (NEW!)
+    voice_shell_parser = subparsers.add_parser('voice-shell', help='Voice-enabled shell with browser UI')
+    voice_shell_parser.add_argument('--host', default='0.0.0.0', help='Host to bind (default: 0.0.0.0)')
+    voice_shell_parser.add_argument('--port', '-p', type=int, default=8765, help='WebSocket port (default: 8765)')
+    voice_shell_parser.add_argument('--model', '-m', default='llama3.2', help='LLM model (default: llama3.2)')
+    
     # Global options
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--quiet', '-q', action='store_true', help='Quiet mode')
@@ -598,6 +636,10 @@ Shortcuts:
             return handle_visualize(args)
         elif args.command == 'mqtt':
             return handle_mqtt(args)
+        elif args.command == 'shell':
+            return handle_shell(args)
+        elif args.command == 'functions':
+            return handle_functions(args)
         else:
             print(f"Unknown command: {args.command}", file=sys.stderr)
             return 1
@@ -2641,12 +2683,26 @@ def handle_watch(args) -> int:
     from .config import config
     import json
     
+    # Get notification settings from args (can be combined with intent)
+    notify_email = getattr(args, 'email', None)
+    notify_slack = getattr(args, 'slack', None)
+    notify_telegram = getattr(args, 'telegram', None)
+    notify_webhook = getattr(args, 'webhook', None)
+    notify_mode = getattr(args, 'notify_mode', 'digest')
+    notify_interval = getattr(args, 'notify_interval', 60)
+    
     # Check for natural language intent
     if args.intent:
         from .intent import parse_intent, apply_intent
         
         intent = parse_intent(args.intent)
         apply_intent(intent)
+        
+        # Override with CLI args if provided
+        if notify_email:
+            intent.notify_email = notify_email
+        if notify_mode:
+            intent.notify_mode = notify_mode
         
         # Get URL from args or env
         url = args.url or config.get("SQ_DEFAULT_URL") or config.get("SQ_STREAM_URL")
@@ -2668,9 +2724,15 @@ def handle_watch(args) -> int:
         uri += f"&mode={intent.mode}"
         uri += f"&focus={intent.target}"
         uri += f"&duration={args.duration}"
-        if intent.tts:
+        if intent.tts or getattr(args, 'tts', False):
             uri += "&tts=true"
             uri += f"&tts_mode={intent.tts_mode}"
+        
+        # Add notification params to URI
+        if intent.notify_email:
+            uri += f"&notify_email={intent.notify_email}"
+        if intent.notify_mode:
+            uri += f"&notify_mode={intent.notify_mode}"
         
         try:
             # Run using flow()
@@ -2678,6 +2740,75 @@ def handle_watch(args) -> int:
             return 0
         except Exception as e:
             print(f"Error: {e}")
+            return 1
+    
+    # Non-intent mode: check for direct CLI args
+    detect_target = getattr(args, 'detect', 'any')
+    track_target = getattr(args, 'track', None)
+    count_target = getattr(args, 'count', None)
+    
+    # If we have email or other notification without intent, build a simple watch
+    if notify_email or notify_slack or notify_telegram or track_target or count_target:
+        from .intent import Intent
+        
+        # Create intent from CLI args
+        target = track_target or count_target or detect_target
+        action = 'track' if track_target else ('count' if count_target else 'detect')
+        intent = Intent(raw_text=f"{action} {target}")
+        intent.target = target
+        intent.action = action
+        intent.notify_email = notify_email
+        intent.notify_slack = notify_slack
+        intent.notify_telegram = notify_telegram
+        intent.notify_webhook = notify_webhook
+        intent.notify_mode = notify_mode
+        intent.notify_interval = notify_interval
+        intent.tts = getattr(args, 'tts', False)
+        
+        url = args.url or config.get("SQ_DEFAULT_URL") or config.get("SQ_STREAM_URL")
+        if not url:
+            print("❌ Error: No URL provided. Use --url or set SQ_DEFAULT_URL in .env")
+            return 1
+        
+        print(f"\n🎯 Watch: {intent.action} {intent.target}")
+        print(f"   Source: {url[:50]}...")
+        print(f"   Duration: {args.duration}s")
+        if notify_email:
+            print(f"   📧 Email: {notify_email} (mode={notify_mode})")
+        print()
+        
+        try:
+            from .core import flow
+            # IMPORTANT: Import component to register it
+            from .components.live_narrator import LiveNarratorComponent
+            
+            # Build URI with all parameters
+            uri = f"live://narrator?source={url}"
+            uri += f"&mode={intent.action}"
+            uri += f"&focus={intent.target}"
+            uri += f"&duration={args.duration}"
+            
+            if intent.tts:
+                uri += "&tts=true"
+            
+            # Add notification params
+            if intent.notify_email:
+                uri += f"&notify_email={intent.notify_email}"
+            if intent.notify_mode:
+                uri += f"&notify_mode={intent.notify_mode}"
+            if intent.notify_interval:
+                uri += f"&notify_interval={intent.notify_interval}"
+            if intent.notify_slack:
+                uri += f"&notify_slack={intent.notify_slack}"
+            if intent.notify_telegram:
+                uri += f"&notify_telegram={intent.notify_telegram}"
+            
+            result = flow(uri).run()
+            return 0
+        except Exception as e:
+            print(f"Error: {e}")
+            import traceback
+            traceback.print_exc()
             return 1
     
     # Require URL for non-intent mode
@@ -3595,6 +3726,69 @@ def handle_mqtt(args) -> int:
         )
     except KeyboardInterrupt:
         print("\n🛑 MQTT Publisher stopped")
+    
+    return 0
+
+
+def handle_shell(args) -> int:
+    """Handle interactive LLM shell command."""
+    from .llm_shell import LLMShell
+    
+    shell = LLMShell(
+        model=args.model,
+        provider=args.provider,
+        auto_execute=args.auto,
+        verbose=args.verbose,
+    )
+    
+    shell.run()
+    return 0
+
+
+def handle_functions(args) -> int:
+    """Handle functions listing command."""
+    from .function_registry import registry, get_llm_context
+    
+    if args.json:
+        print(registry.to_json())
+        return 0
+    
+    if args.llm:
+        print(get_llm_context())
+        return 0
+    
+    # Default: human-readable list
+    print("=" * 60)
+    print("Available Functions for LLM")
+    print("=" * 60)
+    print()
+    
+    for cat in registry.categories():
+        if args.category and cat != args.category:
+            continue
+        
+        print(f"📂 {cat.upper()}")
+        print("-" * 40)
+        
+        for fn in registry.get_by_category(cat):
+            print(f"  {fn.name}")
+            print(f"    {fn.description}")
+            
+            if fn.params:
+                params = ", ".join(
+                    f"{p.name}{'*' if p.required else ''}"
+                    for p in fn.params
+                )
+                print(f"    Params: {params}")
+            
+            if fn.shell_template:
+                print(f"    Shell: {fn.shell_template}")
+            
+            print()
+    
+    print("=" * 60)
+    print("Use 'sq shell' for interactive mode with LLM understanding")
+    print("=" * 60)
     
     return 0
 

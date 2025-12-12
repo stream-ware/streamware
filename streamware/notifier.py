@@ -111,10 +111,13 @@ class Notifier:
         self.smtp_pass = config.get("SQ_SMTP_PASS", "")
         self.smtp_from = config.get("SQ_SMTP_FROM", self.smtp_user)
         
-        # Timer for digest mode
+        # Timer for digest mode OR instant mode (for buffered events)
         self._timer: Optional[threading.Timer] = None
         if mode == "digest" and interval > 0:
             self._start_timer()
+        elif mode == "instant":
+            # In instant mode, flush buffered events every 10 seconds
+            self._start_timer(interval=10)
     
     @classmethod
     def from_intent(cls, intent) -> "Notifier":
@@ -148,23 +151,44 @@ class Notifier:
             cooldown=int(config.get("SQ_NOTIFY_COOLDOWN", "300")),
         )
     
-    def _start_timer(self):
-        """Start digest timer."""
+    def _start_timer(self, interval: Optional[int] = None):
+        """Start digest/flush timer."""
         if self._timer:
             self._timer.cancel()
-        self._timer = threading.Timer(self.interval, self._timer_callback)
+        timer_interval = interval if interval is not None else self.interval
+        self._timer = threading.Timer(timer_interval, self._timer_callback)
         self._timer.daemon = True
         self._timer.start()
     
     def _timer_callback(self):
         """Called when digest timer fires."""
         self.flush()
-        self._start_timer()  # Restart timer
+        # Restart timer with appropriate interval
+        if self.mode == "instant":
+            self._start_timer(interval=10)
+        else:
+            self._start_timer()
     
     def add_event(self, message: str, screenshot_path: Optional[str] = None, **details):
         """Add an event to the notification queue."""
-        # Cooldown check - don't add duplicate messages within cooldown period
         now = time.time()
+        
+        # Instant mode: minimum 10 seconds between emails to prevent spam
+        if self.mode == "instant":
+            min_interval = 10  # seconds
+            if (now - self._last_send_time) < min_interval:
+                # Buffer this event instead of sending immediately
+                event = NotificationEvent(
+                    timestamp=now,
+                    message=message,
+                    screenshot_path=screenshot_path,
+                    details=details,
+                )
+                with self._lock:
+                    self._events.append(event)
+                return  # Don't send yet
+        
+        # Cooldown check - skip duplicate messages within cooldown period
         if message == self._last_message and (now - self._last_send_time) < self.cooldown:
             return
         
@@ -178,7 +202,7 @@ class Notifier:
         with self._lock:
             self._events.append(event)
         
-        # Instant mode: send immediately
+        # Instant mode: send immediately (but respecting min interval above)
         if self.mode == "instant":
             self.flush()
     
@@ -217,6 +241,7 @@ class Notifier:
         if self.webhook:
             self._send_webhook(events)
         
+        # Update last send time for rate limiting
         self._last_send_time = time.time()
         if events:
             self._last_message = events[-1].message

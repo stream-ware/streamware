@@ -4,6 +4,11 @@ Response Filter for Streamware
 Filters LLM responses to reduce noise and only keep significant events.
 Prevents logging/speaking "nothing happened" messages.
 
+NOTE: This module is maintained for backward compatibility.
+      New code should import from streamware.filters instead:
+      
+      from streamware.filters import is_significant, format_for_tts
+
 Usage:
     from streamware.response_filter import is_significant, filter_response
 
@@ -16,6 +21,23 @@ Usage:
 import logging
 import re
 from typing import Dict, List, Optional, Tuple
+
+# Re-export from new modular filters package for backward compatibility
+try:
+    from .filters import (
+        is_significant as _is_significant_new,
+        should_notify as _should_notify_new,
+        filter_response as _filter_response_new,
+        format_for_tts as _format_for_tts_new,
+        quick_person_check,
+        quick_change_check,
+        summarize_detection,
+        extract_alert_info,
+        extract_structured_fields,
+    )
+    _FILTERS_AVAILABLE = True
+except ImportError:
+    _FILTERS_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 

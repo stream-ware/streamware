@@ -14,6 +14,8 @@ from .handlers import (
     handle_detect,
     handle_config,
     handle_test,
+    handle_shell,
+    handle_functions,
 )
 
 
@@ -36,6 +38,8 @@ def run_cli(args=None) -> int:
         "detect": handle_detect,
         "config": handle_config,
         "test": handle_test,
+        "shell": handle_shell,
+        "functions": handle_functions,
     }
     
     command = parsed.command

@@ -1,8 +1,10 @@
 """
-Narrator Module - Refactored video analysis pipeline.
+Narrator Module - Modular video analysis pipeline.
 
-This module demonstrates the proposed refactoring of live_narrator.py
-into smaller, focused components.
+Refactored from live_narrator.py into smaller, focused components:
+- frame_analyzer.py: Motion detection and frame preprocessing
+- models.py: Data classes (NarrationEntry, DetectionResult, etc.)
+- __init__.py: Orchestrator and main API
 
 Architecture:
     ┌─────────────────────────────────────────────────────────────┐
@@ -30,6 +32,16 @@ Usage:
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 from pathlib import Path
+
+# Import from submodules
+from .frame_analyzer import FrameAnalyzer
+from .models import (
+    Trigger,
+    NarrationEntry,
+    DetectionResult,
+    NarratorConfig as NarratorConfigModel,
+    AnalysisStats,
+)
 
 
 @dataclass

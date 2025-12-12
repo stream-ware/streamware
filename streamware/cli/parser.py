@@ -43,6 +43,12 @@ Examples:
     # Test command
     _add_test_parser(subparsers)
     
+    # Shell command (interactive LLM)
+    _add_shell_parser(subparsers)
+    
+    # Functions command (list available functions)
+    _add_functions_parser(subparsers)
+    
     # Version
     parser.add_argument("--version", action="version", version="%(prog)s 1.0.0")
     
@@ -166,6 +172,37 @@ def _add_test_parser(subparsers):
                       help="Component to test")
     test.add_argument("--url", "-u", help="URL for camera test")
     test.add_argument("--to", help="Email address for email test")
+
+
+def _add_shell_parser(subparsers):
+    """Add shell subcommand parser."""
+    shell = subparsers.add_parser(
+        "shell",
+        help="Interactive LLM shell",
+        description="Start interactive shell with LLM understanding"
+    )
+    
+    shell.add_argument("--model", "-m", default="llama3.2",
+                       help="LLM model to use (default: llama3.2)")
+    shell.add_argument("--provider", "-p", choices=["ollama", "openai"],
+                       default="ollama", help="LLM provider (default: ollama)")
+    shell.add_argument("--auto", "-a", action="store_true",
+                       help="Auto-execute commands without confirmation")
+    shell.add_argument("-v", "--verbose", action="store_true",
+                       help="Show LLM responses")
+
+
+def _add_functions_parser(subparsers):
+    """Add functions subcommand parser."""
+    funcs = subparsers.add_parser(
+        "functions",
+        help="List available functions",
+        description="Show all available functions for LLM"
+    )
+    
+    funcs.add_argument("--category", "-c", help="Filter by category")
+    funcs.add_argument("--json", action="store_true", help="Output as JSON")
+    funcs.add_argument("--llm", action="store_true", help="Output for LLM context")
 
 
 def parse_args(args: Optional[List[str]] = None) -> argparse.Namespace:

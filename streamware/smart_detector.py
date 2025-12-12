@@ -9,6 +9,11 @@ Prioritized detection pipeline for tracking mode:
 
 YOLO is auto-installed on first use for best detection accuracy.
 
+NOTE: This module is maintained for backward compatibility.
+      New code should import from streamware.detector instead:
+      
+      from streamware.detector import SmartDetector, DetectionResult
+
 Usage:
     from streamware.smart_detector import SmartDetector
     
@@ -32,6 +37,19 @@ from pathlib import Path
 from .response_filter import DEFAULT_OLLAMA_URL
 from typing import Optional, Tuple, List
 from .config import config
+
+# Re-export from new modular detector package
+try:
+    from .detector import (
+        DetectionLevel as _DetectionLevel,
+        MotionLevel as _MotionLevel,
+        DetectionResult as _DetectionResult,
+        SmartDetector as _SmartDetector,
+        get_smart_detector,
+    )
+    _DETECTOR_AVAILABLE = True
+except ImportError:
+    _DETECTOR_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
