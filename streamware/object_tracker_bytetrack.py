@@ -188,7 +188,7 @@ class ObjectTrackerByteTrack:
             # Update state from NEW to TRACKED if stable enough
             if obj.state == ObjectState.NEW and self._track_frames[track_id] >= self.min_stable_frames:
                 obj.state = ObjectState.TRACKED
-                obj.direction = Direction.STATIC
+                obj.direction = Direction.STATIONARY
             
             return None  # Not a new object
         else:

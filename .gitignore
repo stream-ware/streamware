@@ -8,6 +8,7 @@ logs.csv
 log.txt
 log.csv
 .yaml
+*.yaml
 .html
 demos
 yolov8n.pt

@@ -472,6 +472,7 @@ Shortcuts:
     live_parser.add_argument('--tts', action='store_true', help='Enable text-to-speech')
     live_parser.add_argument('--tts-all', action='store_true', help='TTS: speak every LLM response (debug mode)')
     live_parser.add_argument('--tts-diff', action='store_true', help='TTS: speak only when state/summary changes')
+    live_parser.add_argument('--lang', '-l', default='en', help='TTS language (en, pl, de)')
     live_parser.add_argument('--trigger', '-t', help='Triggers: "person appears,door opens"')
     live_parser.add_argument('--focus', '-f', help='Focus on specific objects (e.g., person)')
     live_parser.add_argument('--interval', '-i', type=float, help='Seconds between checks (or use sensitivity)')
@@ -640,6 +641,8 @@ Shortcuts:
             return handle_shell(args)
         elif args.command == 'functions':
             return handle_functions(args)
+        elif args.command == 'voice-shell':
+            return handle_voice_shell(args)
         else:
             print(f"Unknown command: {args.command}", file=sys.stderr)
             return 1
@@ -3295,6 +3298,10 @@ def handle_live(args) -> int:
         uri += "&lite=true"
     if getattr(args, 'quiet', False):
         uri += "&quiet=true"
+    # Add TTS language
+    lang = getattr(args, 'lang', 'en')
+    if lang and lang != 'en':
+        uri += f"&lang={lang}"
     if getattr(args, 'realtime', False):
         uri += "&realtime=true"
     if getattr(args, 'dsl_only', False):
@@ -3743,6 +3750,30 @@ def handle_shell(args) -> int:
     
     shell.run()
     return 0
+
+
+def handle_voice_shell(args) -> int:
+    """Handle voice shell server command."""
+    try:
+        from .voice_shell_server import VoiceShellServer
+        import asyncio
+        
+        server = VoiceShellServer(
+            host=args.host,
+            port=args.port,
+            model=args.model,
+        )
+        
+        asyncio.run(server.run())
+        return 0
+        
+    except ImportError as e:
+        print(f"❌ Missing dependency: {e}")
+        print("   Install with: pip install websockets")
+        return 1
+    except Exception as e:
+        print(f"❌ Error: {e}")
+        return 1
 
 
 def handle_functions(args) -> int:

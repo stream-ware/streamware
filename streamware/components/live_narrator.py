@@ -36,6 +36,61 @@ from ..config import config
 logger = logging.getLogger(__name__)
 
 
+def _is_similar_description(text1: str, text2: str, threshold: float = 0.6) -> bool:
+    """Check if two descriptions are semantically similar.
+    
+    Uses word overlap + key phrase matching to detect near-duplicates like:
+    - "Person entering from left" vs "Person on left detected"
+    - "Person left to the left" vs "Person on left"
+    
+    Returns True if texts are similar (should be filtered).
+    """
+    if not text1 or not text2:
+        return False
+    
+    # Exact match
+    if text1.lower().strip() == text2.lower().strip():
+        return True
+    
+    # Normalize texts
+    t1 = text1.lower().strip()
+    t2 = text2.lower().strip()
+    
+    # Extract key words (nouns, verbs, adjectives)
+    stopwords = {'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been', 
+                 'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
+                 'would', 'could', 'should', 'may', 'might', 'must', 'shall',
+                 'on', 'in', 'at', 'to', 'from', 'with', 'by', 'for', 'of',
+                 'detected', 'seen', 'visible', 'appears', 'entering', 'exiting'}
+    
+    words1 = set(w for w in t1.split() if w not in stopwords and len(w) > 2)
+    words2 = set(w for w in t2.split() if w not in stopwords and len(w) > 2)
+    
+    if not words1 or not words2:
+        return False
+    
+    # Calculate Jaccard similarity
+    intersection = words1 & words2
+    union = words1 | words2
+    similarity = len(intersection) / len(union) if union else 0
+    
+    # If key subject is the same (person, car, etc.) and location similar -> similar
+    subjects = {'person', 'people', 'car', 'vehicle', 'animal', 'dog', 'cat', 'object'}
+    locations = {'left', 'right', 'center', 'top', 'bottom', 'front', 'back'}
+    
+    subject1 = words1 & subjects
+    subject2 = words2 & subjects
+    loc1 = words1 & locations
+    loc2 = words2 & locations
+    
+    # Same subject in same location = similar
+    if subject1 and subject1 == subject2 and loc1 and loc1 == loc2:
+        return True
+    
+    # High word overlap = similar
+    return similarity >= threshold
+
+
 class FrameAnalyzer:
     """
     Advanced frame analysis with motion detection, edge tracking, and preprocessing.
@@ -389,6 +444,7 @@ class LiveNarratorComponent(Component):
         self.tts_engine = uri.get_param("tts_engine", config.get("SQ_TTS_ENGINE", "auto"))
         self.tts_voice = uri.get_param("tts_voice", config.get("SQ_TTS_VOICE", ""))
         self.tts_rate = int(uri.get_param("tts_rate", config.get("SQ_TTS_RATE", "150")))
+        self.tts_lang = uri.get_param("lang", config.get("SQ_TTS_LANG", "en"))  # Language for TTS
         # TTS mode:
         #   normal  - current smart filter (default)
         #   all     - speak every LLM response
@@ -1559,12 +1615,15 @@ class LiveNarratorComponent(Component):
                         self._history.append(entry)
                         
                         # Email/Slack/Telegram notifications (YOLO fast path)
+                        # Use intelligent LLM-based filter instead of simple heuristics
                         if self._notifier and description:
-                            self._notifier.add_event(
-                                description,
-                                screenshot_path=str(frame_path) if frame_path else None,
-                                frame=frame_num,
-                            )
+                            from ..notification_filter import should_notify
+                            if should_notify(description, focus=self.focus or "person"):
+                                self._notifier.add_event(
+                                    description,
+                                    screenshot_path=str(frame_path) if frame_path else None,
+                                    frame=frame_num,
+                                )
                     
                     tlog.end_frame(description[:30] if description else "smart_skip")
                     self._prev_frame = frame_path
@@ -1655,7 +1714,16 @@ class LiveNarratorComponent(Component):
                 motion_pct = frame_analysis.get("motion_percent", 0)
                 current_interval = optimizer.get_adaptive_interval(motion_pct, processing_time=last_frame_duration)
                 
-                if motion_pct < 0.5 and frame_num > 1:
+                # Force LLM check every N frames even without motion (to detect static people)
+                force_llm_interval = int(config.get("SQ_FORCE_LLM_INTERVAL", "10"))
+                skip_motion_threshold = float(config.get("SQ_SKIP_MOTION_THRESHOLD", "0.5"))
+                force_llm_check = (frame_num % force_llm_interval == 0)
+                
+                if force_llm_check and motion_pct < skip_motion_threshold and not self.quiet:
+                    ts = datetime.now().strftime("%H:%M:%S")
+                    print(f"🔍 [{ts}] Periodic LLM check (frame #{frame_num})", flush=True)
+                
+                if motion_pct < skip_motion_threshold and frame_num > 1 and not force_llm_check:
                     if not self.quiet:
                         ts = datetime.now().strftime("%H:%M:%S")
                         print(f"⚪ [{ts}] No significant motion", flush=True)
@@ -1976,9 +2044,10 @@ class LiveNarratorComponent(Component):
                 # In track mode, speak status updates - but respect diff mode
                 if self.mode == "track" and self.tts_enabled:
                     if self.tts_mode == "diff":
-                        # Only speak when description changed
+                        # Only speak when description changed significantly
                         tts_text_now = format_for_tts(description) if description else ""
-                        if tts_text_now and tts_text_now != getattr(self, '_last_tts_summary', ''):
+                        last_tts = getattr(self, '_last_tts_summary', '')
+                        if tts_text_now and not _is_similar_description(tts_text_now, last_tts):
                             should_speak = True
                         else:
                             should_speak = False
@@ -2019,19 +2088,24 @@ class LiveNarratorComponent(Component):
                     self._send_webhook(entry)
                 
                 # Email/Slack/Telegram notifications (independent of TTS)
-                # Notify on: significant detection OR trigger match
-                should_notify_external = (
-                    self._notifier and 
-                    description and 
-                    (triggered or is_worth_logging or should_speak)
-                )
-                if should_notify_external:
-                    self._notifier.add_event(
-                        description,
-                        screenshot_path=str(frame_path) if frame_path else None,
-                        frame=frame_num,
-                        triggered=triggered,
-                    )
+                # Send notification if description mentions focus target (person, etc.)
+                if self._notifier and description:
+                    from ..notification_filter import should_notify as llm_should_notify
+                    focus = self.focus or "person"
+                    context = {
+                        "motion_percent": frame_analysis.get("motion_percent", 0) if frame_analysis else 0,
+                        "frame_num": frame_num,
+                        "triggered": triggered,
+                    }
+                    # Use simpler check: if focus target is mentioned, send notification
+                    if llm_should_notify(description, focus=focus, context=context):
+                        print(f"📧 [Notify] Adding event: {description[:50]}...", flush=True)
+                        self._notifier.add_event(
+                            description,
+                            screenshot_path=str(frame_path) if frame_path else None,
+                            frame=frame_num,
+                            triggered=triggered,
+                        )
                 
                 tlog.increment_frame_count(skipped=False)
                 tlog.end_frame(description[:30] if description else "logged")
@@ -2933,6 +3007,7 @@ class LiveNarratorComponent(Component):
                 engine=self.tts_engine,
                 rate=self.tts_rate,
                 voice=self.tts_voice,
+                lang=getattr(self, 'tts_lang', 'en'),  # Pass language to TTS
             )
             worker.speak(text)
         except Exception as e:

@@ -124,6 +124,7 @@ def _add_live_parser(subparsers):
     live.add_argument("--mode", "-m", choices=["yolo", "llm", "hybrid"], default="hybrid")
     live.add_argument("--focus", "-f", help="Focus object (person, car, etc.)")
     live.add_argument("--tts", action="store_true", help="Enable TTS")
+    live.add_argument("--lang", "-l", default="en", help="TTS language (en, pl, de)")
     live.add_argument("--duration", "-t", type=int, default=60)
     live.add_argument("--fps", type=float, default=2.0)
     live.add_argument("--quiet", "-q", action="store_true")

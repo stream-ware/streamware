@@ -365,8 +365,10 @@ def check_guarder_model_available(model: str = DEFAULT_ANALYSIS_MODEL) -> Tuple[
                 if m.startswith(base_name):
                     return True, m
             
-            # Check for alternative small models (fallback)
-            small_models = [DEFAULT_GUARDER_MODEL, "phi3:mini", "llama3.2:latest", "deepseek-r1:1.5b"]
+            # Check for alternative small models (fallback) from centralized config
+            from .config import config as app_config
+            small_models_str = app_config.get("SQ_SMALL_MODELS", "gemma:2b,phi3:mini,llama3.2:latest,deepseek-r1:1.5b")
+            small_models = [m.strip() for m in small_models_str.split(",") if m.strip()]
             for sm in small_models:
                 if sm in models:
                     return True, sm

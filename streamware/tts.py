@@ -177,7 +177,7 @@ class TTSManager:
         elif engine == TTSEngine.ESPEAK:
             return self._speak_espeak(text, rate, voice, block)
         elif engine == TTSEngine.PICO:
-            return self._speak_pico(text, rate, block)
+            return self._speak_pico(text, rate, voice, block)
         elif engine == TTSEngine.FESTIVAL:
             return self._speak_festival(text, block)
         elif engine == TTSEngine.SAY:
@@ -248,13 +248,37 @@ class TTSManager:
             subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
             return True
     
-    def _speak_pico(self, text: str, rate: int, block: bool) -> bool:
-        """Speak using pico2wave."""
+    def _speak_pico(self, text: str, rate: int, voice: str, block: bool) -> bool:
+        """Speak using pico2wave.
+        
+        Note: pico2wave only supports: en-US, en-GB, de-DE, es-ES, fr-FR, it-IT
+        For unsupported languages (like pl), falls back to espeak.
+        """
+        # Map language codes to pico voices
+        pico_voices = {
+            "en": "en-US",
+            "en-us": "en-US",
+            "en-gb": "en-GB",
+            "de": "de-DE",
+            "es": "es-ES",
+            "fr": "fr-FR",
+            "it": "it-IT",
+        }
+        
+        # Check if voice/language is supported by pico
+        pico_lang = pico_voices.get(voice.lower() if voice else "en", None)
+        
+        # For unsupported languages (like Polish), use espeak instead
+        if not pico_lang and voice and voice.lower() not in ["en", ""]:
+            return self._speak_espeak(text, rate, voice, block)
+        
+        pico_lang = pico_lang or "en-US"
+        
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tf:
             wav_path = tf.name
         
         result = subprocess.run(
-            ["pico2wave", "-w", wav_path, text],
+            ["pico2wave", "-l", pico_lang, "-w", wav_path, text],
             capture_output=True,
             timeout=10
         )

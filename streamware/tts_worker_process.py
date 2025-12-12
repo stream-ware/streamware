@@ -73,9 +73,16 @@ def _run_tts_worker(queue: mp.Queue, stop_event: mp.Event, config: TTSWorkerConf
                 break
 
             try:
-                text = item.get("text") if isinstance(item, dict) else str(item)
+                if isinstance(item, dict):
+                    text = item.get("text", "")
+                    # Per-message voice override (for language support)
+                    msg_voice = item.get("voice", config.voice)
+                else:
+                    text = str(item)
+                    msg_voice = config.voice
             except Exception:
                 text = str(item)
+                msg_voice = config.voice
 
             if not text:
                 continue
@@ -86,7 +93,7 @@ def _run_tts_worker(queue: mp.Queue, stop_event: mp.Event, config: TTSWorkerConf
                     text,
                     engine=config.engine or None,
                     rate=config.rate or None,
-                    voice=config.voice or None,
+                    voice=msg_voice or None,
                     block=True,
                 )
             except Exception as e:
@@ -182,10 +189,22 @@ class TTSWorkerProcess:
 _worker: Optional[TTSWorkerProcess] = None
 
 
-def get_tts_worker(engine: str = "auto", rate: int = 150, voice: str = "") -> TTSWorkerProcess:
-    """Get global TTS worker instance, starting it if needed."""
+def get_tts_worker(engine: str = "auto", rate: int = 150, voice: str = "", lang: str = "en") -> TTSWorkerProcess:
+    """Get global TTS worker instance, starting it if needed.
+    
+    Args:
+        engine: TTS engine (auto, espeak, pyttsx3, etc.)
+        rate: Speech rate
+        voice: Voice name (if not set, will use lang)
+        lang: Language code (en, pl, de) - sets voice if voice is empty
+    """
     global _worker
 
+    # Map language to voice if voice not specified
+    if not voice and lang and lang != "en":
+        # For espeak, voice is the language code
+        voice = lang
+    
     if _worker is None:
         _worker = TTSWorkerProcess(engine=engine, rate=rate, voice=voice)
         _worker.start()

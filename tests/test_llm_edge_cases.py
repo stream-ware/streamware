@@ -159,13 +159,14 @@ class TestVoiceEdgeCases:
             pass
     
     def test_no_microphone_available(self):
-        """Test STT without microphone"""
-        # Will fail without mic
+        """Test STT without microphone or missing dependencies"""
+        # Will fail without mic or dependencies
         try:
             result = flow("voice://listen").run()
         except Exception as e:
-            # Expected
-            assert "microphone" in str(e).lower() or "audio" in str(e).lower() or "speech" in str(e).lower()
+            # Expected - can fail for various reasons
+            err = str(e).lower()
+            assert any(x in err for x in ["microphone", "audio", "speech", "whisper", "dependencies"])
     
     def test_invalid_language_code(self):
         """Test voice with invalid language"""

@@ -538,16 +538,26 @@ def extract_detections_from_regions(motion_regions: List[Dict]) -> List[Dict]:
     detections = []
     
     for region in motion_regions:
-        # region is (x, y, w, h) tuple from cv2.boundingRect
         # Assume 1920x1080 if not specified
         frame_w = 1920
         frame_h = 1080
         
+        # Handle both dict and tuple formats
+        if isinstance(region, dict):
+            rx = region.get("x", 0)
+            ry = region.get("y", 0)
+            rw = region.get("w", region.get("width", 100))
+            rh = region.get("h", region.get("height", 100))
+        elif isinstance(region, (list, tuple)) and len(region) >= 4:
+            rx, ry, rw, rh = region[0], region[1], region[2], region[3]
+        else:
+            continue  # Skip invalid region
+        
         # Normalize coordinates
-        x = (region[0] + region[2] / 2) / frame_w
-        y = (region[1] + region[3] / 2) / frame_h
-        w = region[2] / frame_w
-        h = region[3] / frame_h
+        x = (rx + rw / 2) / frame_w
+        y = (ry + rh / 2) / frame_h
+        w = rw / frame_w
+        h = rh / frame_h
         
         detections.append({
             "x": x,

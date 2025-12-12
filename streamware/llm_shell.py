@@ -49,53 +49,51 @@ class ShellResult:
     env_vars: Dict[str, str] = None
     explanation: str = ""
     error: Optional[str] = None
+    # For clarification dialogs
+    options: List[tuple] = None  # [(key, description, command), ...]
+    input_type: Optional[str] = None  # "email", "url", etc.
+    pending_command: Optional[str] = None  # Command with {placeholder}
     
     def __post_init__(self):
         if self.parameters is None:
             self.parameters = {}
         if self.env_vars is None:
             self.env_vars = {}
+        if self.options is None:
+            self.options = []
 
 
 class LLMShell:
     """Interactive shell with LLM understanding."""
     
-    SYSTEM_PROMPT = """You are an assistant for Streamware video surveillance system.
-You help users invoke system functions by understanding their natural language requests.
+    SYSTEM_PROMPT = """You are Streamware assistant. Convert user requests to shell commands.
+
+RESPOND ONLY WITH JSON in this exact format:
+{{"understood": true, "function": "name", "shell_command": "command", "explanation": "what it does"}}
+
+COMMANDS:
+- detect: sq live narrator --mode track --focus TARGET --duration 60 --skip-checks --adaptive
+- track+speak: sq live narrator --mode track --focus TARGET --duration 60 --tts --tts-diff --model llava:7b --skip-checks  
+- email alert: SQ_NOTIFY_EMAIL=EMAIL sq live narrator --mode track --focus TARGET --duration 60 --skip-checks --adaptive
+- stop: pkill -f 'sq watch'; pkill -f 'sq live'
+
+EXAMPLES:
+User: detect person
+{{"understood": true, "function": "detect", "shell_command": "sq live narrator --mode track --focus person --duration 60 --skip-checks --adaptive", "explanation": "Detect person"}}
+
+User: track person and speak
+{{"understood": true, "function": "narrate", "shell_command": "sq live narrator --mode track --focus person --duration 60 --tts --tts-diff --model llava:7b --skip-checks", "explanation": "Track and narrate person"}}
+
+User: email tom@x.com when person detected
+{{"understood": true, "function": "notify", "shell_command": "SQ_NOTIFY_EMAIL=tom@x.com sq live narrator --mode track --focus person --duration 60 --skip-checks --adaptive", "explanation": "Detect person, email tom@x.com"}}
+
+User: stop
+{{"understood": true, "function": "stop", "shell_command": "pkill -f 'sq watch'; pkill -f 'sq live'", "explanation": "Stop all"}}
+
+User: unknown request
+{{"understood": false, "function": null, "shell_command": null, "explanation": "Unknown command"}}
 
 {functions}
-
-# Response Format
-
-For each user request, respond with JSON:
-{{
-    "understood": true/false,
-    "function": "function_name or null",
-    "parameters": {{"param": "value", ...}},
-    "shell_command": "full shell command to execute",
-    "explanation": "brief explanation of what will happen"
-}}
-
-# Rules
-
-1. Extract parameters from user request
-2. Use environment variables for sensitive data (passwords, tokens)
-3. Generate complete, executable shell commands
-4. For unknown requests, set understood=false and explain what's unclear
-5. For multi-step tasks, combine commands with &&
-6. Always include --duration for watch commands (default 60)
-7. Use default values from function definitions when not specified
-
-# Examples
-
-User: "detect person"
-Response: {{"understood": true, "function": "detect", "parameters": {{"target": "person"}}, "shell_command": "sq watch --detect person --duration 60", "explanation": "Start person detection for 60 seconds"}}
-
-User: "email tom@x.com when you see someone"  
-Response: {{"understood": true, "function": "notify_email", "parameters": {{"target": "person", "email": "tom@x.com"}}, "shell_command": "sq watch --detect person --email tom@x.com --notify-mode instant --duration 60", "explanation": "Detect person and email tom@x.com immediately"}}
-
-User: "stop everything"
-Response: {{"understood": true, "function": "stop", "parameters": {{}}, "shell_command": "pkill -f 'sq watch' || echo 'Nothing running'", "explanation": "Stop all running detection processes"}}
 """
 
     def __init__(
@@ -104,11 +102,17 @@ Response: {{"understood": true, "function": "stop", "parameters": {{}}, "shell_c
         provider: str = "ollama",
         auto_execute: bool = False,
         verbose: bool = False,
+        language: str = "en",
     ):
         self.model = model
         self.provider = provider
         self.auto_execute = auto_execute
         self.verbose = verbose
+        self.language = language
+        
+        # Translator for multi-language support
+        from .i18n.translations import Translator
+        self.t = Translator(language)
         
         self.history: List[Tuple[str, ShellResult]] = []
         self.running_process: Optional[subprocess.Popen] = None
@@ -154,6 +158,92 @@ Response: {{"understood": true, "function": "stop", "parameters": {{}}, "shell_c
                 function_name="exit",
                 shell_command="exit",
                 explanation="Exit the shell",
+            )
+        
+        # Quick pattern matching for common commands (fallback if LLM fails)
+        if "track" in lower and "speak" in lower:
+            target = "person"
+            if "car" in lower:
+                target = "car"
+            elif "animal" in lower:
+                target = "animal"
+            # Include language for TTS
+            lang_param = f"--lang {self.language}" if hasattr(self, 'language') and self.language != 'en' else ""
+            return ShellResult(
+                understood=True,
+                function_name="narrate",
+                shell_command=f"sq live narrator --mode track --focus {target} --duration 60 --tts --tts-diff --model llava:7b --skip-checks {lang_param}".strip(),
+                explanation=f"Track {target} and speak results",
+            )
+        
+        # Track without speak - offer options
+        if "track" in lower and "speak" not in lower:
+            target = "person"
+            if "car" in lower:
+                target = "car"
+            # Include language for TTS options
+            lang_param = f"--lang {self.language}" if hasattr(self, 'language') and self.language != 'en' else ""
+            
+            # Translated target and option texts
+            target_tr = self.t.translate_target(target)
+            opt_tts = self.t.conv("option_tts")
+            opt_silent = self.t.conv("option_silent")
+            opt_email = self.t.conv("option_email")
+            question = self.t.conv("how_would_you_like", action=f"{self.t.cmd('tracking')} {target_tr}")
+            
+            return ShellResult(
+                understood=True,
+                function_name="clarify",
+                options=[
+                    ("1", f"{self.t.cmd('tracking')} {target_tr} {opt_tts}", f"sq live narrator --mode track --focus {target} --duration 60 --tts --tts-diff --model llava:7b --skip-checks {lang_param}".strip()),
+                    ("2", f"{self.t.cmd('tracking')} {target_tr} {opt_silent}", f"sq live narrator --mode track --focus {target} --duration 60 --model llava:7b --skip-checks"),
+                    ("3", f"{self.t.cmd('tracking')} {target_tr} {opt_email}", "need_email"),
+                ],
+                explanation=question,
+            )
+        
+        if "detect" in lower and "email" in lower:
+            # Extract email
+            import re
+            email_match = re.search(r'[\w.+-]+@[\w.-]+\.\w+', user_input)
+            email = email_match.group(0) if email_match else None
+            target = "person"
+            if not email:
+                return ShellResult(
+                    understood=True,
+                    function_name="need_input",
+                    input_type="email",
+                    explanation="Please provide email address (you can spell it)",
+                    pending_command=f"SQ_NOTIFY_EMAIL={{email}} sq live narrator --mode track --focus {target} --duration 60 --skip-checks --adaptive",
+                )
+            return ShellResult(
+                understood=True,
+                function_name="notify_email",
+                shell_command=f"SQ_NOTIFY_EMAIL={email} sq live narrator --mode track --focus {target} --duration 60 --skip-checks --adaptive",
+                explanation=f"Detect {target} and email {email}",
+            )
+        
+        if lower.startswith("detect ") or lower.startswith("find "):
+            target = lower.replace("detect ", "").replace("find ", "").split()[0] or "person"
+            return ShellResult(
+                understood=True,
+                function_name="detect",
+                shell_command=f"sq live narrator --mode track --focus {target} --duration 60 --skip-checks --adaptive",
+                explanation=f"Detect {target}",
+            )
+        
+        # Greeting or unclear - show options
+        if lower in ("hello", "hi", "hey", "help me", "what can you do"):
+            return ShellResult(
+                understood=True,
+                function_name="clarify",
+                options=[
+                    ("1", "Track person and speak", "sq live narrator --mode track --focus person --duration 60 --tts --tts-diff --model llava:7b --skip-checks"),
+                    ("2", "Detect person silently", "sq live narrator --mode track --focus person --duration 60 --skip-checks --adaptive"),
+                    ("3", "Detect and email me", "need_email"),
+                    ("4", "Show all functions", "functions"),
+                ],
+                explanation="What would you like to do? Say a number:",
             )
         
         if lower == "help":
@@ -213,6 +303,13 @@ Remember to respond with only valid JSON."""
             # Parse JSON response
             data = json.loads(response)
             
+            # Handle nested response from some models
+            if "response" in data and isinstance(data["response"], str):
+                try:
+                    data = json.loads(data["response"])
+                except:
+                    pass
+            
             return ShellResult(
                 understood=data.get("understood", False),
                 function_name=data.get("function"),
@@ -223,6 +320,17 @@ Remember to respond with only valid JSON."""
             )
             
         except json.JSONDecodeError as e:
+            # Try to extract command from raw response
+            if "sq " in response:
+                import re
+                match = re.search(r'(sq\s+\w+[^"\'}\]]*)', response)
+                if match:
+                    cmd = match.group(1).strip()
+                    return ShellResult(
+                        understood=True,
+                        shell_command=cmd,
+                        explanation="Extracted command from response",
+                    )
             return ShellResult(
                 understood=False,
                 error=f"Failed to parse LLM response: {e}",
@@ -291,15 +399,22 @@ Remember to respond with only valid JSON."""
         """
         missing = []
         
-        # Check if watch command needs URL
-        if "sq watch" in cmd:
+        # Check if command needs URL
+        needs_url = "sq watch" in cmd or "sq live" in cmd
+        
+        if needs_url:
             has_url = "--url" in cmd or "-u " in cmd
             has_intent = cmd.count('"') >= 2 or cmd.count("'") >= 2  # Has quoted intent
             
             if not has_url and not has_intent:
                 if self.context.get("url"):
                     # Auto-inject URL from context
-                    cmd = cmd.replace("sq watch ", f"sq watch --url {self.context['url']} ", 1)
+                    if "sq watch " in cmd:
+                        cmd = cmd.replace("sq watch ", f"sq watch --url {self.context['url']} ", 1)
+                    elif "sq live narrator" in cmd:
+                        cmd = cmd.replace("sq live narrator ", f"sq live narrator --url {self.context['url']} ", 1)
+                    elif "sq live " in cmd:
+                        cmd = cmd.replace("sq live ", f"sq live --url {self.context['url']} ", 1)
                 else:
                     missing.append("url")
         
@@ -529,11 +644,52 @@ Tips:
                     print(result.explanation)
                     continue
                 
+                # Handle clarification with options
+                if result.function_name == "clarify" and result.options:
+                    print(f"❓ {result.explanation}")
+                    for key, desc, _ in result.options:
+                        print(f"   {key}. {desc}")
+                    
+                    choice = input("   Choice [1-4]: ").strip().lower()
+                    option_map = {"one": "1", "two": "2", "three": "3", "four": "4"}
+                    choice = option_map.get(choice, choice)
+                    
+                    for key, desc, cmd in result.options:
+                        if choice == key:
+                            if cmd == "need_email":
+                                email = input("   Enter email: ").strip()
+                                cmd = f"SQ_NOTIFY_EMAIL={email} sq live narrator --mode track --focus person --duration 60 --skip-checks --adaptive"
+                            elif cmd == "functions":
+                                print(self._list_functions())
+                                continue
+                            
+                            new_result = ShellResult(understood=True, shell_command=cmd, explanation=desc)
+                            print(f"✅ {desc}")
+                            print(f"   Command: {cmd}")
+                            confirm = input("   Execute? [Y/n]: ").strip().lower()
+                            if confirm in ("", "y", "yes"):
+                                self.execute(new_result)
+                            break
+                    continue
+                
+                # Handle need_input for email
+                if result.function_name == "need_input":
+                    print(f"📝 {result.explanation}")
+                    value = input(f"   Enter {result.input_type}: ").strip()
+                    cmd = result.pending_command.replace(f"{{{result.input_type}}}", value)
+                    new_result = ShellResult(understood=True, shell_command=cmd, explanation=f"Using {result.input_type}: {value}")
+                    print(f"   Command: {cmd}")
+                    confirm = input("   Execute? [Y/n]: ").strip().lower()
+                    if confirm in ("", "y", "yes"):
+                        self.execute(new_result)
+                    continue
+                
                 # Show result
                 if not result.understood:
                     print(f"❌ Not understood: {result.explanation}")
                     if result.error:
                         print(f"   Error: {result.error}")
+                    print("   Tip: Say 'hello' for options")
                     continue
                 
                 print(f"✅ {result.explanation}")

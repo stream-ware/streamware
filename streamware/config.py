@@ -136,8 +136,13 @@ DEFAULTS = {
     # Guarder Model Parameters
     "SQ_GUARDER_TIMEOUT": "8",                 # Guarder model request timeout
     "SQ_GUARDER_DEFAULT_MODEL": "qwen2.5:3b",  # Default guarder model
-    "SQ_GUARDER_SMALL_MODELS": "gemma:2b,phi3:mini,llama3.2:latest,deepseek-r1:1.5b",  # Alternative small models
     "SQ_GUARDER_MAX_RESPONSE_LENGTH": "200",   # Maximum response length for guarder
+    
+    # Centralized LLM Model Lists (used by all components)
+    "SQ_FALLBACK_MODELS": "qwen2.5:7b,gemma:2b,llama3.2:latest,phi3:mini",  # Fallback order
+    "SQ_SMALL_MODELS": "gemma:2b,phi3:mini,llama3.2:1b,qwen2.5:3b,deepseek-r1:1.5b",  # Fast/small models
+    "SQ_VISION_MODELS": "llava:7b,llava:13b,moondream,bakllava",  # Vision models
+    "SQ_DECISION_MODEL": "qwen2.5:7b",  # For notifications, intent
     
     # Motion Analysis Parameters
     "SQ_MOTION_ANALYSIS_THRESHOLD": "25",      # Edge detection threshold

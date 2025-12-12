@@ -146,6 +146,8 @@ def handle_live(args: argparse.Namespace) -> int:
     uri += f"&mode={args.mode}"
     if args.focus:
         uri += f"&focus={args.focus}"
+    if hasattr(args, 'lang') and args.lang:
+        uri += f"&lang={args.lang}"
     uri += f"&duration={args.duration}"
     if args.tts:
         uri += "&tts=true"
