@@ -28,6 +28,13 @@ os.environ.setdefault('DISABLE_MODEL_SOURCE_CHECK', 'True')
 # Suppress OpenCV warnings
 os.environ.setdefault('OPENCV_LOG_LEVEL', 'ERROR')
 
+# Import refactored modules
+from .scanner_config import get_config, ScannerConfig, get_combined_config
+from .document_classifier import get_classifier, DocumentClassifier
+from .document_detectors import get_detector_manager, DocumentDetectorManager
+from .web_templates import get_scanner_html_template
+from .yolo_manager import get_yolo_manager, YOLOModelManager, HAS_YOLO
+
 try:
     from aiohttp import web
     HAS_AIOHTTP = True
@@ -401,1026 +408,6 @@ def get_document_detector() -> DocumentDetector:
     return _document_detector
 
 
-class YOLOModelManager:
-    """
-    Dynamic YOLO model manager - downloads and caches models as needed.
-    Supports different models for different detection tasks.
-    """
-    
-    # Available models and their use cases
-    MODELS = {
-        # General object detection (includes book class 73)
-        "yolov8n": {"url": "yolov8n.pt", "classes": "coco", "size": "nano", "speed": "fastest"},
-        "yolov8s": {"url": "yolov8s.pt", "classes": "coco", "size": "small", "speed": "fast"},
-        "yolov8m": {"url": "yolov8m.pt", "classes": "coco", "size": "medium", "speed": "balanced"},
-        "yolov8l": {"url": "yolov8l.pt", "classes": "coco", "size": "large", "speed": "accurate"},
-        
-        # Segmentation models
-        "yolov8n-seg": {"url": "yolov8n-seg.pt", "classes": "coco", "size": "nano", "task": "segment"},
-        "yolov8s-seg": {"url": "yolov8s-seg.pt", "classes": "coco", "size": "small", "task": "segment"},
-    }
-    
-    # COCO classes relevant for documents
-    # 73: book, 84: book (some versions)
-    DOCUMENT_CLASSES = [73]  # book class in COCO
-    PAPER_LIKE_CLASSES = [73, 67, 63]  # book, cell phone (rectangular), laptop
-    
-    def __init__(self, model_dir: Path = None):
-        self.model_dir = model_dir or Path.home() / ".streamware" / "models" / "yolo"
-        self.model_dir.mkdir(parents=True, exist_ok=True)
-        self.loaded_models: Dict[str, Any] = {}
-        self.current_model: Optional[Any] = None
-        self.current_model_name: Optional[str] = None
-    
-    def get_model(self, model_name: str = "yolov8n") -> Optional[Any]:
-        """Get or download a YOLO model."""
-        if not HAS_YOLO:
-            print("   ⚠️ YOLO nie zainstalowany. Zainstaluj: pip install ultralytics")
-            return None
-        
-        if model_name in self.loaded_models:
-            return self.loaded_models[model_name]
-        
-        model_info = self.MODELS.get(model_name)
-        if not model_info:
-            print(f"   ⚠️ Nieznany model: {model_name}")
-            return None
-        
-        try:
-            print(f"   📥 Ładowanie modelu YOLO: {model_name}...")
-            # YOLO automatically downloads if not present
-            model = YOLO(model_info["url"])
-            self.loaded_models[model_name] = model
-            self.current_model = model
-            self.current_model_name = model_name
-            print(f"   ✅ Model {model_name} załadowany")
-            return model
-        except Exception as e:
-            print(f"   ❌ Błąd ładowania modelu {model_name}: {e}")
-            return None
-    
-    def detect(self, frame: np.ndarray, model_name: str = "yolov8n", 
-               conf_threshold: float = 0.3, classes: List[int] = None) -> Dict[str, Any]:
-        """
-        Run YOLO detection on frame.
-        Returns detection results with bounding boxes and confidence.
-        """
-        result = {
-            "detected": False,
-            "confidence": 0.0,
-            "bbox": None,
-            "class_name": None,
-            "all_detections": [],
-        }
-        
-        model = self.get_model(model_name)
-        if model is None:
-            return result
-        
-        try:
-            # Run inference
-            results = model(frame, conf=conf_threshold, verbose=False)
-            
-            if len(results) > 0 and len(results[0].boxes) > 0:
-                boxes = results[0].boxes
-                
-                # Filter by classes if specified
-                target_classes = classes or self.DOCUMENT_CLASSES
-                
-                best_conf = 0
-                best_box = None
-                best_class = None
-                
-                for i, box in enumerate(boxes):
-                    cls_id = int(box.cls[0])
-                    conf = float(box.conf[0])
-                    
-                    # Check if this is a document-like class or any class if not filtering
-                    if classes is None or cls_id in target_classes:
-                        if conf > best_conf:
-                            best_conf = conf
-                            best_box = box.xyxy[0].cpu().numpy()  # x1, y1, x2, y2
-                            best_class = cls_id
-                    
-                    # Store all detections
-                    result["all_detections"].append({
-                        "class_id": cls_id,
-                        "class_name": results[0].names.get(cls_id, "unknown"),
-                        "confidence": conf,
-                        "bbox": box.xyxy[0].cpu().numpy().tolist(),
-                    })
-                
-                if best_box is not None:
-                    x1, y1, x2, y2 = best_box
-                    result["detected"] = True
-                    result["confidence"] = best_conf
-                    result["bbox"] = (int(x1), int(y1), int(x2 - x1), int(y2 - y1))
-                    result["class_name"] = results[0].names.get(best_class, "unknown")
-        
-        except Exception as e:
-            print(f"   ⚠️ YOLO detection error: {e}")
-        
-        return result
-    
-    def detect_documents(self, frame: np.ndarray, conf_threshold: float = 0.25) -> Dict[str, Any]:
-        """Detect documents (books, papers) in frame."""
-        return self.detect(frame, model_name="yolov8n", conf_threshold=conf_threshold, 
-                          classes=self.DOCUMENT_CLASSES)
-    
-    def detect_any(self, frame: np.ndarray, conf_threshold: float = 0.3) -> Dict[str, Any]:
-        """Detect any objects in frame (no class filter)."""
-        return self.detect(frame, model_name="yolov8n", conf_threshold=conf_threshold, 
-                          classes=None)
-
-
-# Global YOLO manager instance
-_yolo_manager: Optional[YOLOModelManager] = None
-
-def get_yolo_manager() -> YOLOModelManager:
-    """Get or create global YOLO manager."""
-    global _yolo_manager
-    if _yolo_manager is None:
-        _yolo_manager = YOLOModelManager()
-    return _yolo_manager
-
-
-# HTML Template for the web interface
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="pl">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>📄 Streamware Accounting - Live Scanner</title>
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: #eee;
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-        header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-            padding: 15px 20px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 12px;
-        }
-        h1 { font-size: 1.5rem; }
-        .status {
-            display: flex;
-            gap: 20px;
-            align-items: center;
-        }
-        .status-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 16px;
-            background: rgba(255,255,255,0.1);
-            border-radius: 20px;
-            font-size: 0.9rem;
-        }
-        .status-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background: #4ade80;
-            animation: pulse 2s infinite;
-        }
-        .status-dot.paused { background: #fbbf24; animation: none; }
-        .status-dot.error { background: #f87171; animation: none; }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        .main-grid {
-            display: grid;
-            grid-template-columns: 320px 1fr;
-            gap: 15px;
-            height: calc(100vh - 100px);
-        }
-        @media (max-width: 1200px) {
-            .main-grid { grid-template-columns: 1fr; height: auto; }
-        }
-        .docs-table-container {
-            flex: 1;
-            overflow: auto;
-            background: rgba(0,0,0,0.3);
-            border-radius: 8px;
-        }
-        .docs-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.85rem;
-        }
-        .docs-table th {
-            background: #334155;
-            padding: 10px 8px;
-            text-align: left;
-            position: sticky;
-            top: 0;
-            cursor: pointer;
-        }
-        .docs-table th:hover { background: #475569; }
-        .docs-table td {
-            padding: 8px;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-        }
-        .docs-table tr:hover { background: rgba(255,255,255,0.05); }
-        .docs-table tr.pending { background: rgba(234,179,8,0.15); }
-        .docs-table .thumb { width: 50px; height: 35px; object-fit: cover; border-radius: 4px; }
-        .badge { padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; }
-        .badge-invoice { background: #3b82f6; }
-        .badge-receipt { background: #22c55e; }
-        .badge-letter { background: #8b5cf6; }
-        .badge-other { background: #6b7280; }
-        .filter-bar {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            margin-bottom: 10px;
-        }
-        .filter-bar select {
-            padding: 6px 10px;
-            border-radius: 4px;
-            background: rgba(0,0,0,0.3);
-            border: 1px solid rgba(255,255,255,0.2);
-            color: white;
-            font-size: 0.8rem;
-        }
-        .stats-row {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 10px;
-        }
-        .stat-card {
-            background: rgba(255,255,255,0.08);
-            padding: 8px 15px;
-            border-radius: 6px;
-            text-align: center;
-        }
-        .stat-value { font-size: 1.3rem; font-weight: 700; color: #60a5fa; }
-        .stat-label { font-size: 0.7rem; color: #888; }
-        .panel {
-            background: rgba(255,255,255,0.05);
-            border-radius: 12px;
-            padding: 20px;
-        }
-        .panel-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-        }
-        .panel-title { font-size: 1.1rem; font-weight: 600; }
-        .preview-container {
-            position: relative;
-            background: #000;
-            border-radius: 8px;
-            overflow: hidden;
-            aspect-ratio: 16/9;
-        }
-        #preview-img {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-        }
-        .preview-overlay {
-            position: absolute;
-            bottom: 10px;
-            left: 10px;
-            right: 10px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .preview-info {
-            background: rgba(0,0,0,0.7);
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-size: 0.85rem;
-        }
-        .controls {
-            display: flex;
-            gap: 10px;
-            margin-top: 15px;
-            flex-wrap: wrap;
-        }
-        button {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 8px;
-            font-size: 0.9rem;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .btn-primary {
-            background: #3b82f6;
-            color: white;
-        }
-        .btn-primary:hover { background: #2563eb; }
-        .btn-success {
-            background: #22c55e;
-            color: white;
-        }
-        .btn-success:hover { background: #16a34a; }
-        .btn-warning {
-            background: #f59e0b;
-            color: white;
-        }
-        .btn-warning:hover { background: #d97706; }
-        .btn-danger {
-            background: #ef4444;
-            color: white;
-        }
-        .btn-danger:hover { background: #dc2626; }
-        .documents-list {
-            max-height: 500px;
-            overflow-y: auto;
-        }
-        .document-item {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 12px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 8px;
-            margin-bottom: 10px;
-            transition: background 0.2s;
-        }
-        .document-item:hover {
-            background: rgba(255,255,255,0.1);
-        }
-        .document-item.new {
-            animation: highlight 2s ease-out;
-        }
-        @keyframes highlight {
-            0% { background: rgba(74, 222, 128, 0.3); }
-            100% { background: rgba(255,255,255,0.05); }
-        }
-        .doc-icon {
-            font-size: 2rem;
-        }
-        .doc-info { flex: 1; }
-        .doc-type {
-            font-weight: 600;
-            margin-bottom: 4px;
-        }
-        .doc-meta {
-            font-size: 0.8rem;
-            color: #aaa;
-        }
-        .doc-amount {
-            font-size: 1.1rem;
-            font-weight: 600;
-            color: #4ade80;
-        }
-        .summary-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-        .summary-card {
-            background: rgba(255,255,255,0.05);
-            padding: 15px;
-            border-radius: 8px;
-            text-align: center;
-        }
-        .summary-value {
-            font-size: 1.8rem;
-            font-weight: 700;
-            color: #60a5fa;
-        }
-        .summary-label {
-            font-size: 0.85rem;
-            color: #aaa;
-            margin-top: 5px;
-        }
-        .log-panel {
-            margin-top: 20px;
-        }
-        .log-content {
-            background: #0d1117;
-            border-radius: 8px;
-            padding: 15px;
-            font-family: 'Fira Code', monospace;
-            font-size: 0.8rem;
-            max-height: 200px;
-            overflow-y: auto;
-        }
-        .log-entry {
-            margin-bottom: 5px;
-            opacity: 0.8;
-        }
-        .log-entry.info { color: #58a6ff; }
-        .log-entry.success { color: #3fb950; }
-        .log-entry.warning { color: #d29922; }
-        .log-entry.error { color: #f85149; }
-        .settings-row {
-            display: flex;
-            align-items: center;
-            gap: 15px;
-            margin-bottom: 10px;
-        }
-        .settings-row label {
-            min-width: 120px;
-        }
-        input[type="range"] {
-            flex: 1;
-        }
-        input[type="checkbox"] {
-            width: 20px;
-            height: 20px;
-        }
-        select {
-            padding: 8px 12px;
-            border-radius: 6px;
-            background: rgba(255,255,255,0.1);
-            border: 1px solid rgba(255,255,255,0.2);
-            color: white;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <header>
-            <h1>📄 Streamware Accounting - Live Scanner</h1>
-            <div class="status">
-                <div class="status-item">
-                    <div class="status-dot" id="status-dot"></div>
-                    <span id="status-text">Skanowanie aktywne</span>
-                </div>
-                <div class="status-item">
-                    <span>Projekt:</span>
-                    <strong id="project-name">-</strong>
-                </div>
-            </div>
-        </header>
-
-        <div class="main-grid">
-            <!-- Left Sidebar: Preview + Controls -->
-            <div class="left-column" style="display:flex;flex-direction:column;gap:10px;">
-                <div class="panel" style="padding:10px;">
-                    <div class="preview-container" style="aspect-ratio:4/3;">
-                        <img id="preview-img" src="" alt="Preview">
-                        <div class="preview-overlay">
-                            <div class="preview-info" id="detection-info">Oczekiwanie...</div>
-                        </div>
-                    </div>
-                    <div class="controls" style="margin-top:8px;justify-content:center;">
-                        <button class="btn-primary" onclick="toggleScanning()" style="padding:6px 12px;">
-                            <span id="scan-btn-icon">⏸️</span>
-                        </button>
-                        <button class="btn-success" onclick="captureNow()" style="padding:6px 12px;">📷</button>
-                        <button class="btn-warning" onclick="exportCSV()" style="padding:6px 12px;">📊</button>
-                    </div>
-                </div>
-                
-                <div class="panel" style="padding:10px;flex:1;overflow:hidden;display:flex;flex-direction:column;">
-                    <div style="font-weight:600;margin-bottom:8px;">📋 Log</div>
-                    <div class="log-content" id="log-content" style="flex:1;max-height:none;"></div>
-                </div>
-            </div>
-
-            <!-- Main Content: Stats + Filters + Documents Table -->
-            <div class="right-column" style="display:flex;flex-direction:column;gap:10px;overflow:hidden;">
-                <!-- Stats Row -->
-                <div class="stats-row">
-                    <div class="stat-card"><div class="stat-value" id="total-docs">0</div><div class="stat-label">Dokumenty</div></div>
-                    <div class="stat-card"><div class="stat-value" id="total-invoices">0</div><div class="stat-label">Faktury</div></div>
-                    <div class="stat-card"><div class="stat-value" id="total-receipts">0</div><div class="stat-label">Paragony</div></div>
-                    <div class="stat-card"><div class="stat-value" id="total-amount">0 zł</div><div class="stat-label">Suma</div></div>
-                    <div class="stat-card"><div class="stat-value" id="pending-count-stat">0</div><div class="stat-label">Oczekuje</div></div>
-                </div>
-                
-                <!-- Filters -->
-                <div class="filter-bar">
-                    <select id="filter-type" onchange="filterDocs()">
-                        <option value="">Wszystkie typy</option>
-                        <option value="invoice">Faktury</option>
-                        <option value="receipt">Paragony</option>
-                        <option value="letter">Pisma</option>
-                        <option value="other">Inne</option>
-                    </select>
-                    <select id="filter-lang" onchange="filterDocs()">
-                        <option value="">Wszystkie języki</option>
-                        <option value="pl">Polski</option>
-                        <option value="en">English</option>
-                        <option value="de">Deutsch</option>
-                    </select>
-                    <select id="filter-status" onchange="filterDocs()">
-                        <option value="">Wszystkie statusy</option>
-                        <option value="pending">Oczekujące</option>
-                        <option value="saved">Zapisane</option>
-                    </select>
-                    <input type="text" id="filter-search" placeholder="Szukaj..." onkeyup="filterDocs()" style="flex:1;min-width:150px;">
-                </div>
-                
-                <!-- Documents Table -->
-                <div class="docs-table-container">
-                    <table class="docs-table">
-                        <thead>
-                            <tr>
-                                <th style="width:60px;">Foto</th>
-                                <th onclick="sortDocs('type')">Typ ▼</th>
-                                <th onclick="sortDocs('date')">Data ▼</th>
-                                <th onclick="sortDocs('amount')">Kwota ▼</th>
-                                <th>NIP/ID</th>
-                                <th>Język</th>
-                                <th>OCR</th>
-                                <th style="width:80px;">Akcje</th>
-                            </tr>
-                        </thead>
-                        <tbody id="docs-table-body">
-                            <tr><td colspan="8" style="text-align:center;color:#888;padding:40px;">Brak dokumentów</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        // Documents data store
-        let allDocs = [];
-        let sortField = 'date';
-        let sortDir = -1;
-        let ws;
-        let scanning = true;
-        let frameCount = 0;
-        let lastFpsUpdate = Date.now();
-
-        function connect() {
-            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(`${protocol}//${location.host}/ws`);
-
-            ws.onopen = () => {
-                log('Połączono z serwerem', 'success');
-                updateStatus('active');
-            };
-
-            ws.onclose = () => {
-                log('Rozłączono - ponawiam za 2s...', 'warning');
-                updateStatus('error');
-                setTimeout(connect, 2000);
-            };
-
-            ws.onerror = (e) => {
-                log('Błąd WebSocket', 'error');
-            };
-
-            ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                handleMessage(data);
-            };
-        }
-
-        function handleMessage(data) {
-            switch(data.type) {
-                case 'frame':
-                    updatePreview(data);
-                    break;
-                case 'document':
-                    addDocument(data.document);
-                    log(`Zarchiwizowano: ${data.document.type} - ${data.document.id}`, 'success');
-                    break;
-                case 'summary':
-                    updateSummary(data.summary);
-                    break;
-                case 'config':
-                    document.getElementById('project-name').textContent = data.project;
-                    break;
-                case 'log':
-                    log(data.message, data.level || 'info');
-                    break;
-                case 'pending_documents':
-                    // Add pending documents to the list
-                    data.documents.forEach(doc => addPendingDocument(doc));
-                    break;
-                case 'pending_document':
-                    // Single pending document added
-                    addPendingDocument(data.document);
-                    break;
-                case 'documents_list':
-                    showDocumentsList(data.documents);
-                    break;
-                case 'document_detail':
-                    showDocumentDetail(data.document);
-                    break;
-            }
-        }
-        
-        function showPendingDocuments(docs) {
-            const modal = document.getElementById('pending-modal');
-            const list = document.getElementById('pending-list');
-            list.innerHTML = '';
-            
-            if (docs.length === 0) {
-                list.innerHTML = '<p style="color:#888;text-align:center;">Brak dokumentów do potwierdzenia</p>';
-            } else {
-                docs.forEach((doc, i) => {
-                    const item = document.createElement('div');
-                    item.className = 'pending-item';
-                    item.innerHTML = `
-                        <img src="data:image/jpeg;base64,${doc.image}" style="max-width:150px;max-height:100px;border-radius:4px;">
-                        <div style="flex:1;padding:0 10px;">
-                            <div style="font-weight:bold;">${doc.doc_type}</div>
-                            <div style="color:#888;font-size:12px;">Pewność: ${Math.round(doc.confidence*100)}%</div>
-                        </div>
-                        <div>
-                            <button onclick="confirmDoc(${doc.id})" style="background:#22c55e;color:white;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;margin-right:5px;">✓</button>
-                            <button onclick="rejectDoc(${doc.id})" style="background:#ef4444;color:white;border:none;padding:8px 16px;border-radius:4px;cursor:pointer;">✗</button>
-                        </div>
-                    `;
-                    list.appendChild(item);
-                });
-            }
-            modal.style.display = 'flex';
-        }
-        
-        function confirmDoc(id) {
-            ws.send(JSON.stringify({action: 'confirm_document', id: id}));
-            ws.send(JSON.stringify({action: 'get_pending'}));
-        }
-        
-        function rejectDoc(id) {
-            ws.send(JSON.stringify({action: 'reject_document', id: id}));
-            ws.send(JSON.stringify({action: 'get_pending'}));
-        }
-        
-        function confirmAllDocs() {
-            ws.send(JSON.stringify({action: 'confirm_all'}));
-            closePendingModal();
-        }
-        
-        function rejectAllDocs() {
-            ws.send(JSON.stringify({action: 'reject_all'}));
-            closePendingModal();
-        }
-        
-        function showPendingModal() {
-            ws.send(JSON.stringify({action: 'get_pending'}));
-        }
-        
-        function closePendingModal() {
-            document.getElementById('pending-modal').style.display = 'none';
-        }
-        
-        function showDocumentsList(docs) {
-            const modal = document.getElementById('docs-modal');
-            const table = document.getElementById('docs-table-body');
-            table.innerHTML = '';
-            
-            docs.forEach(doc => {
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${doc.id || '-'}</td>
-                    <td>${doc.type || '-'}</td>
-                    <td>${doc.date || '-'}</td>
-                    <td>${doc.amount ? doc.amount + ' zł' : '-'}</td>
-                    <td>${doc.nip || '-'}</td>
-                    <td><button onclick="showDocDetail('${doc.id}')" style="background:#3b82f6;color:white;border:none;padding:4px 8px;border-radius:4px;cursor:pointer;">Szczegóły</button></td>
-                `;
-                table.appendChild(row);
-            });
-            modal.style.display = 'flex';
-        }
-        
-        function showDocDetail(docId) {
-            ws.send(JSON.stringify({action: 'get_ocr_data', doc_id: docId}));
-        }
-        
-        function showDocumentDetail(doc) {
-            alert('Szczegóły dokumentu:\\n' + JSON.stringify(doc, null, 2));
-        }
-        
-        function showDocsModal() {
-            ws.send(JSON.stringify({action: 'get_documents'}));
-        }
-        
-        function closeDocsModal() {
-            document.getElementById('docs-modal').style.display = 'none';
-        }
-
-        function updatePreview(data) {
-            const img = document.getElementById('preview-img');
-            img.src = 'data:image/jpeg;base64,' + data.image;
-
-            frameCount++;
-            const now = Date.now();
-            if (now - lastFpsUpdate > 1000) {
-                document.getElementById('fps-counter').textContent = frameCount + ' FPS';
-                frameCount = 0;
-                lastFpsUpdate = now;
-            }
-
-            const info = document.getElementById('detection-info');
-            if (data.document_in_view) {
-                const conf = Math.round((data.confidence || 0) * 100);
-                const docType = data.doc_type || 'dokument';
-                const method = data.method || '';
-                info.textContent = `🔍 ${docType} (${conf}%) [${method}]`;
-                info.style.background = conf >= 85 ? 'rgba(34, 197, 94, 0.9)' : 
-                                        conf >= 60 ? 'rgba(234, 179, 8, 0.9)' : 
-                                        'rgba(59, 130, 246, 0.8)';
-            } else {
-                info.textContent = 'Oczekiwanie na dokument...';
-                info.style.background = 'rgba(0,0,0,0.7)';
-            }
-            
-            // Update pending count badge
-            const pendingBadge = document.getElementById('pending-badge');
-            if (pendingBadge) {
-                const count = data.pending_count || 0;
-                pendingBadge.textContent = count;
-                pendingBadge.style.display = count > 0 ? 'inline-block' : 'none';
-            }
-        }
-
-        function updateSummary(summary) {
-            document.getElementById('total-docs').textContent = summary.total_documents || 0;
-            document.getElementById('total-invoices').textContent = summary.by_type?.invoice || 0;
-            document.getElementById('total-receipts').textContent = summary.by_type?.receipt || 0;
-            const total = (summary.total_amounts?.invoices || 0) + (summary.total_amounts?.receipts || 0);
-            document.getElementById('total-amount').textContent = Math.round(total) + ' zł';
-        }
-
-        function addDocument(doc) {
-            // Add to data store
-            const existingIdx = allDocs.findIndex(d => d.id === doc.id);
-            if (existingIdx >= 0) {
-                allDocs[existingIdx] = {...allDocs[existingIdx], ...doc};
-            } else {
-                allDocs.unshift(doc);
-            }
-            renderDocsTable();
-            updateStats();
-        }
-        
-        function addPendingDocument(doc) {
-            addDocument({
-                ...doc,
-                pending: true,
-                type: doc.doc_type || doc.type || 'dokument',
-                date: new Date().toLocaleTimeString('pl-PL', {hour:'2-digit', minute:'2-digit'}),
-            });
-        }
-        
-        function renderDocsTable() {
-            const tbody = document.getElementById('docs-table-body');
-            const filtered = getFilteredDocs();
-            
-            if (filtered.length === 0) {
-                tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#888;padding:40px;">Brak dokumentów</td></tr>';
-                return;
-            }
-            
-            // Sort
-            filtered.sort((a, b) => {
-                let va = a[sortField] || '';
-                let vb = b[sortField] || '';
-                if (sortField === 'amount') {
-                    va = parseFloat(va) || 0;
-                    vb = parseFloat(vb) || 0;
-                }
-                return va > vb ? sortDir : va < vb ? -sortDir : 0;
-            });
-            
-            tbody.innerHTML = filtered.map(doc => {
-                const isPending = doc.pending === true;
-                const typeClass = doc.type === 'invoice' ? 'badge-invoice' : doc.type === 'receipt' ? 'badge-receipt' : doc.type === 'letter' ? 'badge-letter' : 'badge-other';
-                const typeName = doc.type === 'invoice' ? 'Faktura' : doc.type === 'receipt' ? 'Paragon' : doc.type === 'paragon' ? 'Paragon' : doc.type === 'faktura' ? 'Faktura' : doc.type || 'Dokument';
-                const lang = doc.lang || detectLang(doc.ocr_text);
-                const ocrPreview = doc.ocr_text ? doc.ocr_text.substring(0, 50) + '...' : '-';
-                
-                return `<tr class="${isPending ? 'pending' : ''}" data-id="${doc.id}">
-                    <td>${doc.thumbnail ? `<img src="data:image/jpeg;base64,${doc.thumbnail}" class="thumb">` : '📄'}</td>
-                    <td><span class="badge ${typeClass}">${typeName}</span>${isPending ? ' ⏳' : ''}</td>
-                    <td>${doc.date || '-'}</td>
-                    <td>${doc.amount ? doc.amount + ' zł' : '-'}</td>
-                    <td>${doc.nip || doc.id || '-'}</td>
-                    <td>${lang ? `<span class="badge badge-${lang}">${lang.toUpperCase()}</span>` : '-'}</td>
-                    <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${doc.ocr_text || ''}">${ocrPreview}</td>
-                    <td>
-                        ${isPending ? `<button onclick="confirmDoc(${doc.id})" style="background:#22c55e;color:white;border:none;padding:3px 8px;border-radius:4px;cursor:pointer;margin-right:4px;">✓</button>` : ''}
-                        <button onclick="removeDoc(${doc.id}, ${isPending})" style="background:#ef4444;color:white;border:none;padding:3px 8px;border-radius:4px;cursor:pointer;">✗</button>
-                    </td>
-                </tr>`;
-            }).join('');
-        }
-        
-        function getFilteredDocs() {
-            const typeFilter = document.getElementById('filter-type').value;
-            const langFilter = document.getElementById('filter-lang').value;
-            const statusFilter = document.getElementById('filter-status').value;
-            const search = document.getElementById('filter-search').value.toLowerCase();
-            
-            return allDocs.filter(doc => {
-                if (typeFilter && doc.type !== typeFilter && doc.type !== (typeFilter === 'receipt' ? 'paragon' : typeFilter === 'invoice' ? 'faktura' : typeFilter)) return false;
-                if (langFilter && (doc.lang || detectLang(doc.ocr_text)) !== langFilter) return false;
-                if (statusFilter === 'pending' && !doc.pending) return false;
-                if (statusFilter === 'saved' && doc.pending) return false;
-                if (search && !JSON.stringify(doc).toLowerCase().includes(search)) return false;
-                return true;
-            });
-        }
-        
-        function detectLang(text) {
-            if (!text) return null;
-            const t = text.toLowerCase();
-            if (t.includes('faktura') || t.includes('paragon') || t.includes('nip') || t.includes('zł')) return 'pl';
-            if (t.includes('invoice') || t.includes('receipt') || t.includes('total')) return 'en';
-            if (t.includes('rechnung') || t.includes('quittung') || t.includes('€')) return 'de';
-            return null;
-        }
-        
-        function sortDocs(field) {
-            if (sortField === field) sortDir *= -1;
-            else { sortField = field; sortDir = -1; }
-            renderDocsTable();
-        }
-        
-        function filterDocs() {
-            renderDocsTable();
-        }
-        
-        function confirmDoc(docId) {
-            ws.send(JSON.stringify({action: 'confirm_document', id: docId}));
-            const doc = allDocs.find(d => d.id === docId);
-            if (doc) { doc.pending = false; }
-            renderDocsTable();
-            updateStats();
-            log('✅ Zapisano dokument', 'success');
-        }
-        
-        function removeDoc(docId, isPending) {
-            if (isPending) {
-                ws.send(JSON.stringify({action: 'reject_document', id: docId}));
-            }
-            allDocs = allDocs.filter(d => d.id !== docId);
-            renderDocsTable();
-            updateStats();
-        }
-        
-        function updateStats() {
-            const pending = allDocs.filter(d => d.pending).length;
-            const saved = allDocs.filter(d => !d.pending).length;
-            const invoices = allDocs.filter(d => d.type === 'invoice' || d.type === 'faktura').length;
-            const receipts = allDocs.filter(d => d.type === 'receipt' || d.type === 'paragon').length;
-            const totalAmount = allDocs.reduce((sum, d) => sum + (parseFloat(d.amount) || 0), 0);
-            
-            document.getElementById('total-docs').textContent = allDocs.length;
-            document.getElementById('total-invoices').textContent = invoices;
-            document.getElementById('total-receipts').textContent = receipts;
-            document.getElementById('total-amount').textContent = totalAmount.toFixed(0) + ' zł';
-            document.getElementById('pending-count-stat').textContent = pending;
-        }
-
-        function updateStatus(status) {
-            const dot = document.getElementById('status-dot');
-            const text = document.getElementById('status-text');
-
-            dot.className = 'status-dot';
-            if (status === 'active') {
-                text.textContent = 'Skanowanie aktywne';
-            } else if (status === 'paused') {
-                dot.classList.add('paused');
-                text.textContent = 'Wstrzymane';
-            } else if (status === 'error') {
-                dot.classList.add('error');
-                text.textContent = 'Błąd połączenia';
-            }
-        }
-
-        function toggleScanning() {
-            scanning = !scanning;
-            ws.send(JSON.stringify({ action: 'toggle', scanning: scanning }));
-
-            const icon = document.getElementById('scan-btn-icon');
-            const text = document.getElementById('scan-btn-text');
-
-            if (scanning) {
-                icon.textContent = '⏸️';
-                text.textContent = 'Pauza';
-                updateStatus('active');
-            } else {
-                icon.textContent = '▶️';
-                text.textContent = 'Wznów';
-                updateStatus('paused');
-            }
-        }
-
-        function captureNow() {
-            ws.send(JSON.stringify({ action: 'capture' }));
-            log('Wymuszono skan...', 'info');
-        }
-
-        function exportCSV() {
-            window.open('/export/csv', '_blank');
-            log('Eksportowanie CSV...', 'info');
-        }
-
-        function log(message, level = 'info') {
-            const content = document.getElementById('log-content');
-            const time = new Date().toLocaleTimeString();
-            const entry = document.createElement('div');
-            entry.className = `log-entry ${level}`;
-            entry.textContent = `[${time}] ${message}`;
-            content.appendChild(entry);
-            content.scrollTop = content.scrollHeight;
-        }
-
-        function clearLog() {
-            document.getElementById('log-content').innerHTML = '';
-        }
-
-        // Settings handlers (only if elements exist)
-        const intervalSlider = document.getElementById('interval-slider');
-        if (intervalSlider) {
-            intervalSlider.addEventListener('input', (e) => {
-                const val = e.target.value;
-                document.getElementById('interval-value').textContent = val + 's';
-                ws.send(JSON.stringify({ action: 'set_interval', interval: parseFloat(val) }));
-            });
-        }
-
-        const confSlider = document.getElementById('confidence-slider');
-        if (confSlider) {
-            confSlider.addEventListener('input', (e) => {
-                const val = e.target.value;
-                document.getElementById('confidence-value').textContent = Math.round(val * 100) + '%';
-                ws.send(JSON.stringify({ action: 'set_confidence', confidence: parseFloat(val) }));
-            });
-        }
-
-        const autoArchive = document.getElementById('auto-archive');
-        if (autoArchive) {
-            autoArchive.addEventListener('change', (e) => {
-                ws.send(JSON.stringify({ action: 'set_auto_archive', enabled: e.target.checked }));
-            });
-        }
-
-        // Start
-        connect();
-    </script>
-    
-    <!-- Modal: Pending Documents -->
-    <div id="pending-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:1000;align-items:center;justify-content:center;">
-        <div style="background:#1e293b;border-radius:12px;padding:20px;max-width:800px;width:90%;max-height:80vh;overflow-y:auto;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
-                <h2 style="margin:0;">📋 Dokumenty do potwierdzenia</h2>
-                <button onclick="closePendingModal()" style="background:none;border:none;color:white;font-size:24px;cursor:pointer;">×</button>
-            </div>
-            <div id="pending-list" style="display:flex;flex-direction:column;gap:10px;"></div>
-            <div style="display:flex;gap:10px;margin-top:15px;justify-content:flex-end;">
-                <button onclick="confirmAllDocs()" style="background:#22c55e;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;">✓ Potwierdź wszystkie</button>
-                <button onclick="rejectAllDocs()" style="background:#ef4444;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;">✗ Odrzuć wszystkie</button>
-            </div>
-        </div>
-    </div>
-    
-    <!-- Modal: Documents List with OCR Data -->
-    <div id="docs-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.8);z-index:1000;align-items:center;justify-content:center;">
-        <div style="background:#1e293b;border-radius:12px;padding:20px;max-width:1000px;width:95%;max-height:85vh;overflow-y:auto;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
-                <h2 style="margin:0;">📄 Zarchiwizowane dokumenty</h2>
-                <button onclick="closeDocsModal()" style="background:none;border:none;color:white;font-size:24px;cursor:pointer;">×</button>
-            </div>
-            <table style="width:100%;border-collapse:collapse;">
-                <thead>
-                    <tr style="background:#334155;">
-                        <th style="padding:10px;text-align:left;border-bottom:1px solid #475569;">ID</th>
-                        <th style="padding:10px;text-align:left;border-bottom:1px solid #475569;">Typ</th>
-                        <th style="padding:10px;text-align:left;border-bottom:1px solid #475569;">Data</th>
-                        <th style="padding:10px;text-align:left;border-bottom:1px solid #475569;">Kwota</th>
-                        <th style="padding:10px;text-align:left;border-bottom:1px solid #475569;">NIP</th>
-                        <th style="padding:10px;text-align:left;border-bottom:1px solid #475569;">Akcje</th>
-                    </tr>
-                </thead>
-                <tbody id="docs-table-body"></tbody>
-            </table>
-        </div>
-    </div>
-</body>
-</html>
-"""
-
-
 def load_env_config() -> Dict[str, Any]:
     """Load all configuration from .env file."""
     config = {
@@ -1638,6 +625,10 @@ class AccountingWebService:
         self.last_detection_result: Optional[Dict] = None  # Store detection result for confirmation
         self.pending_documents: List[Dict] = []  # Documents waiting for user confirmation
         self.detection_cooldown = 0
+        
+        # Duplicate detection - keep best quality
+        self.recent_documents: List[Dict] = []  # Recent docs for duplicate check
+        self.duplicate_window_sec = 5.0  # Time window for duplicate detection
         self.available_cameras = list_available_cameras(self.env_config)
         
         # Use RTSP from .env if not provided and source is camera
@@ -1674,6 +665,89 @@ class AccountingWebService:
         self.project = self.manager.get_project(project_name) or self.manager.create_project(project_name)
         self.ocr_engine = get_best_ocr_engine()
         self.scanner = InteractiveScanner(self.manager, project_name)
+
+    def _compute_image_hash(self, image_bytes: bytes) -> str:
+        """Compute perceptual hash for image similarity."""
+        import hashlib
+        if not HAS_CV2:
+            return hashlib.md5(image_bytes).hexdigest()
+        
+        try:
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
+            if img is None:
+                return hashlib.md5(image_bytes).hexdigest()
+            
+            # Resize to 8x8 and compute hash
+            resized = cv2.resize(img, (8, 8), interpolation=cv2.INTER_AREA)
+            mean = resized.mean()
+            bits = (resized > mean).flatten()
+            return ''.join(['1' if b else '0' for b in bits])
+        except Exception:
+            return hashlib.md5(image_bytes).hexdigest()
+    
+    def _compute_image_quality(self, image_bytes: bytes) -> float:
+        """Compute image quality score based on sharpness and contrast."""
+        if not HAS_CV2:
+            return len(image_bytes) / 1000000  # Fallback: file size
+        
+        try:
+            nparr = np.frombuffer(image_bytes, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
+            if img is None:
+                return 0.0
+            
+            # Laplacian variance as sharpness metric
+            laplacian = cv2.Laplacian(img, cv2.CV_64F)
+            sharpness = laplacian.var()
+            
+            # Contrast (std of pixel values)
+            contrast = img.std()
+            
+            # Combined score
+            return sharpness * 0.01 + contrast * 0.1
+        except Exception:
+            return 0.0
+    
+    def _is_duplicate(self, image_bytes: bytes, doc_type: str) -> Tuple[bool, Optional[int]]:
+        """Check if document is duplicate. Returns (is_dup, better_idx)."""
+        import time
+        now = time.time()
+        
+        # Clean old entries
+        self.recent_documents = [
+            d for d in self.recent_documents 
+            if now - d["timestamp"] < self.duplicate_window_sec
+        ]
+        
+        # Compute hash and quality
+        new_hash = self._compute_image_hash(image_bytes)
+        new_quality = self._compute_image_quality(image_bytes)
+        
+        # Check for similar documents
+        for i, doc in enumerate(self.recent_documents):
+            if doc["doc_type"] != doc_type:
+                continue
+            
+            # Compare hashes (allow 10% difference for perceptual hash)
+            if len(new_hash) == 64:  # Perceptual hash
+                diff = sum(a != b for a, b in zip(new_hash, doc["hash"]))
+                if diff <= 6:  # Similar images
+                    if new_quality > doc["quality"]:
+                        return True, i  # Duplicate, but new is better
+                    else:
+                        return True, None  # Duplicate, keep old
+        
+        # Not a duplicate - add to recent
+        self.recent_documents.append({
+            "hash": new_hash,
+            "quality": new_quality,
+            "doc_type": doc_type,
+            "timestamp": now,
+            "image_bytes": image_bytes,
+        })
+        
+        return False, None
 
     def _mask_rtsp_url(self, url: str) -> str:
         """Mask password in RTSP URL for display."""
@@ -1923,7 +997,7 @@ class AccountingWebService:
             receipt_result = self.document_detector.detect_receipt_features(frame)
             result["timing"]["receipt"] = (time.time() - t_r) * 1000
             
-            if receipt_result["is_receipt"] and receipt_result["confidence"] > 0.35:
+            if receipt_result["is_receipt"] and receipt_result["confidence"] > 0.55:
                 result["detected"] = True
                 result["confidence"] = receipt_result["confidence"]
                 result["bbox"] = receipt_result.get("bbox")
@@ -1942,7 +1016,7 @@ class AccountingWebService:
             invoice_result = self.document_detector.detect_invoice_features(frame)
             result["timing"]["invoice"] = (time.time() - t_i) * 1000
             
-            if invoice_result["is_invoice"] and invoice_result["confidence"] > 0.35:
+            if invoice_result["is_invoice"] and invoice_result["confidence"] > 0.55:
                 result["detected"] = True
                 result["confidence"] = invoice_result["confidence"]
                 result["bbox"] = invoice_result.get("bbox")
@@ -2141,19 +1215,36 @@ class AccountingWebService:
                                         doc_type = detection.get('document_type') or detection.get('class_name') or 'dokument'
                                         
                                         # Hierarchical decision based on confidence
+                                        image_data = jpeg.tobytes()
+                                        
                                         if detection["confidence"] >= self.auto_save_threshold:
-                                            # High confidence - auto save
-                                            self.last_document_frame = jpeg.tobytes()
-                                            print(f"   📸 Auto-zapis: {doc_type} (pewność: {detection['confidence']:.0%}, metoda: {detection.get('method')}, {total_ms:.0f}ms)")
+                                            # High confidence - check for duplicates first
+                                            is_dup, better_idx = self._is_duplicate(image_data, doc_type)
+                                            
+                                            if is_dup and better_idx is not None:
+                                                # Replace with better quality
+                                                old_doc = self.recent_documents[better_idx]
+                                                self.recent_documents[better_idx]["image_bytes"] = image_data
+                                                self.recent_documents[better_idx]["quality"] = self._compute_image_quality(image_data)
+                                                self.last_document_frame = image_data
+                                                print(f"   📸 Zamieniono na lepszą jakość: {doc_type} (pewność: {detection['confidence']:.0%})")
+                                            elif not is_dup:
+                                                # New document - auto save
+                                                self.last_document_frame = image_data
+                                                print(f"   📸 Auto-zapis: {doc_type} (pewność: {detection['confidence']:.0%}, metoda: {detection.get('method')}, {total_ms:.0f}ms)")
+                                            else:
+                                                print(f"   🔄 Duplikat pominięty (gorsza jakość): {doc_type}")
                                         elif detection["confidence"] >= self.confirm_threshold:
-                                            # Medium confidence - add to pending for confirmation
-                                            self.pending_documents.append({
-                                                "frame": jpeg.tobytes(),
-                                                "detection": detection,
-                                                "timestamp": time.time(),
-                                                "doc_type": doc_type,
-                                            })
-                                            print(f"   🔍 Do potwierdzenia: {doc_type} (pewność: {detection['confidence']:.0%}, {total_ms:.0f}ms)")
+                                            # Medium confidence - check duplicates
+                                            is_dup, _ = self._is_duplicate(image_data, doc_type)
+                                            if not is_dup:
+                                                self.pending_documents.append({
+                                                    "frame": image_data,
+                                                    "detection": detection,
+                                                    "timestamp": time.time(),
+                                                    "doc_type": doc_type,
+                                                })
+                                                print(f"   🔍 Do potwierdzenia: {doc_type} (pewność: {detection['confidence']:.0%}, {total_ms:.0f}ms)")
                                         else:
                                             # Low confidence - just notify
                                             print(f"   👁️ Możliwy dokument: {doc_type} (pewność: {detection['confidence']:.0%}, {total_ms:.0f}ms)")
@@ -2451,10 +1542,23 @@ class AccountingWebService:
 
                     if image_bytes:
                         frame_sent_count += 1
-                        if frame_sent_count <= 3:
-                            print(f"   📡 Wysyłam ramkę #{frame_sent_count} do {len(self.clients)} klientów ({len(image_bytes)} bytes)")
                         # Get detection info
                         detection = self.last_detection_result or {}
+                        
+                        # YAML diagnostic logging (every 10 frames)
+                        if frame_sent_count % 10 == 1 and detection:
+                            yaml_log = self._format_yaml_log({
+                                "scan_frame": frame_sent_count,
+                                "detection": {
+                                    "detected": self.document_detected,
+                                    "type": detection.get("document_type"),
+                                    "confidence": round(detection.get("confidence", 0), 2),
+                                    "method": detection.get("method"),
+                                    "features": detection.get("features", []),
+                                },
+                                "clients": len(self.clients),
+                            })
+                            print(yaml_log)
                         
                         # Send frame with real-time detection status
                         await self.broadcast({
@@ -2559,6 +1663,211 @@ class AccountingWebService:
                 "level": "error"
             })
 
+    async def _deep_analyze(self, ws):
+        """Deep analysis with OCR + LLM (LLaVA-style vision analysis)."""
+        import time
+        t_start = time.time()
+        
+        await ws.send_str(json.dumps({
+            "type": "log",
+            "message": "🔬 Rozpoczynam głęboką analizę...",
+            "level": "info"
+        }))
+        
+        # Capture current frame
+        image_bytes = self.capture()
+        if not image_bytes:
+            await ws.send_str(json.dumps({
+                "type": "log",
+                "message": "❌ Nie można pobrać klatki",
+                "level": "error"
+            }))
+            return
+        
+        timing = {"capture": (time.time() - t_start) * 1000}
+        
+        # Step 1: OCR analysis
+        t_ocr = time.time()
+        temp_path = self.temp_dir / f"deep_analyze_{int(time.time() * 1000)}.jpg"
+        with open(temp_path, 'wb') as f:
+            f.write(image_bytes)
+        
+        ocr_text = ""
+        ocr_confidence = 0.0
+        try:
+            ocr_text, ocr_confidence, _ = self.ocr_engine.extract_text(temp_path, lang="pol")
+            timing["ocr"] = (time.time() - t_ocr) * 1000
+            await ws.send_str(json.dumps({
+                "type": "log",
+                "message": f"📝 OCR: {len(ocr_text)} znaków ({timing['ocr']:.0f}ms)",
+                "level": "info"
+            }))
+        except Exception as e:
+            timing["ocr"] = (time.time() - t_ocr) * 1000
+            await ws.send_str(json.dumps({
+                "type": "log",
+                "message": f"⚠️ OCR error: {e}",
+                "level": "warning"
+            }))
+        
+        # Step 2: LLM classification
+        t_llm = time.time()
+        classifier = get_classifier()
+        llm_result = {}
+        
+        if len(ocr_text) > 50:
+            # Use text-based classification
+            llm_result = classifier.classify_document(ocr_text)
+            timing["llm_text"] = (time.time() - t_llm) * 1000
+            await ws.send_str(json.dumps({
+                "type": "log",
+                "message": f"🤖 LLM klasyfikacja: {llm_result.get('document_type', 'unknown')} ({timing['llm_text']:.0f}ms)",
+                "level": "info"
+            }))
+        else:
+            # Try vision LLM (LLaVA-style) if OCR failed
+            await ws.send_str(json.dumps({
+                "type": "log",
+                "message": "👁️ OCR niewystarczający, próbuję analizy wizyjnej...",
+                "level": "warning"
+            }))
+            llm_result = await self._vision_analyze(image_bytes, ws)
+            timing["llm_vision"] = (time.time() - t_llm) * 1000
+        
+        timing["total"] = (time.time() - t_start) * 1000
+        
+        # Create document entry
+        doc_type = llm_result.get("document_type", "other")
+        confidence = llm_result.get("confidence", 0.5)
+        
+        thumbnail = self._create_thumbnail(image_bytes, max_size=120)
+        doc_id = int(time.time() * 1000) % 100000
+        
+        # Log YAML summary
+        yaml_log = self._format_yaml_log({
+            "action": "deep_analyze",
+            "timestamp": datetime.now().isoformat(),
+            "timing_ms": timing,
+            "ocr_length": len(ocr_text),
+            "ocr_confidence": ocr_confidence,
+            "llm_result": llm_result,
+            "document_type": doc_type,
+            "confidence": confidence,
+        })
+        print(yaml_log)
+        
+        # Create larger thumbnail for better visibility
+        large_thumbnail = self._create_thumbnail(image_bytes, max_size=300)
+        
+        # Send result to browser - add as document (not pending) with full data
+        await ws.send_str(json.dumps({
+            "type": "document",
+            "document": {
+                "id": doc_id,
+                "type": doc_type,
+                "doc_type": doc_type,
+                "confidence": confidence,
+                "thumbnail": base64.b64encode(large_thumbnail).decode() if large_thumbnail else None,
+                "image": base64.b64encode(image_bytes).decode() if image_bytes else None,
+                "ocr_text": ocr_text[:2000] if ocr_text else "",
+                "amount": llm_result.get("total_amount") or llm_result.get("gross_amount"),
+                "nip": llm_result.get("nip") or llm_result.get("seller_nip"),
+                "lang": llm_result.get("language"),
+                "vendor": llm_result.get("vendor_name") or llm_result.get("vendor"),
+                "summary": llm_result.get("summary") or llm_result.get("description"),
+                "pending": False,
+                "date": datetime.now().strftime("%H:%M:%S"),
+                "timestamp": datetime.now().isoformat(),
+            }
+        }))
+        
+        # Store for confirmation
+        self._pending_by_id = getattr(self, '_pending_by_id', {})
+        self._pending_by_id[doc_id] = {
+            "frame": image_bytes,
+            "doc_type": doc_type,
+            "detection": {"confidence": confidence},
+            "ocr_text": ocr_text,
+            "llm_result": llm_result,
+            "timestamp": datetime.now().isoformat(),
+        }
+        
+        await ws.send_str(json.dumps({
+            "type": "log",
+            "message": f"✅ Analiza zakończona: {doc_type} ({confidence:.0%}) w {timing['total']:.0f}ms",
+            "level": "success"
+        }))
+
+    async def _vision_analyze(self, image_bytes: bytes, ws) -> dict:
+        """Analyze image using vision LLM (LLaVA-style)."""
+        try:
+            import litellm
+            
+            # Encode image to base64
+            img_b64 = base64.b64encode(image_bytes).decode()
+            
+            response = litellm.completion(
+                model="gpt-4o-mini",  # or "ollama/llava" for local
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": """Analyze this image of a document. 
+Respond in JSON:
+{
+    "document_type": "invoice|receipt|letter|form|id_document|other",
+    "confidence": 0.0-1.0,
+    "language": "pl|en|de|other",
+    "description": "brief description",
+    "visible_text": "key text visible",
+    "total_amount": number or null,
+    "currency": "PLN|EUR|USD|null"
+}"""},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+                    ]
+                }],
+                temperature=0.1,
+            )
+            
+            content = response.choices[0].message.content
+            # Try to parse JSON from response
+            import re
+            json_match = re.search(r'\{[^{}]+\}', content, re.DOTALL)
+            if json_match:
+                return json.loads(json_match.group())
+            return {"document_type": "other", "confidence": 0.3, "description": content[:200]}
+            
+        except Exception as e:
+            await ws.send_str(json.dumps({
+                "type": "log",
+                "message": f"⚠️ Vision LLM error: {e}",
+                "level": "warning"
+            }))
+            return {"document_type": "other", "confidence": 0.2}
+
+    def _format_yaml_log(self, data: dict) -> str:
+        """Format data as YAML log output."""
+        lines = ["---"]
+        def _format(d, indent=0):
+            result = []
+            prefix = "  " * indent
+            for k, v in d.items():
+                if isinstance(v, dict):
+                    result.append(f"{prefix}{k}:")
+                    result.extend(_format(v, indent + 1))
+                elif isinstance(v, list):
+                    result.append(f"{prefix}{k}:")
+                    for item in v:
+                        if isinstance(item, dict):
+                            result.append(f"{prefix}  -")
+                            result.extend(_format(item, indent + 2))
+                        else:
+                            result.append(f"{prefix}  - {item}")
+                else:
+                    result.append(f"{prefix}{k}: {v}")
+            return result
+        lines.extend(_format(data))
+        return "\n".join(lines)
+
     async def handle_websocket(self, request):
         """Handle WebSocket connections."""
         ws = web.WebSocketResponse()
@@ -2611,6 +1920,10 @@ class AccountingWebService:
                         "message": "Nie wykryto dokumentu na ekranie",
                         "level": "warning"
                     }))
+        
+        elif action == "analyze_deep":
+            # Deep analysis with OCR + LLM
+            await self._deep_analyze(ws)
 
         elif action == "set_interval":
             self.interval = max(0.5, min(10, data.get("interval", 1.0)))
@@ -2723,7 +2036,7 @@ class AccountingWebService:
 
     async def handle_index(self, request):
         """Serve main HTML page."""
-        return web.Response(text=HTML_TEMPLATE, content_type='text/html')
+        return web.Response(text=get_scanner_html_template(), content_type='text/html')
 
     async def handle_export_csv(self, request):
         """Export documents to CSV."""
