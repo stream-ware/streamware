@@ -1,5 +1,6 @@
 ![sq live narrator --url rtsp://192.168.1.1:554/h264Preview_01_main --tts --duration 20 --yaml --frames changed --focus person --tts --file report.html --model llava:13b --motion people](docs/v2/report2.png)
 
+![img.png](img.png)
 
 # 🚀 Streamware
 
@@ -84,13 +85,43 @@ Detailed documentation is available in the [docs/](docs/) directory:
 | Document | Description |
 |----------|-------------|
 | [📚 Documentation Index](docs/README.md) | Main documentation hub |
-| [⚙️ Configuration](docs/CONFIGURATION.md) | Complete configuration reference (NEW!) |
+| [🎛️ Voice Shell Dashboard](docs/v2/VOICE_SHELL_DASHBOARD.md) | Interactive voice-controlled GUI (NEW!) |
+| [⚙️ Configuration](docs/CONFIGURATION.md) | Complete configuration reference |
 | [🎬 Real-time Streaming](docs/REALTIME_STREAMING.md) | Browser viewer, WebSocket streaming |
 | [⚡ Performance](docs/PERFORMANCE.md) | Optimization, timing logs, benchmarks |
 | [🤖 LLM Integration](docs/LLM_INTEGRATION.md) | Vision models, async inference |
 | [🎯 Motion Analysis](docs/MOTION_ANALYSIS.md) | DSL tracking, blob detection |
 | [🏗️ Architecture](docs/ARCHITECTURE.md) | System design, multiprocessing |
 | [📡 API Reference](docs/API.md) | CLI options, configuration |
+
+## 🎛️ Voice Shell Dashboard (NEW!)
+
+**Interactive browser-based dashboard for video surveillance automation:**
+
+```bash
+sq voice-shell --port 9000
+# Open: http://localhost:9001
+```
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 🎤 Streamware Voice Shell          ● Connected        [🇬🇧][🇵🇱][🇩🇪] [🔄 Reset] │
+├─────────┬───────────────────────────┬───────────────────────────────────────┤
+│ 💬 Conv │   🖥️ Shell Output         │  🎤 Audio   |  💬 Text  |  📊 Vars   │
+│         │   > track person          │  [🎤] Ready |  [👤][📧] | url: ...   │
+│ ⚙️ Proc │   🔊 Executing...         │  [⏹][🔄]   |  [____]   | email: ... │
+└─────────┴───────────────────────────┴───────────────────────────────────────┘
+```
+
+**Key Features:**
+- 🎤 **Voice control** - Speak commands naturally
+- 🌐 **Multi-language** - EN/PL/DE with full UI translation
+- 🎛️ **Customizable grid** - Drag & drop, resize panels
+- 💬 **Multi-session** - Run multiple conversations
+- 📊 **Real-time** - Live command output streaming
+- 🔗 **URL state** - Debug with `#lang=pl&action=typing`
+
+[📖 Full Documentation →](docs/v2/VOICE_SHELL_DASHBOARD.md)
 
 ## 📦 Installation
 
