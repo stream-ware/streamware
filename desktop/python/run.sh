@@ -1,23 +1,24 @@
 #!/bin/bash
-# Run Voice Shell Desktop without Conda library conflicts
+# Run Voice Shell Desktop - use env -i for clean environment
 
-# Remove conda paths from LD_LIBRARY_PATH
-export LD_LIBRARY_PATH=$(echo "$LD_LIBRARY_PATH" | tr ':' '\n' | grep -v conda | grep -v miniconda | tr '\n' ':' | sed 's/:$//')
-
-# Ensure system libraries are first
-export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu:/usr/lib:$LD_LIBRARY_PATH"
-
-# Change to script directory
 cd "$(dirname "$0")"
 
-# Use the venv but with fixed library path
-VENV_PYTHON="/home/tom/github/stream-ware/streamware/venv/bin/python3"
+echo "🚀 Starting Voice Shell Desktop (clean environment)..."
 
-if [ -f "$VENV_PYTHON" ]; then
-    echo "🚀 Starting Voice Shell Desktop (venv + system libs)..."
-    exec "$VENV_PYTHON" app.py "$@"
-else
-    echo "❌ venv not found at $VENV_PYTHON"
-    echo "   Run: python3 -m venv /home/tom/github/stream-ware/streamware/venv"
-    exit 1
-fi
+# Run with completely clean environment, only essential vars
+exec env -i \
+    HOME="$HOME" \
+    PATH="/usr/bin:/bin" \
+    DISPLAY="$DISPLAY" \
+    WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+    XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
+    DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" \
+    PYTHONPATH="/home/tom/github/stream-ware/streamware" \
+    /usr/bin/python3 -c "
+import sys
+sys.path.insert(0, '/usr/lib/python3/dist-packages')
+sys.path.insert(0, '/home/tom/github/stream-ware/streamware/venv/lib/python3.13/site-packages')
+sys.path.insert(0, '/home/tom/github/stream-ware/streamware')
+sys.path.insert(0, '.')
+exec(open('app.py').read())
+"

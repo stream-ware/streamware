@@ -28,6 +28,13 @@ let continuousMode = true;
 let bargeInMode = true;
 let currentUser = null;  // Logged in user
 
+// View mode: 'conversation' shows user dialog, 'process' shows command output
+let viewMode = 'conversation';
+
+// Separate storage for conversation vs process output per session
+let sessionConversations = {};  // sessionId -> [conversation lines]
+let sessionProcessOutput = {};  // sessionId -> [process output lines]
+
 // =============================================================================
 // Authentication Functions
 // =============================================================================
@@ -397,9 +404,10 @@ function newSession() {
     addOutput(msg('newConversation'), 'system');
 }
 
-function switchSession(sessionId) {
-    console.log('Switching to session:', sessionId);
-    addOutput(`🔄 Switching to session ${sessionId}...`, 'system');
+function switchSession(sessionId, mode = 'conversation') {
+    console.log('Switching to session:', sessionId, 'mode:', mode);
+    viewMode = mode;
+    isProcessOutput = false;  // Reset process output tracking
     ws.send(JSON.stringify({ type: 'switch_session', content: sessionId }));
 }
 
@@ -442,7 +450,7 @@ function updateSessionsList(sessionsList) {
             const statusIcon = s.status === 'running' ? '🔄' : (s.status === 'completed' ? '✓' : '');
             
             div.innerHTML = `
-                <div class="session-info" onclick="switchSession('${s.id}')">
+                <div class="session-info" onclick="switchSession('${s.id}', 'conversation')">
                     <div class="session-name">${statusIcon} ${s.name || 'Conversation'}</div>
                     <div class="session-status">${s.output_lines} lines</div>
                 </div>
@@ -489,7 +497,7 @@ function updateSessionsList(sessionsList) {
                     </span>
                 </div>
             `;
-            div.addEventListener('click', () => switchSession(s.id));
+            div.addEventListener('click', () => switchSession(s.id, 'process'));
             procContainer.appendChild(div);
         });
         
@@ -512,7 +520,7 @@ function stopProcess(sessionId) {
 }
 
 function viewProcess(sessionId) {
-    switchSession(sessionId);
+    switchSession(sessionId, 'process');
 }
 
 function deleteProcess(sessionId) {
@@ -735,11 +743,45 @@ function handleEvent(event) {
             break;
             
         case 'session_switched':
-            console.log('Session switched event:', event.data);
+            console.log('Session switched event:', event.data, 'viewMode:', viewMode);
             currentSessionId = event.data.session.id;
+            isProcessOutput = false;  // Reset tracking
+            
+            // Initialize storage for this session
+            if (!sessionConversations[currentSessionId]) {
+                sessionConversations[currentSessionId] = [];
+            }
+            if (!sessionProcessOutput[currentSessionId]) {
+                sessionProcessOutput[currentSessionId] = [];
+            }
+            
+            // Parse existing output into conversation vs process
+            if (event.data.output && event.data.output.length > 0) {
+                let inProcess = false;
+                event.data.output.forEach(line => {
+                    if (!line) return;
+                    
+                    // Detect process output boundaries
+                    if (line.includes('🚀 EXECUTING COMMAND:') || line.includes('EXECUTING COMMAND')) {
+                        inProcess = true;
+                    }
+                    if (line.includes('✓ Command completed') || line.includes('Command completed')) {
+                        inProcess = false;
+                    }
+                    
+                    const lineData = { text: line, type: 'system' };
+                    if (inProcess) {
+                        sessionProcessOutput[currentSessionId].push(lineData);
+                    } else {
+                        sessionConversations[currentSessionId].push(lineData);
+                    }
+                });
+            }
+            
+            // Update header based on view mode
+            const modeLabel = viewMode === 'conversation' ? 'Conversation' : 'Process';
             document.getElementById('current-session-name').textContent = 
-                '(' + event.data.session.name + ')';
-            document.getElementById('output').innerHTML = '';
+                `(${event.data.session.name} - ${modeLabel})`;
             
             // Hide progress bar when switching to non-running session
             if (event.data.session.status !== 'running') {
@@ -748,16 +790,11 @@ function handleEvent(event) {
                 showProgressBar();
             }
             
-            addOutput(`✅ Switched to: ${event.data.session.name}`, 'system');
-            if (event.data.output && event.data.output.length > 0) {
-                event.data.output.forEach(line => {
-                    if (line) addOutput(line, 'system');
-                });
-            } else {
-                addOutput(msg('noOutput') + ' - ' + msg('newConversation'), 'system');
-            }
+            // Refresh display based on view mode
+            refreshOutputDisplay();
+            
             updateSessionsList(event.data.sessions || Object.values(sessions));
-            showToast(`Switched to ${event.data.session.name}`, 'success');
+            showToast(`${modeLabel}: ${event.data.session.name}`, 'success');
             break;
             
         case 'sessions_list':
@@ -835,12 +872,110 @@ function handleEvent(event) {
 // Output & UI
 // ============================================================================
 
+// Track if we're in process output mode (after EXECUTING COMMAND)
+let isProcessOutput = false;
+
 function addOutput(text, type = 'system') {
+    if (!currentSessionId) return;
+    
+    // Initialize storage for session if needed
+    if (!sessionConversations[currentSessionId]) {
+        sessionConversations[currentSessionId] = [];
+    }
+    if (!sessionProcessOutput[currentSessionId]) {
+        sessionProcessOutput[currentSessionId] = [];
+    }
+    
+    // Detect start of process output
+    if (text.includes('🚀 EXECUTING COMMAND:') || text.includes('EXECUTING COMMAND')) {
+        isProcessOutput = true;
+    }
+    
+    // Detect end of process output
+    if (text.includes('✓ Command completed') || text.includes('Command completed')) {
+        isProcessOutput = false;
+    }
+    
+    // Store in appropriate array
+    const lineData = { text, type };
+    
+    if (isProcessOutput || type === 'process') {
+        // Process output (after EXECUTING COMMAND)
+        sessionProcessOutput[currentSessionId].push(lineData);
+    } else {
+        // Conversation (user input, parsed commands, TTS responses)
+        sessionConversations[currentSessionId].push(lineData);
+    }
+    
+    // Only display if matches current view mode
+    const shouldDisplay = (viewMode === 'conversation' && !isProcessOutput && type !== 'process') ||
+                          (viewMode === 'process' && (isProcessOutput || type === 'process'));
+    
+    // Always display in unified mode (default behavior)
     const output = document.getElementById('output');
     const line = document.createElement('div');
     line.className = 'output-line ' + type;
     line.textContent = text;
     output.appendChild(line);
+    output.scrollTop = output.scrollHeight;
+}
+
+// Switch view mode and refresh display
+function setViewMode(mode) {
+    viewMode = mode;
+    
+    // Update button states
+    const btnConv = document.getElementById('btn-view-conv');
+    const btnProc = document.getElementById('btn-view-proc');
+    if (btnConv) btnConv.classList.toggle('active', mode === 'conversation');
+    if (btnProc) btnProc.classList.toggle('active', mode === 'process');
+    
+    refreshOutputDisplay();
+}
+
+// Refresh output display based on current view mode and session
+function refreshOutputDisplay() {
+    const output = document.getElementById('output');
+    output.innerHTML = '';
+    
+    if (!currentSessionId) return;
+    
+    const convLines = sessionConversations[currentSessionId] || [];
+    const procLines = sessionProcessOutput[currentSessionId] || [];
+    
+    if (viewMode === 'conversation') {
+        // Show only conversation
+        convLines.forEach(({ text, type }) => {
+            const line = document.createElement('div');
+            line.className = 'output-line ' + type;
+            line.textContent = text;
+            output.appendChild(line);
+        });
+        
+        // Update header
+        document.getElementById('current-session-name').textContent = '(Conversation)';
+    } else {
+        // Show only process output
+        procLines.forEach(({ text, type }) => {
+            const line = document.createElement('div');
+            line.className = 'output-line ' + type;
+            line.textContent = text;
+            output.appendChild(line);
+        });
+        
+        // Update header
+        document.getElementById('current-session-name').textContent = '(Process Output)';
+    }
+    
+    if (output.children.length === 0) {
+        const emptyLine = document.createElement('div');
+        emptyLine.className = 'output-line system';
+        emptyLine.textContent = viewMode === 'conversation' ? 
+            'No conversation yet. Say something!' : 
+            'No process output yet. Execute a command!';
+        output.appendChild(emptyLine);
+    }
+    
     output.scrollTop = output.scrollHeight;
 }
 

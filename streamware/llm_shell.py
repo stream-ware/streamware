@@ -33,6 +33,7 @@ import requests
 
 from .config import config
 from .function_registry import registry, get_llm_context
+from .intent_parser import IntentParser, Intent
 
 
 # =============================================================================
@@ -126,6 +127,14 @@ User: unknown request
         from .i18n.translations import Translator
         self.t = Translator(language)
         
+        # Intent parser for semantic understanding (no hardcoded keywords!)
+        self.intent_parser = IntentParser(
+            language=language,
+            use_embeddings=True,  # Use fast embeddings if available
+            use_llm_fallback=True,  # Fall back to LLM for complex cases
+            llm_model=model,
+        )
+        
         self.history: List[Tuple[str, ShellResult]] = []
         self.running_process: Optional[subprocess.Popen] = None
         
@@ -156,8 +165,7 @@ User: unknown request
         return "\n".join(lines)
     
     def parse(self, user_input: str) -> ShellResult:
-        """Parse user input using LLM."""
-        # Handle built-in commands
+        """Parse user input using semantic intent parsing (no hardcoded keywords)."""
         lower = user_input.lower().strip()
         
         # Check if input looks like a URL (set as default source)
@@ -186,32 +194,94 @@ User: unknown request
                 explanation="Exit the shell",
             )
         
-        # Quick pattern matching for common commands (fallback if LLM fails)
-        if "track" in lower and "speak" in lower:
-            target = "person"
-            if "car" in lower:
-                target = "car"
-            elif "animal" in lower:
-                target = "animal"
-            # Include language for TTS
-            lang_param = f"--lang {self.language}" if hasattr(self, 'language') and self.language != 'en' else ""
+        # Use semantic intent parser (no hardcoded keywords!)
+        intent = self.intent_parser.parse(user_input)
+        
+        if self.verbose:
+            print(f"[Intent] action={intent.action}, target={intent.target}, confidence={intent.confidence:.2f}")
+        
+        # Convert intent to ShellResult
+        return self._intent_to_result(intent)
+    
+    def _intent_to_result(self, intent: Intent) -> ShellResult:
+        """Convert parsed Intent to ShellResult with appropriate command."""
+        lang_param = f"--lang {self.language}" if self.language != 'en' else ""
+        target = intent.target or "person"
+        target_tr = self.t.translate_target(target)
+        
+        # Handle each action type
+        if intent.action == "stop":
             return ShellResult(
                 understood=True,
-                function_name="narrate",
-                shell_command=f"sq live narrator --mode track --focus {target} --duration 60 --tts --tts-diff --model llava:7b --skip-checks {lang_param}".strip(),
-                explanation=f"Track {target} and speak results",
+                function_name="stop",
+                shell_command="pkill -f 'sq watch' 2>/dev/null; pkill -f 'sq live' 2>/dev/null || echo 'Nothing running'",
+                explanation=self.t.status("cancelled"),
             )
         
-        # Track without speak - offer options
-        if "track" in lower and "speak" not in lower:
-            target = "person"
-            if "car" in lower:
-                target = "car"
-            # Include language for TTS options
-            lang_param = f"--lang {self.language}" if hasattr(self, 'language') and self.language != 'en' else ""
+        if intent.action == "help":
+            return ShellResult(
+                understood=True,
+                function_name="help",
+                explanation=self._get_help_text(),
+            )
+        
+        if intent.action == "read_clock":
+            return ShellResult(
+                understood=True,
+                function_name="read_clock",
+                shell_command=f"sq live reader --ocr --model llava:7b --llm-query 'what time does the clock show? Answer with just the time. If you cannot see a clock, explain why.' --tts --duration 10 {lang_param}".strip(),
+                explanation=self.t.conv("reading_clock"),
+            )
+        
+        if intent.action == "read_display":
+            return ShellResult(
+                understood=True,
+                function_name="read_display",
+                shell_command=f"sq live reader --ocr --model llava:7b --llm-query 'what text do you see on the display? Read it out loud. If you cannot read it, explain why.' --tts --duration 30 {lang_param}".strip(),
+                explanation=self.t.conv("reading_display"),
+            )
+        
+        if intent.action == "read":
+            return ShellResult(
+                understood=True,
+                function_name="read",
+                shell_command=f"sq live reader --ocr --model llava:7b --tts --duration 30 {lang_param}".strip(),
+                explanation=self.t.conv("reading_text"),
+            )
+        
+        if intent.action == "describe":
+            return ShellResult(
+                understood=True,
+                function_name="describe",
+                shell_command=f"sq live narrator --mode full --duration 10 --tts --model llava:7b --skip-checks {lang_param}".strip(),
+                explanation=self.t.conv("describing"),
+            )
+        
+        if intent.action == "track":
+            # Check modifiers for voice/email
+            has_voice = intent.modifiers.get("with_voice", False)
+            has_email = intent.modifiers.get("with_email", False)
             
-            # Translated target and option texts
-            target_tr = self.t.translate_target(target)
+            if has_voice:
+                # Track with voice - execute directly
+                return ShellResult(
+                    understood=True,
+                    function_name="narrate",
+                    shell_command=f"sq live narrator --mode track --focus {target} --duration 60 --tts --tts-diff --model llava:7b --skip-checks {lang_param}".strip(),
+                    explanation=f"{self.t.cmd('tracking')} {target_tr} {self.t.conv('option_tts')}",
+                )
+            
+            if has_email:
+                # Track with email - need email input
+                return ShellResult(
+                    understood=True,
+                    function_name="need_input",
+                    input_type="email",
+                    explanation=self.t.conv("enter_new_email"),
+                    pending_command=f"SQ_NOTIFY_EMAIL={{email}} sq live narrator --mode track --focus {target} --duration 60 --skip-checks --adaptive",
+                )
+            
+            # Track without modifiers - offer options
             opt_tts = self.t.conv("option_tts")
             opt_silent = self.t.conv("option_silent")
             opt_email = self.t.conv("option_email")
@@ -228,102 +298,29 @@ User: unknown request
                 explanation=question,
             )
         
-        # Reader commands - OCR + LLM vision
-        if any(x in lower for x in ["read clock", "czytaj zegar", "what time", "która godzina", "jaka godzina", "zegar"]):
-            lang_param = f"--lang {self.language}" if hasattr(self, 'language') and self.language != 'en' else ""
-            return ShellResult(
-                understood=True,
-                function_name="read_clock",
-                shell_command=f"sq live reader --ocr --llm-query 'what time does the clock show? Answer with just the time.' --tts --duration 10 {lang_param}".strip(),
-                explanation=self.t.conv("reading_clock") if hasattr(self, 't') else "Reading time from clock",
-            )
-        
-        if any(x in lower for x in ["read display", "czytaj wyświetlacz", "read screen", "czytaj ekran", "wyświetlacz"]):
-            lang_param = f"--lang {self.language}" if hasattr(self, 'language') and self.language != 'en' else ""
-            return ShellResult(
-                understood=True,
-                function_name="read_display",
-                shell_command=f"sq live reader --ocr --llm-query 'what text do you see on the display? Read it out loud.' --tts --duration 30 {lang_param}".strip(),
-                explanation=self.t.conv("reading_display") if hasattr(self, 't') else "Reading text from display",
-            )
-        
-        if any(x in lower for x in ["read", "czytaj", "ocr"]) and "clock" not in lower and "display" not in lower:
-            lang_param = f"--lang {self.language}" if hasattr(self, 'language') and self.language != 'en' else ""
-            return ShellResult(
-                understood=True,
-                function_name="read",
-                shell_command=f"sq live reader --ocr --tts --duration 30 {lang_param}".strip(),
-                explanation=self.t.conv("reading_text") if hasattr(self, 't') else "Reading text from camera",
-            )
-        
-        if any(x in lower for x in ["describe", "opisz", "co widzisz", "what do you see"]):
-            lang_param = f"--lang {self.language}" if hasattr(self, 'language') and self.language != 'en' else ""
-            return ShellResult(
-                understood=True,
-                function_name="describe",
-                shell_command=f"sq live narrator --mode full --duration 10 --tts --model llava:7b --skip-checks {lang_param}".strip(),
-                explanation=self.t.conv("describing") if hasattr(self, 't') else "Describing what camera sees",
-            )
-        
-        if any(x in lower for x in ["hello", "hi", "cześć", "hej", "help", "pomoc"]):
-            return ShellResult(
-                understood=True,
-                function_name="help",
-                explanation=self._get_help_text(),
-            )
-        
+        # Unknown intent - check for email pattern in detect commands
+        lower = intent.raw_input.lower()
         if "detect" in lower and "email" in lower:
             # Extract email
-            import re
-            email_match = re.search(r'[\w.+-]+@[\w.-]+\.\w+', user_input)
+            email_match = re.search(r'[\w.+-]+@[\w.-]+\.\w+', intent.raw_input)
             email = email_match.group(0) if email_match else None
-            target = "person"
             if not email:
                 return ShellResult(
                     understood=True,
                     function_name="need_input",
                     input_type="email",
-                    explanation="Please provide email address (you can spell it)",
+                    explanation=self.t.conv("enter_new_email"),
                     pending_command=f"SQ_NOTIFY_EMAIL={{email}} sq live narrator --mode track --focus {target} --duration 60 --skip-checks --adaptive",
                 )
             return ShellResult(
                 understood=True,
                 function_name="notify_email",
                 shell_command=f"SQ_NOTIFY_EMAIL={email} sq live narrator --mode track --focus {target} --duration 60 --skip-checks --adaptive",
-                explanation=f"Detect {target} and email {email}",
+                explanation=f"{self.t.cmd('tracking')} {target_tr} + email {email}",
             )
         
-        if lower.startswith("detect ") or lower.startswith("find "):
-            target = lower.replace("detect ", "").replace("find ", "").split()[0] or "person"
-            return ShellResult(
-                understood=True,
-                function_name="detect",
-                shell_command=f"sq live narrator --mode track --focus {target} --duration 60 --skip-checks --adaptive",
-                explanation=f"Detect {target}",
-            )
-        
-        # Greeting or unclear - show options
-        if lower in ("hello", "hi", "hey", "help me", "what can you do"):
-            return ShellResult(
-                understood=True,
-                function_name="clarify",
-                options=[
-                    ("1", "Track person and speak", "sq live narrator --mode track --focus person --duration 60 --tts --tts-diff --model llava:7b --skip-checks"),
-                    ("2", "Detect person silently", "sq live narrator --mode track --focus person --duration 60 --skip-checks --adaptive"),
-                    ("3", "Detect and email me", "need_email"),
-                    ("4", "Show all functions", "functions"),
-                ],
-                explanation="What would you like to do? Say a number:",
-            )
-        
-        if lower == "help":
-            return ShellResult(
-                understood=True,
-                function_name="help",
-                explanation=self._get_help(),
-            )
-        
-        if lower == "functions" or lower == "list":
+        # Handle special shell commands
+        if lower in ("functions", "list"):
             return ShellResult(
                 understood=True,
                 function_name="list",
@@ -344,16 +341,15 @@ User: unknown request
                 explanation=self._format_context(),
             )
         
-        if lower == "stop":
+        # If confidence is too low, return not understood
+        if intent.confidence < 0.4:
             return ShellResult(
-                understood=True,
-                function_name="stop",
-                shell_command="pkill -f 'sq watch' 2>/dev/null || echo 'Nothing running'",
-                explanation="Stop all detection processes",
+                understood=False,
+                explanation=self.t.conv("not_understood", text=intent.raw_input),
             )
         
-        # Use LLM to parse
-        return self._parse_with_llm(user_input)
+        # Fallback - try LLM parsing for complex cases
+        return self._parse_with_llm(intent.raw_input)
     
     def _parse_with_llm(self, user_input: str) -> ShellResult:
         """Use LLM to parse user input."""
@@ -474,15 +470,19 @@ Remember to respond with only valid JSON."""
         
         if needs_url:
             has_url = "--url" in cmd or "-u " in cmd
-            has_intent = cmd.count('"') >= 2 or cmd.count("'") >= 2  # Has quoted intent
+            # Check for natural language intent mode (e.g., sq watch "detect person")
+            # But NOT for --llm-query which still needs a URL
+            has_intent = (cmd.count('"') >= 2 or cmd.count("'") >= 2) and "--llm-query" not in cmd and "reader" not in cmd
             
             if not has_url and not has_intent:
                 if self.context.get("url"):
                     # Auto-inject URL from context
                     if "sq watch " in cmd:
                         cmd = cmd.replace("sq watch ", f"sq watch --url {self.context['url']} ", 1)
-                    elif "sq live narrator" in cmd:
+                    elif "sq live narrator " in cmd:
                         cmd = cmd.replace("sq live narrator ", f"sq live narrator --url {self.context['url']} ", 1)
+                    elif "sq live reader " in cmd:
+                        cmd = cmd.replace("sq live reader ", f"sq live reader --url {self.context['url']} ", 1)
                     elif "sq live " in cmd:
                         cmd = cmd.replace("sq live ", f"sq live --url {self.context['url']} ", 1)
                 else:

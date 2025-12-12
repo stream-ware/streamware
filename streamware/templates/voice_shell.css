@@ -348,6 +348,12 @@ h1 {
     color: #4fc3f7;
 }
 
+.btn-panel.active {
+    background: rgba(79, 195, 247, 0.2);
+    color: #4fc3f7;
+    border-bottom: 2px solid #4fc3f7;
+}
+
 /* Expand button for panels */
 .btn-expand {
     background: transparent;

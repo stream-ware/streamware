@@ -652,24 +652,91 @@ class VoiceShellServer:
         
         lower = text.lower().strip()
         
+        # Multi-language cancel keywords - can cancel at ANY stage
+        cancel_words = (
+            # English
+            "cancel", "stop", "nevermind", "never mind", "abort", "quit", "reset",
+            # Polish
+            "anuluj", "przerwij", "stop", "koniec", "zrezygnuj", "cofnij",
+            # German
+            "abbrechen", "stopp", "beenden", "zurück",
+            # Spanish
+            "cancelar", "parar", "detener",
+            # French
+            "annuler", "arrêter", "arreter",
+        )
+        
+        # Multi-language confirmation keywords
+        confirm_words = (
+            # English
+            "yes", "yeah", "okay", "ok", "execute", "do it", "run", "confirm", "sure",
+            # Polish
+            "tak", "dobrze", "wykonaj", "potwierdź", "potwierdzam", "zgoda",
+            # German
+            "ja", "jawohl", "ausführen", "bestätigen",
+            # Spanish
+            "sí", "si", "vale", "ejecutar",
+            # French
+            "oui", "d'accord", "exécuter",
+        )
+        
+        # Multi-language rejection keywords
+        reject_words = (
+            # English
+            "no", "nope", "don't", "dont",
+            # Polish
+            "nie", "niedobrze",
+            # German
+            "nein",
+            # Spanish/French
+            "non",
+        )
+        
+        # Check for cancel at ANY stage - this takes priority
+        if any(w == lower or lower.startswith(w + " ") for w in cancel_words):
+            # Clear all pending states
+            had_pending = self.pending_command or self.pending_options or self.pending_input_type
+            self.pending_command = None
+            self.pending_options = None
+            self.pending_input_type = None
+            self.pending_command_template = None
+            self.spelling_buffer = ""
+            
+            if had_pending:
+                await self.speak(self.t.conv("goal_cancelled"))
+            else:
+                await self.speak(self.t.conv("how_can_help"))
+            return
+        
         # Handle yes/no for pending command confirmation
-        if self.pending_command and lower in ("yes", "yeah", "okay", "ok", "execute", "do it", "run"):
+        if self.pending_command and lower in confirm_words:
             await self.execute_command(self.pending_command)
             self.pending_command = None
             return
         
-        if self.pending_command and lower in ("no", "cancel", "stop", "nevermind"):
+        if self.pending_command and lower in reject_words:
             self.pending_command = None
-            await self.speak(self.t.status("cancelled") + ". " + self.t.conv("how_can_help"))
+            await self.speak(self.t.conv("goal_cancelled"))
             return
         
-        # Handle option selection (1, 2, 3, one, two, three)
+        # Handle option selection (1, 2, 3, one, two, three) - multi-language
         if self.pending_options:
             option_map = {
+                # English
                 "one": "1", "1": "1", "first": "1",
                 "two": "2", "2": "2", "second": "2", 
                 "three": "3", "3": "3", "third": "3",
                 "four": "4", "4": "4", "fourth": "4",
+                # Polish
+                "jeden": "1", "pierwsza": "1", "pierwszą": "1", "pierwszy": "1",
+                "dwa": "2", "druga": "2", "drugą": "2", "drugi": "2",
+                "trzy": "3", "trzecia": "3", "trzecią": "3", "trzeci": "3",
+                "cztery": "4", "czwarta": "4", "czwartą": "4", "czwarty": "4",
+                # German
+                "eins": "1", "erste": "1", "ersten": "1",
+                "zwei": "2", "zweite": "2", "zweiten": "2",
+                "drei": "3", "dritte": "3", "dritten": "3",
+                "vier": "4", "vierte": "4", "vierten": "4",
             }
             choice = option_map.get(lower, lower)
             
@@ -726,22 +793,30 @@ class VoiceShellServer:
                         return
             
             if not matched:
-                # Invalid option - repeat options
-                options_text = "Please say a number. "
-                for key, desc, _ in self.pending_options:
-                    options_text += f"{key}: {desc}. "
-                await self.broadcast(Event(
-                    type=EventType.TTS_SPEAK,
-                    data={"text": options_text}
-                ))
-            return
+                # Check if this looks like a new command (not a number/option)
+                # If so, clear pending options and process as new command
+                all_option_words = set(option_map.keys())
+                if choice not in all_option_words:
+                    # User said something else - treat as new command
+                    self.pending_options = None
+                    # Fall through to process as new command (don't return)
+                else:
+                    # Invalid option number - repeat options (with cancel hint)
+                    options_text = self.t.conv("say_cancel_anytime") + " "
+                    for key, desc, _ in self.pending_options:
+                        options_text += f"{key}: {desc}. "
+                    await self.broadcast(Event(
+                        type=EventType.TTS_SPEAK,
+                        data={"text": options_text}
+                    ))
+                    return
         
         # Handle saved email confirmation
         if self.pending_input_type == "use_saved_email":
             saved_email = self.shell.context.get("email")
             
             # User wants to use saved email - execute immediately
-            if any(w in lower for w in ("yes", "tak", "use", "użyj", "ok", "confirm")):
+            if lower in confirm_words:
                 cmd = self.pending_command_template.replace("{email}", saved_email)
                 result = ShellResult(understood=True, shell_command=cmd, explanation=f"Detect and email {saved_email}")
                 self.pending_input_type = None
@@ -752,35 +827,59 @@ class VoiceShellServer:
                     data=self.shell.context
                 ))
                 
-                await self.broadcast(Event(
-                    type=EventType.TTS_SPEAK,
-                    data={"text": f"Using email {saved_email}. Executing..."}
-                ))
+                await self.speak(self.t.conv("using_email", email=saved_email))
                 
                 # Execute command directly without requiring second confirmation
                 await self.execute_command(result)
                 return
             
-            # User wants new email
-            if any(w in lower for w in ("no", "nie", "new", "nowy", "different", "inny", "change", "zmień")):
+            # User wants new email (multi-language)
+            new_email_words = (
+                "new", "different", "change", "other",  # English
+                "nowy", "inny", "zmień", "zmien", "inna",  # Polish
+                "neu", "andere", "ändern", "andern",  # German
+            )
+            if lower in reject_words or any(w in lower for w in new_email_words):
                 self.pending_input_type = "email"
-                await self.broadcast(Event(
-                    type=EventType.TTS_SPEAK,
-                    data={"text": "Please say your new email address."}
-                ))
+                await self.speak(self.t.conv("enter_new_email"))
                 return
             
-            # Repeat question
-            await self.broadcast(Event(
-                type=EventType.TTS_SPEAK,
-                data={"text": f"Say 'yes' to use {saved_email}, or 'new' for different email."}
-            ))
-            return
+            # Check if user said something that looks like a new command
+            # If it's not a simple yes/no/new, treat as new command
+            if len(lower.split()) > 2 or any(cmd_word in lower for cmd_word in ("track", "śledź", "opisz", "describe", "read", "czytaj", "która", "godzina")):
+                self.pending_input_type = None
+                self.pending_command_template = None
+                # Fall through to process as new command
+            else:
+                # Repeat question
+                await self.speak(self.t.conv("say_yes_or_new", email=saved_email))
+                return
         
         # Handle email input (spelling mode)
         if self.pending_input_type == "email":
-            # Check for done/confirm (match words anywhere) - execute immediately
-            if any(w in lower for w in ("done", "confirm", "gotowe", "koniec")):
+            # Multi-language done/confirm words
+            done_words = (
+                "done", "confirm", "finished", "complete",  # English
+                "gotowe", "koniec", "potwierdź", "zakończ",  # Polish
+                "fertig", "bestätigen", "abgeschlossen",  # German
+            )
+            
+            # Multi-language clear/reset words
+            clear_words = (
+                "clear", "reset", "start over", "again",  # English
+                "wyczyść", "od nowa", "jeszcze raz", "reset",  # Polish
+                "löschen", "neu", "nochmal",  # German
+            )
+            
+            # Multi-language delete/backspace words
+            delete_words = (
+                "delete", "backspace", "remove", "undo",  # English
+                "usuń", "cofnij", "skasuj",  # Polish
+                "löschen", "entfernen", "zurück",  # German
+            )
+            
+            # Check for done/confirm - execute immediately
+            if any(w in lower for w in done_words):
                 if self.spelling_buffer:
                     email = self.spelling_buffer.replace(" ", "").lower()
                     cmd = self.pending_command_template.replace("{email}", email)
@@ -799,62 +898,67 @@ class VoiceShellServer:
                         data=self.shell.context
                     ))
                     
-                    await self.broadcast(Event(
-                        type=EventType.TTS_SPEAK,
-                        data={"text": f"Email set to {email}. Executing..."}
-                    ))
+                    await self.speak(self.t.conv("email_set", email=email))
                     
                     # Execute command directly
                     await self.execute_command(result)
                     return
             
-            # Check for corrections (match words anywhere)
-            if any(w in lower for w in ("clear", "reset", "wyczyść", "od nowa")):
+            # Check for corrections
+            if any(w in lower for w in clear_words):
                 self.spelling_buffer = ""
-                await self.broadcast(Event(
-                    type=EventType.TTS_SPEAK,
-                    data={"text": "Cleared. Please say your email again."}
-                ))
+                await self.speak(self.t.conv("enter_new_email"))
                 return
             
-            # Check for cancel email input
-            if any(w in lower for w in ("cancel", "anuluj", "stop")):
-                self.pending_input_type = None
-                self.spelling_buffer = ""
-                await self.broadcast(Event(
-                    type=EventType.TTS_SPEAK,
-                    data={"text": "Cancelled. What would you like to do?"}
-                ))
-                return
-            
-            if any(w in lower for w in ("delete", "backspace", "usuń")):
+            # Check for delete/backspace
+            if any(w in lower for w in delete_words):
                 if self.spelling_buffer:
                     self.spelling_buffer = self.spelling_buffer[:-1]
+                # Use simple response (no translation needed for buffer state)
                 await self.broadcast(Event(
                     type=EventType.TTS_SPEAK,
-                    data={"text": f"Deleted. Current: {self.spelling_buffer or 'empty'}"}
+                    data={"text": f"Current: {self.spelling_buffer or 'empty'}"}
                 ))
                 return
             
-            # Handle @ and . symbols
-            clean_text = text.replace(" at ", "@").replace(" dot ", ".").replace("at sign", "@").replace("małpa", "@").replace("kropka", ".")
-            
-            # If looks like full email, just use it
-            if "@" in clean_text and "." in clean_text:
-                self.spelling_buffer = clean_text.replace(" ", "")
+            # Check if user said something that looks like a new command
+            command_keywords = (
+                "track", "detect", "describe", "read", "watch", "stop", "help", "hello",  # English
+                "śledź", "wykryj", "opisz", "czytaj", "która", "godzina", "cześć", "pomoc",  # Polish
+                "verfolgen", "erkennen", "beschreiben", "lesen", "hallo", "hilfe",  # German
+            )
+            if any(cmd_word in lower for cmd_word in command_keywords):
+                # User wants to do something else - clear email input and process as command
+                self.pending_input_type = None
+                self.pending_command_template = None
+                self.spelling_buffer = ""
+                # Fall through to process as new command
+            else:
+                # Handle @ and . symbols (multi-language)
+                clean_text = text.lower()
+                # English
+                clean_text = clean_text.replace(" at ", "@").replace(" dot ", ".").replace("at sign", "@")
+                # Polish
+                clean_text = clean_text.replace("małpa", "@").replace("kropka", ".").replace(" małpa ", "@").replace(" kropka ", ".")
+                # German
+                clean_text = clean_text.replace("klammeraffe", "@").replace("punkt", ".").replace(" at ", "@")
+                
+                # If looks like full email, just use it
+                if "@" in clean_text and "." in clean_text:
+                    self.spelling_buffer = clean_text.replace(" ", "")
+                    await self.broadcast(Event(
+                        type=EventType.TTS_SPEAK,
+                        data={"text": f"{self.spelling_buffer}. {self.t.conv('say_yes_confirm')}"}
+                    ))
+                    return
+                
+                # Add to buffer
+                self.spelling_buffer += clean_text.replace(" ", "")
                 await self.broadcast(Event(
                     type=EventType.TTS_SPEAK,
-                    data={"text": f"Got email: {self.spelling_buffer}. Say 'done' to confirm or 'clear' to restart."}
+                    data={"text": f"{self.spelling_buffer}. {self.t.conv('say_cancel_anytime')}"}
                 ))
                 return
-            
-            # Add to buffer
-            self.spelling_buffer += clean_text
-            await self.broadcast(Event(
-                type=EventType.TTS_SPEAK,
-                data={"text": f"Got: {clean_text}. Current: {self.spelling_buffer}. Say 'done' when finished or 'clear' to restart."}
-            ))
-            return
         
         # Parse with LLM shell
         result = self.shell.parse(text)

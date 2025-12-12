@@ -141,6 +141,10 @@ class ConversationMessages:
     hello: str = "Hello! I'm your video surveillance assistant. What would you like me to monitor?"
     how_can_help: str = "How can I help you?"
     
+    # Cancel/change goal
+    goal_cancelled: str = "Cancelled. What would you like to do instead?"
+    say_cancel_anytime: str = "Say 'cancel' anytime to change your mind."
+    
     # Options
     how_would_you_like: str = "How would you like to {action}?"
     option_tts: str = "with voice (TTS)"
@@ -287,6 +291,8 @@ POLISH = LanguagePack(
     conversation=ConversationMessages(
         hello="Cześć! Jestem asystentem monitoringu wideo. Co chciałbyś śledzić?",
         how_can_help="Jak mogę pomóc?",
+        goal_cancelled="Anulowano. Co chciałbyś zrobić?",
+        say_cancel_anytime="Powiedz 'anuluj' w dowolnym momencie aby zmienić zdanie.",
         how_would_you_like="Jak chcesz {action}?",
         option_tts="z głosem (TTS)",
         option_silent="cicho",
@@ -414,6 +420,8 @@ GERMAN = LanguagePack(
     conversation=ConversationMessages(
         hello="Hallo! Ich bin dein Video-Überwachungsassistent. Was möchtest du überwachen?",
         how_can_help="Wie kann ich helfen?",
+        goal_cancelled="Abgebrochen. Was möchtest du stattdessen tun?",
+        say_cancel_anytime="Sag 'abbrechen' jederzeit um deine Meinung zu ändern.",
         how_would_you_like="Wie möchtest du {action}?",
         option_tts="mit Stimme (TTS)",
         option_silent="leise",
