@@ -51,6 +51,42 @@ See: [media-processing/live_narrator_examples.sh](media-processing/live_narrator
 
 ---
 
+## 🗣️ Natural Language Configuration (NEW!)
+
+**Configure using natural language - Polish or English**
+
+```bash
+# Track person
+sq watch "track person"
+sq watch "śledź osoby"
+
+# Count objects
+sq watch "count people"
+sq watch "ile samochodów"
+
+# Describe scene
+sq watch "describe what's happening"
+sq watch "opisz co się dzieje"
+
+# Security alerts
+sq watch "alert when someone enters"
+sq watch "powiadom gdy ktoś wchodzi"
+```
+
+See: [natural_language/](natural_language/) | [docs/NATURAL_LANGUAGE_CONFIG.md](../docs/NATURAL_LANGUAGE_CONFIG.md)
+
+---
+
+## 📁 New Examples
+
+| Example | Description | Quick Start |
+|---------|-------------|-------------|
+| [track_person/](track_person/) | Fast person tracking with YOLO | `sq watch "track person"` |
+| [security/](security/) | Intrusion detection with LLM | `sq watch "alert when someone enters"` |
+| [count_objects/](count_objects/) | Count people, cars, animals | `sq watch "count people"` |
+| [describe_scene/](describe_scene/) | LLM scene descriptions | `sq watch "describe scene"` |
+| [natural_language/](natural_language/) | Natural language config | `sq watch "śledź osoby"` |
+
 ## 📁 Project Examples
 
 | Project | Description | Examples |
