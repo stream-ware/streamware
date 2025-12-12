@@ -7,6 +7,14 @@ Commands:
     "naciśnij enter" -> presses Enter
     "naciśnij tab" -> presses Tab
 
+Quick Start:
+    sq voice-keyboard type "wpisz hello world"
+    sq voice-keyboard press "naciśnij enter"
+
+NEW: Use interactive LLM shell for natural language:
+    sq shell
+    sq> type "hello world"
+
 Requirements:
     sudo apt-get install xdotool espeak
 

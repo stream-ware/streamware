@@ -2,7 +2,28 @@
 
 Configure Streamware using natural language (Polish or English).
 
-## Quick Start
+## 🆕 Interactive LLM Shell (Recommended)
+
+```bash
+# Start interactive shell with LLM
+sq shell
+
+# Example session:
+sq> detect person and email tom@company.com immediately
+✅ Start person detection, send email to tom@company.com immediately
+   Command: sq watch --detect person --email tom@company.com --notify-mode instant --duration 60
+   Execute? [Y/n]: y
+
+sq> track cars for 10 minutes
+✅ Track car objects for 600 seconds
+   Command: sq watch --track car --fps 2 --duration 600
+   Execute? [Y/n]: y
+
+sq> stop
+sq> exit
+```
+
+## Quick Start (Direct Commands)
 
 ```bash
 # English
@@ -10,6 +31,7 @@ sq watch "track person"
 sq watch "count cars"
 sq watch "describe scene"
 sq watch "alert when someone enters"
+sq watch "detect person and email admin@x.com immediately"
 
 # Polish
 sq watch "śledź osoby"

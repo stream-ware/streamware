@@ -2,7 +2,32 @@
 
 This directory contains example scripts demonstrating various features and usage patterns of the Streamware framework.
 
-## 🎥 Real-time Visualizer (NEW!)
+## 🤖 Interactive LLM Shell (NEW!)
+
+**Natural language commands with LLM understanding**
+
+```bash
+# Start interactive shell
+sq shell
+
+# With auto-execute (no confirmation)
+sq shell --auto
+
+# List available functions
+sq functions
+
+# Example session:
+# sq> detect person and email admin@company.com immediately
+# ✅ Start person detection, send email immediately
+#    Command: sq watch --detect person --email admin@company.com --notify-mode instant
+#    Execute? [Y/n]: y
+```
+
+See: [LLM Shell Guide](../docs/LLM_SHELL.md)
+
+---
+
+## 🎥 Real-time Visualizer
 
 **Motion detection with SVG overlays and DSL metadata streaming**
 

@@ -2,6 +2,15 @@
 """
 Track Person Example
 Fast person tracking using YOLO without LLM.
+
+NEW: For LLM-based parsing, use:
+    from streamware.llm_intent import parse_command
+    intent = parse_command("track person for 5 minutes")
+    
+Or interactive shell:
+    sq shell
+    sq> track person for 5 minutes
+    sq> track cars and email alerts@x.com
 """
 
 from streamware.intent import parse_intent, apply_intent

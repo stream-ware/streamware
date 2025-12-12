@@ -8,18 +8,39 @@ One-liner examples for the most common tasks.
 pip install streamware
 
 # Install fast models (recommended)
+ollama pull llama3.2    # For LLM shell
 ollama pull moondream   # Fast vision model
-ollama pull gemma:2b    # Fast guarder
 
 # Or use install script:
 ./install_fast_model.sh
+```
 
-# Optional: auto-configure LLM + voice
-streamware --setup --mode fast        # optimized for speed (recommended)
-streamware --setup --mode balance     # balanced quality/speed
+## 🤖 Interactive LLM Shell (NEW - Recommended!)
 
-# TTS-only setup (does not change LLM/STT)
-streamware --setup tts
+```bash
+# Start interactive shell
+sq shell
+
+# With auto-execute
+sq shell --auto
+
+# List available functions
+sq functions
+```
+
+**Example session:**
+```
+sq> detect person and email me@company.com immediately
+✅ Start person detection, send email immediately
+   Command: sq watch --detect person --email me@company.com --notify-mode instant
+   Execute? [Y/n]: y
+
+sq> track cars for 5 minutes
+✅ Track car objects for 300 seconds
+   Command: sq watch --track car --fps 2 --duration 300
+
+sq> stop
+sq> exit
 ```
 
 ## 🎯 Live Narrator (NEW - Recommended)

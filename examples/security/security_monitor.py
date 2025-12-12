@@ -2,6 +2,14 @@
 """
 Security Monitoring Example
 Intrusion detection with LLM verification.
+
+NEW: For LLM-based parsing, use:
+    from streamware.llm_intent import parse_command
+    intent = parse_command("alert when someone enters and email admin@x.com")
+    
+Or interactive shell:
+    sq shell
+    sq> alert when someone enters and email admin@company.com
 """
 
 from streamware.intent import parse_intent, apply_intent

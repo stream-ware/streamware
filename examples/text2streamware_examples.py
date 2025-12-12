@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-Text to Streamware Examples - Qwen2.5 14B
+Text to Streamware Examples
 
-Demonstrates natural language to Streamware Quick commands using Qwen2.5 14B.
+Demonstrates natural language to Streamware commands using LLM.
+
+NEW: Uses function_registry and llm_intent for better parsing.
 """
 
 import sys
@@ -12,12 +14,49 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from streamware import flow
-from streamware.components.text2streamware import text_to_sq, explain_command, optimize_command
+from streamware.llm_intent import parse_command, generate_cli
+from streamware.function_registry import registry, generate_shell, get_llm_context
+
+# Try to import old components for backward compatibility
+try:
+    from streamware.components.text2streamware import text_to_sq, explain_command, optimize_command
+    HAS_OLD_API = True
+except ImportError:
+    HAS_OLD_API = False
+
+
+def example_0_new_api():
+    """Example 0: NEW API - LLM Intent Parser"""
+    print("\n=== Example 0: NEW LLM Intent Parser ===")
+    
+    requests = [
+        "detect person and email admin@company.com immediately",
+        "track cars for 10 minutes",
+        "count people every minute and save screenshots",
+        "describe scene with voice narration",
+        "monitor entrance and notify via slack",
+    ]
+    
+    for req in requests:
+        print(f"\n📝 Request: {req}")
+        
+        try:
+            intent = parse_command(req)
+            print(f"🤖 CLI: {intent.to_cli_string()}")
+            print(f"   Args: {intent.to_cli_args()}")
+            if intent.llm_model:
+                print(f"   Model: {intent.llm_model}")
+        except Exception as e:
+            print(f"❌ Error: {e}")
 
 
 def example_1_basic_conversion():
-    """Example 1: Basic Text to sq Conversion"""
-    print("\n=== Example 1: Basic Conversion ===")
+    """Example 1: Basic Text to sq Conversion (Legacy)"""
+    print("\n=== Example 1: Basic Conversion (Legacy) ===")
+    
+    if not HAS_OLD_API:
+        print("⚠️  Old API not available, using new llm_intent")
+        return example_0_new_api()
     
     requests = [
         "upload file to server",
@@ -308,12 +347,62 @@ def example_10_smart_pipeline_builder():
     """)
 
 
+def example_new_shell():
+    """Example: NEW Interactive LLM Shell"""
+    print("\n=== NEW: Interactive LLM Shell ===")
+    
+    print("""
+    # Start interactive shell (RECOMMENDED)
+    sq shell
+    
+    # With auto-execute
+    sq shell --auto
+    
+    # List available functions
+    sq functions
+    
+    # Example session:
+    sq> detect person and email admin@company.com immediately
+    ✅ Start person detection, send email immediately
+       Command: sq watch --detect person --email admin@company.com --notify-mode instant
+       Execute? [Y/n]: y
+    
+    sq> track cars for 10 minutes
+    sq> count people every minute
+    sq> stop
+    sq> exit
+    """)
+
+
+def example_function_registry():
+    """Example: Function Registry"""
+    print("\n=== Function Registry ===")
+    
+    print("Available functions for LLM:")
+    for cat in registry.categories():
+        print(f"\n{cat.upper()}:")
+        for fn in registry.get_by_category(cat):
+            print(f"  - {fn.name}: {fn.description}")
+    
+    print("\n\nGenerate shell command:")
+    cmd = generate_shell("detect", target="person", duration=300)
+    print(f"  detect(target='person', duration=300) → {cmd}")
+
+
 def main():
     """Run all examples"""
     print("=" * 70)
-    print("TEXT TO STREAMWARE EXAMPLES - Qwen2.5 14B")
+    print("TEXT TO STREAMWARE EXAMPLES")
     print("=" * 70)
     
+    # NEW API first
+    print("\n🆕 NEW API (Recommended):")
+    example_0_new_api()
+    example_new_shell()
+    example_function_registry()
+    
+    # Legacy examples
+    print("\n📦 Legacy Examples:")
     examples = [
         example_1_basic_conversion,
         example_2_complex_requests,
@@ -332,20 +421,22 @@ def main():
             example()
         except Exception as e:
             print(f"\nNote: {example.__name__} - {e}")
-            print("(Make sure Qwen2.5 14B is installed: ollama pull qwen2.5:14b)")
     
     print("\n" + "=" * 70)
     print("Examples completed!")
     print("=" * 70)
-    print("\n🚀 Quick Start:")
-    print("  # Install Qwen2.5 14B")
-    print("  ollama pull qwen2.5:14b")
+    print("\n🚀 Quick Start (NEW):")
+    print("  # Install LLM model")
+    print("  ollama pull llama3.2")
     print()
-    print("  # Test conversion")
-    print('  python3 -c "from streamware.components.text2streamware import text_to_sq; print(text_to_sq(\\'upload file to server\\'))"')
+    print("  # Start interactive shell")
+    print("  sq shell")
     print()
-    print("  # Interactive mode")
-    print("  sq llm 'your request' --to-sq --provider ollama --model qwen2.5:14b")
+    print("  # List available functions")
+    print("  sq functions")
+    print()
+    print("  # Or use direct commands:")
+    print('  sq watch "detect person and email admin@x.com immediately"')
 
 
 if __name__ == "__main__":
