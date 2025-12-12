@@ -1,7 +1,7 @@
 // Tauri IPC Commands
 // These functions are callable from JavaScript via invoke()
 
-use tauri::{command, Window, Manager};
+use tauri::command;
 
 use crate::server;
 
@@ -24,7 +24,7 @@ pub async fn restart_server(port: u16, language: String) -> Result<String, Strin
     server::stop_server();
     
     // Wait for clean shutdown
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    std::thread::sleep(std::time::Duration::from_millis(500));
     
     match server::start_server(port, &language) {
         Ok(_) => Ok("Server restarted successfully".to_string()),
@@ -49,12 +49,6 @@ pub fn get_language() -> String {
 pub async fn set_language(language: String) -> Result<String, String> {
     server::set_language(&language);
     Ok(format!("Language set to: {}", language))
-}
-
-/// Minimize window to system tray
-#[command]
-pub fn minimize_to_tray(window: Window) -> Result<(), String> {
-    window.hide().map_err(|e| e.to_string())
 }
 
 /// Show a system notification

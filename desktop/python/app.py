@@ -16,6 +16,17 @@ import time
 from pathlib import Path
 from typing import Optional
 
+# Add system site-packages for GTK/gi (needed when running in venv)
+SYSTEM_PACKAGES = [
+    '/usr/lib/python3/dist-packages',
+    '/usr/lib/python3.13/dist-packages',
+    '/usr/lib/python3.12/dist-packages',
+    '/usr/lib/python3.11/dist-packages',
+]
+for pkg_path in SYSTEM_PACKAGES:
+    if os.path.exists(pkg_path) and pkg_path not in sys.path:
+        sys.path.insert(0, pkg_path)
+
 # Add parent package to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
@@ -128,7 +139,11 @@ class VoiceShellApp:
             
     def create_window(self):
         """Create the main application window."""
-        import webview
+        try:
+            import webview
+        except ImportError:
+            print("❌ pywebview not installed. Install: pip install pywebview")
+            return None
         
         url = f"http://127.0.0.1:{self.http_port}"
         
@@ -147,8 +162,6 @@ class VoiceShellApp:
         
     def run(self):
         """Run the desktop application."""
-        import webview
-        
         print("🖥️ Starting Streamware Voice Shell Desktop...")
         print(f"   Port: {self.port}")
         print(f"   Language: {self.language}")
@@ -162,9 +175,32 @@ class VoiceShellApp:
         
         # Create and run window (blocks until closed)
         print("🪟 Opening application window...")
-        self.create_window()
         
-        webview.start(debug=self.verbose)
+        try:
+            import webview
+            self.create_window()
+            webview.start(debug=self.verbose)
+        except Exception as e:
+            error_msg = str(e)
+            if "GTK" in error_msg or "QT" in error_msg or "gi" in error_msg:
+                print("\n❌ GUI backend not available!")
+                print("\n📦 To fix, install GTK Python bindings:")
+                print("   Ubuntu/Debian: sudo apt install python3-gi python3-gi-cairo gir1.2-webkit2-4.1")
+                print("   Fedora:        sudo dnf install python3-gobject webkit2gtk4.1")
+                print("   Arch:          sudo pacman -S python-gobject webkit2gtk-4.1")
+                print("\n   Or use QT:")
+                print("   pip install PyQt6 PyQt6-WebEngine")
+                print(f"\n🌐 Meanwhile, open in browser: http://localhost:{self.http_port}")
+                
+                # Keep server running
+                print("\n🔄 Server still running. Press Ctrl+C to stop.")
+                try:
+                    while True:
+                        time.sleep(1)
+                except KeyboardInterrupt:
+                    pass
+            else:
+                print(f"❌ Error: {e}")
         
         # Cleanup
         print("👋 Shutting down...")

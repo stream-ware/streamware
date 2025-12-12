@@ -49,7 +49,32 @@ pub fn start_server(port: u16, language: &str) -> Result<(), String> {
     // Start log forwarding thread
     start_log_forwarder();
     
+    // Wait for server to be ready (check HTTP port)
+    let http_port = port + 1;
+    let max_attempts = 30;  // 30 seconds timeout
+    for attempt in 1..=max_attempts {
+        if check_server_ready(http_port) {
+            log::info!("Server ready on port {} after {} seconds", http_port, attempt);
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        log::debug!("Waiting for server... attempt {}/{}", attempt, max_attempts);
+    }
+    
+    log::warn!("Server may not be fully ready after {} seconds", max_attempts);
     Ok(())
+}
+
+/// Check if the HTTP server is responding
+fn check_server_ready(port: u16) -> bool {
+    use std::net::TcpStream;
+    use std::time::Duration;
+    
+    let addr = format!("127.0.0.1:{}", port);
+    TcpStream::connect_timeout(
+        &addr.parse().unwrap(),
+        Duration::from_millis(500)
+    ).is_ok()
 }
 
 /// Stop the Python server
@@ -60,7 +85,6 @@ pub fn stop_server() {
         // Try graceful shutdown first
         #[cfg(unix)]
         {
-            use std::os::unix::process::CommandExt;
             unsafe {
                 libc::kill(child.id() as i32, libc::SIGTERM);
             }
