@@ -52,6 +52,19 @@ INTENT_KEYWORDS = {
     "fast": ["fast", "quick", "szybko", "szybki"],
     "slow": ["slow", "detailed", "wolno", "szczegółowo", "dokładnie"],
     "realtime": ["realtime", "instant", "natychmiast", "w czasie rzeczywistym"],
+    
+    # Notifications
+    "email": ["email", "mail", "send message", "wyślij", "e-mail"],
+    "slack": ["slack", "slack message"],
+    "telegram": ["telegram", "tg"],
+    "webhook": ["webhook", "http", "api", "post to"],
+    "save": ["save", "record", "zapisz", "nagraj"],
+    "screenshot": ["screenshot", "capture", "zrzut", "zdjęcie"],
+    
+    # Notification mode
+    "instant": ["instant", "immediately", "natychmiast", "od razu", "each time", "every time"],
+    "digest": ["digest", "batch", "zbiorczo", "co minutę", "every minute"],
+    "summary": ["summary", "report", "raport", "podsumowanie", "at end", "na koniec"],
 }
 
 # Intent templates
@@ -130,9 +143,22 @@ class Intent:
     tts_mode: str = "diff"
     guarder: bool = False
     
+    # Notifications
+    notify_email: Optional[str] = None      # Email address
+    notify_slack: Optional[str] = None      # Slack channel
+    notify_telegram: Optional[str] = None   # Telegram chat_id
+    notify_webhook: Optional[str] = None    # Webhook URL
+    save_recording: bool = False            # Save video recording
+    save_screenshot: bool = False           # Save screenshots on detection
+    
+    # Notification strategy
+    notify_mode: str = "digest"             # instant, digest, summary
+    notify_interval: int = 60               # Seconds between digest emails
+    notify_cooldown: int = 300              # Min seconds between same alerts
+    
     def to_env(self) -> Dict[str, str]:
         """Convert to environment variables."""
-        return {
+        env = {
             "SQ_STREAM_FPS": str(self.fps),
             "SQ_STREAM_MODE": self.mode,
             "SQ_STREAM_FOCUS": self.target,
@@ -140,6 +166,23 @@ class Intent:
             "SQ_USE_GUARDER": str(self.guarder).lower(),
             "SQ_YOLO_SKIP_LLM_THRESHOLD": "1.0" if self.llm else "0.3",
         }
+        if self.notify_email:
+            env["SQ_NOTIFY_EMAIL"] = self.notify_email
+        if self.notify_slack:
+            env["SQ_NOTIFY_SLACK"] = self.notify_slack
+        if self.notify_telegram:
+            env["SQ_NOTIFY_TELEGRAM"] = self.notify_telegram
+        if self.notify_webhook:
+            env["SQ_NOTIFY_WEBHOOK"] = self.notify_webhook
+        if self.save_recording:
+            env["SQ_SAVE_RECORDING"] = "true"
+        if self.save_screenshot:
+            env["SQ_SAVE_SCREENSHOT"] = "true"
+        # Notification strategy
+        env["SQ_NOTIFY_MODE"] = self.notify_mode
+        env["SQ_NOTIFY_INTERVAL"] = str(self.notify_interval)
+        env["SQ_NOTIFY_COOLDOWN"] = str(self.notify_cooldown)
+        return env
     
     def describe(self) -> str:
         """Human-readable description of intent."""
@@ -153,6 +196,8 @@ class Intent:
             parts.append("Opisuję scenę")
         elif self.action == "alert":
             parts.append(f"Powiadamiam o {self.target}")
+        elif self.action == "detect":
+            parts.append(f"Wykrywam {self.target}")
         
         if self.trigger:
             triggers_pl = {"enter": "wejściu", "leave": "wyjściu", "move": "ruchu"}
@@ -164,6 +209,24 @@ class Intent:
             parts.append(f"z LLM ({self.llm_model})")
         else:
             parts.append("tylko YOLO")
+        
+        # Add notifications
+        notifs = []
+        if self.notify_email:
+            notifs.append(f"📧 {self.notify_email}")
+        if self.notify_slack:
+            notifs.append(f"💬 Slack: {self.notify_slack}")
+        if self.notify_telegram:
+            notifs.append(f"📱 Telegram: {self.notify_telegram}")
+        if self.notify_webhook:
+            notifs.append(f"🔗 Webhook")
+        if self.save_screenshot:
+            notifs.append("📷 Screenshot")
+        if self.save_recording:
+            notifs.append("🎥 Recording")
+        
+        if notifs:
+            parts.append("→ " + ", ".join(notifs))
         
         return " ".join(parts)
     
@@ -281,15 +344,92 @@ def parse_intent(text: str) -> Intent:
             intent.llm = True
             intent.guarder = True
     
+    # Parse notifications
+    # Extract email addresses
+    email_pattern = r'[\w\.-]+@[\w\.-]+\.\w+'
+    email_match = re.search(email_pattern, text)
+    if email_match:
+        intent.notify_email = email_match.group()
+    
+    # Extract webhook URLs
+    url_pattern = r'https?://[\w\.-]+[/\w\.-]*'
+    url_match = re.search(url_pattern, text)
+    if url_match:
+        intent.notify_webhook = url_match.group()
+    
+    # Check for notification keywords
+    if any(kw in text_lower for kw in INTENT_KEYWORDS.get("slack", [])):
+        # Extract slack channel if present (#channel or @user)
+        slack_match = re.search(r'[#@][\w-]+', text)
+        intent.notify_slack = slack_match.group() if slack_match else "#general"
+    
+    if any(kw in text_lower for kw in INTENT_KEYWORDS.get("telegram", [])):
+        # Extract telegram chat_id if present
+        tg_match = re.search(r'@[\w]+|\d{5,}', text)
+        intent.notify_telegram = tg_match.group() if tg_match else None
+    
+    # Check for save options
+    if any(kw in text_lower for kw in INTENT_KEYWORDS.get("save", [])):
+        intent.save_recording = True
+    
+    if any(kw in text_lower for kw in INTENT_KEYWORDS.get("screenshot", [])):
+        intent.save_screenshot = True
+    
+    # Detect notification mode
+    if any(kw in text_lower for kw in INTENT_KEYWORDS.get("instant", [])):
+        intent.notify_mode = "instant"
+    elif any(kw in text_lower for kw in INTENT_KEYWORDS.get("summary", [])):
+        intent.notify_mode = "summary"
+    else:
+        intent.notify_mode = "digest"  # Default: batch every 60s
+    
+    # Extract custom interval (e.g., "every 5 minutes")
+    interval_match = re.search(r'every\s+(\d+)\s*(min|minute|sec|second|m|s)', text_lower)
+    if interval_match:
+        value = int(interval_match.group(1))
+        unit = interval_match.group(2)
+        if unit.startswith('m'):
+            intent.notify_interval = value * 60
+        else:
+            intent.notify_interval = value
+    
     return intent
 
 
 def apply_intent(intent: Intent):
-    """Apply intent to streamware config."""
+    """Apply intent to streamware config and save user data."""
     from .config import config
     
     for key, value in intent.to_env().items():
         config.set(key, value)
+    
+    # Auto-save user-provided notification targets to .env for future use
+    saved = []
+    if intent.notify_email:
+        current = config.get("SQ_EMAIL_TO", "")
+        if intent.notify_email not in current:
+            config.set("SQ_EMAIL_TO", intent.notify_email)
+            saved.append(f"email: {intent.notify_email}")
+    
+    if intent.notify_slack and intent.notify_slack != "#general":
+        config.set("SQ_SLACK_CHANNEL", intent.notify_slack)
+        saved.append(f"slack: {intent.notify_slack}")
+    
+    if intent.notify_telegram:
+        config.set("SQ_TELEGRAM_CHAT_ID", intent.notify_telegram)
+        saved.append(f"telegram: {intent.notify_telegram}")
+    
+    if intent.notify_webhook:
+        config.set("SQ_WEBHOOK_URL", intent.notify_webhook)
+        saved.append(f"webhook: {intent.notify_webhook[:30]}...")
+    
+    # Save to .env file if any new data
+    if saved:
+        try:
+            config.save()
+            print(f"💾 Saved to .env: {', '.join(saved)}")
+        except Exception as e:
+            print(f"⚠️  Could not save to .env: {e}")
     
     print(f"✅ Intent: {intent.describe()}")
     print(f"   Raw: \"{intent.raw_text}\"")

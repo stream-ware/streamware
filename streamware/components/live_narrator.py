@@ -397,6 +397,10 @@ class LiveNarratorComponent(Component):
         if self.tts_mode not in ("normal", "all", "diff"):
             self.tts_mode = "normal"
         
+        # Notifications (email, slack, telegram, webhook) - initialized in _run_narrator
+        self._notifier = None
+        self._notifier_announced = False
+        
         # Intent for smart detection pipeline
         import urllib.parse
         intent_raw = uri.get_param("intent", "")
@@ -1326,6 +1330,22 @@ class LiveNarratorComponent(Component):
         
         original_handler = signal.signal(signal.SIGINT, cleanup_handler)
         
+        # Initialize notifications (here to avoid duplicate messages from pipeline validation)
+        notify_email = config.get("SQ_NOTIFY_EMAIL") or config.get("SQ_EMAIL_TO")
+        if notify_email and not self._notifier_announced:
+            from ..notifier import Notifier
+            self._notifier = Notifier.from_config()
+            if self._notifier.has_channels():
+                channels = []
+                if self._notifier.email:
+                    channels.append(f"📧 {self._notifier.email}")
+                if self._notifier.slack:
+                    channels.append(f"💬 {self._notifier.slack}")
+                if self._notifier.telegram:
+                    channels.append(f"📱 {self._notifier.telegram}")
+                print(f"🔔 Notifications: {', '.join(channels)} (mode={self._notifier.mode})")
+                self._notifier_announced = True
+        
         # Show configuration
         if self.realtime or self.dsl_only:
             print(f"\n🎬 Starting real-time loop (target={self.target_fps:.1f} FPS, duration={self.duration}s)", flush=True)
@@ -1536,6 +1556,14 @@ class LiveNarratorComponent(Component):
                             description=description,
                         )
                         self._history.append(entry)
+                        
+                        # Email/Slack/Telegram notifications (YOLO fast path)
+                        if self._notifier and description:
+                            self._notifier.add_event(
+                                description,
+                                screenshot_path=str(frame_path) if frame_path else None,
+                                frame=frame_num,
+                            )
                     
                     tlog.end_frame(description[:30] if description else "smart_skip")
                     self._prev_frame = frame_path
@@ -1989,6 +2017,21 @@ class LiveNarratorComponent(Component):
                 if triggered and self.webhook_url:
                     self._send_webhook(entry)
                 
+                # Email/Slack/Telegram notifications (independent of TTS)
+                # Notify on: significant detection OR trigger match
+                should_notify_external = (
+                    self._notifier and 
+                    description and 
+                    (triggered or is_worth_logging or should_speak)
+                )
+                if should_notify_external:
+                    self._notifier.add_event(
+                        description,
+                        screenshot_path=str(frame_path) if frame_path else None,
+                        frame=frame_num,
+                        triggered=triggered,
+                    )
+                
                 tlog.increment_frame_count(skipped=False)
                 tlog.end_frame(description[:30] if description else "logged")
             else:
@@ -2005,6 +2048,11 @@ class LiveNarratorComponent(Component):
         if fast_capture:
             fast_capture.stop()
             print("🛑 FastCapture stopped", flush=True)
+        
+        # Flush and stop notifications
+        if self._notifier:
+            self._notifier.stop()
+            print("📧 Notifications flushed", flush=True)
         
         # Write timing summary and optimizer stats
         tlog.write_summary()
