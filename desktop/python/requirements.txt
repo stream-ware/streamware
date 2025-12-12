@@ -1,0 +1,7 @@
+# Desktop app dependencies
+pywebview>=4.0
+pystray>=0.19.4
+Pillow>=9.0
+
+# These are from the main streamware package
+# streamware  # Install from parent: pip install -e ../..
