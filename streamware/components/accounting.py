@@ -36,6 +36,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Iterator
 
+# Disable PaddleOCR model source check for faster startup
+os.environ.setdefault('DISABLE_MODEL_SOURCE_CHECK', 'True')
+
 from ..core import Component, StreamComponent, register
 from ..uri import StreamwareURI
 from ..exceptions import ComponentError
@@ -894,18 +897,96 @@ class AccountingProjectManager:
 class InteractiveScanner:
     """Interactive document scanning with camera."""
     
-    def __init__(self, project_manager: AccountingProjectManager, project_name: str):
+    def __init__(self, project_manager: AccountingProjectManager, project_name: str = "default"):
         self.manager = project_manager
         self.project_name = project_name
         self.project = project_manager.get_project(project_name) or project_manager.create_project(project_name)
         self.ocr_engine = get_best_ocr_engine()
         self.temp_dir = Path(tempfile.mkdtemp())
         self.capture_count = 0
+        self.last_capture_error: Optional[str] = None
+
+    def _preview_and_confirm(self, image_path: Path, confirm: bool = False) -> bool:
+        self.last_capture_error = None
+
+        if not image_path.exists():
+            return False
+
+        can_gui = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
+        if can_gui:
+            try:
+                import cv2
+
+                img = cv2.imread(str(image_path))
+                if img is not None:
+                    cv2.imshow("streamware accounting preview (ESC=close)", img)
+                    cv2.waitKey(1)
+                    time.sleep(0.2)
+                    cv2.waitKey(1)
+                    cv2.destroyAllWindows()
+            except Exception as e:
+                logger.debug(f"Preview error: {e}")
+
+            try:
+                subprocess.run(["xdg-open", str(image_path)], capture_output=True, timeout=3)
+            except Exception:
+                pass
+
+        print(f"   🖼️  Podgląd zapisany: {image_path}")
+
+        if not confirm:
+            return True
+
+        while True:
+            ans = input("   ✅ Akceptujesz ujęcie? [y/n]: ").strip().lower()
+            if ans in {"y", "yes", "t", "tak"}:
+                return True
+            if ans in {"n", "no", "nie"}:
+                return False
+
+    def live_camera_preview(self, device_index: int = 0):
+        can_gui = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+        if not can_gui:
+            print("   ❌ Brak środowiska GUI (DISPLAY/WAYLAND_DISPLAY). Nie mogę pokazać podglądu na żywo.")
+            return
+
+        try:
+            import cv2
+
+            cap = cv2.VideoCapture(device_index)
+            if not cap.isOpened():
+                print("   ❌ Nie mogę otworzyć kamery przez OpenCV.")
+                return
+
+            print("   🎥 Podgląd na żywo: ESC lub q aby zamknąć okno")
+            while True:
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    break
+                cv2.imshow("streamware accounting live preview", frame)
+                key = cv2.waitKey(1) & 0xFF
+                if key in (27, ord('q')):
+                    break
+            cap.release()
+            cv2.destroyAllWindows()
+        except Exception as e:
+            print(f"   ❌ Podgląd na żywo nie działa: {e}")
     
     def capture_from_camera(self, device: str = "/dev/video0") -> Optional[Path]:
         """Capture image from camera."""
         self.capture_count += 1
         output_path = self.temp_dir / f"capture_{self.capture_count:04d}.jpg"
+        
+        # Check if camera device exists
+        if not Path(device).exists():
+            # Try to find any video device
+            video_devices = list(Path("/dev").glob("video*"))
+            if video_devices:
+                device = str(video_devices[0])
+            else:
+                logger.debug(f"No camera device found at {device}")
+                return None
         
         try:
             cmd = [
@@ -918,7 +999,11 @@ class InteractiveScanner:
             ]
             
             result = subprocess.run(cmd, capture_output=True, timeout=10)
-            
+
+            if result.returncode != 0:
+                err = (result.stderr or b"").decode(errors="ignore").strip()
+                self.last_capture_error = err or f"ffmpeg exit code {result.returncode}"
+
             if output_path.exists():
                 return output_path
                 
@@ -938,12 +1023,17 @@ class InteractiveScanner:
                 ["scrot", str(output_path)],
                 ["import", "-window", "root", str(output_path)],
             ]
-            
+
             for cmd in tools:
                 try:
-                    subprocess.run(cmd, capture_output=True, timeout=5)
+                    result = subprocess.run(cmd, capture_output=True, timeout=8)
                     if output_path.exists():
                         return output_path
+
+                    if result.returncode != 0:
+                        err = (result.stderr or b"").decode(errors="ignore").strip()
+                        if err:
+                            self.last_capture_error = err
                 except FileNotFoundError:
                     continue
                     
@@ -974,7 +1064,7 @@ class InteractiveScanner:
     
     def process_document(self, image_path: Path, auto_crop: bool = True) -> DocumentInfo:
         """Process a captured document image."""
-        doc_id = hashlib.md5(f"{image_path}{datetime.now().isoformat()}".encode()).hexdigest()[:12]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         processed_path = image_path
         if auto_crop:
@@ -993,7 +1083,34 @@ class InteractiveScanner:
         else:
             extracted_data = {}
         
-        final_path = self.project.path / "scans" / f"{doc_id}_{doc_type}.jpg"
+        # Generate meaningful filename from content
+        filename_parts = [timestamp, doc_type]
+        
+        if doc_type == "invoice":
+            if extracted_data.get("invoice_number"):
+                safe_num = re.sub(r'[^\w\-]', '_', str(extracted_data["invoice_number"]))[:20]
+                filename_parts.append(safe_num)
+            if extracted_data.get("amounts", {}).get("gross"):
+                filename_parts.append(f"{extracted_data['amounts']['gross']:.0f}PLN")
+            # Add seller name if available
+            seller = extracted_data.get("seller", {}).get("name")
+            if seller:
+                safe_seller = re.sub(r'[^\w\-]', '_', str(seller))[:15]
+                filename_parts.append(safe_seller)
+        elif doc_type == "receipt":
+            if extracted_data.get("store", {}).get("name"):
+                safe_store = re.sub(r'[^\w\-]', '_', str(extracted_data["store"]["name"]))[:15]
+                filename_parts.append(safe_store)
+            if extracted_data.get("total_amount"):
+                filename_parts.append(f"{extracted_data['total_amount']:.0f}PLN")
+        elif doc_type == "other" and text:
+            # Try LLM for unknown document types
+            llm_name = self._generate_filename_with_llm(text, doc_type)
+            if llm_name:
+                filename_parts = [timestamp, llm_name]
+        
+        doc_id = "_".join(filename_parts)
+        final_path = self.project.path / "scans" / f"{doc_id}.jpg"
         shutil.copy(processed_path, final_path)
         
         quality_score = ImageQualityAssessor.calculate_quality_score(final_path)
@@ -1014,14 +1131,27 @@ class InteractiveScanner:
         
         return doc_info
     
-    def run_interactive_session(self, source: str = "camera", tts_enabled: bool = False):
+    def run_interactive_session(self, source: str = "camera", tts_enabled: bool = False, preview: bool = False, confirm: bool = False):
         """Run interactive scanning session."""
+        # Check camera availability
+        camera_available = bool(list(Path("/dev").glob("video*")))
+        actual_source = source
+        
+        if source == "camera" and not camera_available:
+            print("\n⚠️  Kamera nie jest dostępna. Przełączam na tryb ekranu.")
+            print("   Możesz też użyć: sq accounting interactive --source screen")
+            actual_source = "screen"
+        
         print(f"\n📋 Interaktywne skanowanie dokumentów")
         print(f"   Projekt: {self.project_name}")
-        print(f"   Źródło: {source}")
+        print(f"   Źródło: {actual_source}")
         print(f"   OCR: {self.ocr_engine.name}")
         print(f"\nKomendy:")
         print("   [Enter] - Zeskanuj dokument")
+        print("   [f] - Skanuj z pliku (podaj ścieżkę)")
+        print("   [p] - Przełącz podgląd (preview)")
+        print("   [c] - Przełącz potwierdzanie (confirm)")
+        print("   [v] - Podgląd na żywo z kamery (live view)")
         print("   [q] - Zakończ")
         print("   [s] - Pokaż podsumowanie")
         print("   [e] - Eksportuj do CSV")
@@ -1029,7 +1159,7 @@ class InteractiveScanner:
         
         while True:
             try:
-                cmd = input("\n🔍 Pokaż dokument i naciśnij Enter (q=koniec): ").strip().lower()
+                cmd = input("\n🔍 Pokaż dokument i naciśnij Enter (q=koniec, f=plik): ").strip().lower()
                 
                 if cmd == "q":
                     break
@@ -1046,44 +1176,94 @@ class InteractiveScanner:
                     csv_path = self.manager.export_to_csv(self.project_name)
                     print(f"   ✅ Eksportowano do: {csv_path}")
                     continue
+                elif cmd == "p":
+                    preview = not preview
+                    print(f"   👁️  Podgląd: {'ON' if preview else 'OFF'}")
+                    continue
+                elif cmd == "c":
+                    confirm = not confirm
+                    print(f"   ✅ Potwierdzanie: {'ON' if confirm else 'OFF'}")
+                    continue
+                elif cmd == "v":
+                    if actual_source != "camera":
+                        print("   ⚠️  Live view działa tylko dla source=camera")
+                        continue
+                    self.live_camera_preview(device_index=0)
+                    continue
+                elif cmd == "f":
+                    file_path = input("   📁 Podaj ścieżkę do pliku: ").strip()
+                    if file_path and Path(file_path).exists():
+                        image_path = Path(file_path)
+                        if preview:
+                            ok = self._preview_and_confirm(image_path, confirm=confirm)
+                            if not ok:
+                                print("   ↩️  Odrzucono ujęcie")
+                                continue
+                        print("   🔄 Przetwarzam dokument...")
+                        doc_info = self.process_document(image_path)
+                        self._print_doc_result(doc_info)
+                        if tts_enabled:
+                            self._speak_result(doc_info)
+                    else:
+                        print(f"   ❌ Plik nie istnieje: {file_path}")
+                    continue
                 
                 print("   📸 Robię zdjęcie...")
                 
-                image_path = self.capture_multiple_and_select_best(source, count=3)
+                image_path = self.capture_multiple_and_select_best(actual_source, count=3)
                 
                 if not image_path:
-                    print("   ❌ Nie udało się zrobić zdjęcia")
+                    if actual_source == "camera":
+                        print("   ❌ Nie udało się zrobić zdjęcia z kamery")
+                        print("   💡 Spróbuj: sq accounting interactive --source screen")
+                    else:
+                        print("   ❌ Nie udało się zrobić zrzutu ekranu")
+                        if self.last_capture_error:
+                            print(f"   🔎 Szczegóły: {self.last_capture_error}")
+                        if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+                            print("   💡 Brak DISPLAY/WAYLAND_DISPLAY. Uruchom w sesji graficznej.")
                     continue
+
+                if preview:
+                    ok = self._preview_and_confirm(image_path, confirm=confirm)
+                    if not ok:
+                        print("   ↩️  Odrzucono ujęcie")
+                        continue
                 
                 print("   🔄 Przetwarzam dokument...")
                 
                 doc_info = self.process_document(image_path)
-                
-                print(f"\n   ✅ Dokument zeskanowany!")
-                print(f"   📄 Typ: {doc_info.type}")
-                print(f"   🎯 Pewność OCR: {doc_info.confidence:.0%}")
-                print(f"   📊 Jakość obrazu: {doc_info.quality_score:.0%}")
-                
-                if doc_info.type == "invoice":
-                    data = doc_info.extracted_data
-                    print(f"   📝 Numer: {data.get('invoice_number', 'N/A')}")
-                    print(f"   📅 Data: {data.get('invoice_date', 'N/A')}")
-                    print(f"   💰 Kwota: {data.get('amounts', {}).get('gross', 'N/A')} PLN")
-                elif doc_info.type == "receipt":
-                    data = doc_info.extracted_data
-                    print(f"   🏪 Sklep: {data.get('store', {}).get('name', 'N/A')}")
-                    print(f"   📅 Data: {data.get('receipt_date', 'N/A')}")
-                    print(f"   💰 Suma: {data.get('total_amount', 'N/A')} PLN")
+                self._print_doc_result(doc_info)
                 
                 if tts_enabled:
                     self._speak_result(doc_info)
                     
             except KeyboardInterrupt:
                 break
+            except EOFError:
+                break
             except Exception as e:
                 print(f"   ❌ Błąd: {e}")
         
         print(f"\n📋 Sesja zakończona. Zeskanowano {len(self.project.documents)} dokumentów.")
+    
+    def _print_doc_result(self, doc_info: DocumentInfo):
+        """Print document processing result."""
+        print(f"\n   ✅ Dokument zeskanowany!")
+        print(f"   📄 Typ: {doc_info.type}")
+        print(f"   🎯 Pewność OCR: {doc_info.confidence:.0%}")
+        print(f"   📊 Jakość obrazu: {doc_info.quality_score:.0%}")
+        
+        if doc_info.type == "invoice":
+            data = doc_info.extracted_data
+            print(f"   📝 Numer: {data.get('invoice_number', 'N/A')}")
+            print(f"   📅 Data: {data.get('invoice_date', 'N/A')}")
+            print(f"   💰 Kwota: {data.get('amounts', {}).get('gross', 'N/A')} PLN")
+        elif doc_info.type == "receipt":
+            data = doc_info.extracted_data
+            print(f"   🏪 Sklep: {data.get('store', {}).get('name', 'N/A')}")
+            print(f"   📅 Data: {data.get('receipt_date', 'N/A')}")
+            print(f"   💰 Suma: {data.get('total_amount', 'N/A')} PLN")
     
     def _speak_result(self, doc_info: DocumentInfo):
         """Speak scanning result using TTS."""
@@ -1104,6 +1284,43 @@ class InteractiveScanner:
             worker.speak(text, voice="pl")
         except Exception as e:
             logger.debug(f"TTS error: {e}")
+    
+    def _generate_filename_with_llm(self, ocr_text: str, doc_type: str) -> Optional[str]:
+        """Generate descriptive filename using LLM based on document content."""
+        try:
+            import requests
+            
+            prompt = f"""Na podstawie tekstu dokumentu wygeneruj krótką nazwę pliku (max 30 znaków).
+Użyj tylko liter, cyfr i podkreślników. Bez rozszerzenia.
+Zawrzyj najważniejsze info: typ, firma/sklep, kwota lub numer.
+
+Typ dokumentu: {doc_type}
+Tekst OCR (fragment):
+{ocr_text[:500]}
+
+Odpowiedz TYLKO nazwą pliku, np: faktura_ABC_1234_500PLN"""
+
+            response = requests.post(
+                "http://localhost:11434/api/generate",
+                json={
+                    "model": "llama3.2",
+                    "prompt": prompt,
+                    "stream": False
+                },
+                timeout=10
+            )
+            
+            if response.ok:
+                filename = response.json().get("response", "").strip()
+                # Sanitize filename
+                filename = re.sub(r'[^\w\-]', '_', filename)[:40]
+                if filename:
+                    return filename
+                    
+        except Exception as e:
+            logger.debug(f"LLM filename generation error: {e}")
+        
+        return None
 
 
 # ============================================================================
@@ -1151,6 +1368,11 @@ class AccountingComponent(Component):
         self.auto_crop = crop_val if isinstance(crop_val, bool) else str(crop_val).lower() == "true"
         tts_val = uri.get_param("tts", "false")
         self.tts_enabled = tts_val if isinstance(tts_val, bool) else str(tts_val).lower() == "true"
+
+        preview_val = uri.get_param("preview", "false")
+        self.preview = preview_val if isinstance(preview_val, bool) else str(preview_val).lower() == "true"
+        confirm_val = uri.get_param("confirm", "false")
+        self.confirm = confirm_val if isinstance(confirm_val, bool) else str(confirm_val).lower() == "true"
         
         self.export_format = uri.get_param("format", "csv")
         
@@ -1244,7 +1466,12 @@ class AccountingComponent(Component):
     def _interactive(self, data: Any) -> Dict:
         """Run interactive scanning session."""
         scanner = InteractiveScanner(self.manager, self.project_name)
-        scanner.run_interactive_session(source=self.source, tts_enabled=self.tts_enabled)
+        scanner.run_interactive_session(
+            source=self.source,
+            tts_enabled=self.tts_enabled,
+            preview=self.preview,
+            confirm=self.confirm,
+        )
         
         return self.manager.get_summary(self.project_name)
     
@@ -1389,3 +1616,404 @@ def list_projects() -> Dict:
     """Quick function to list projects."""
     from ..core import flow
     return flow("accounting://list").run()
+
+
+# ============================================================================
+# Auto-Scan & Voice Assistant Functions
+# ============================================================================
+
+class AutoScanner:
+    """
+    Automatyczny skaner dokumentów z archiwizacją.
+    
+    Tryby pracy:
+    - watch: Obserwuje folder i automatycznie przetwarza nowe pliki
+    - batch: Przetwarza wszystkie pliki z folderu
+    - continuous: Ciągłe skanowanie z kamery/ekranu
+    """
+    
+    def __init__(self, project_name: str = "auto_archive"):
+        self.manager = AccountingProjectManager()
+        self.project = self.manager.get_project(project_name) or self.manager.create_project(project_name)
+        self.project_name = project_name
+        self.ocr_engine = get_best_ocr_engine()
+    
+    def watch_folder(self, folder_path: str, interval: float = 2.0, callback=None, preview: bool = False, confirm: bool = False):
+        """
+        Obserwuj folder i automatycznie przetwarzaj nowe pliki.
+        
+        Args:
+            folder_path: Ścieżka do folderu z dokumentami
+            interval: Interwał sprawdzania (sekundy)
+            callback: Funkcja wywoływana po przetworzeniu dokumentu
+        """
+        folder = Path(folder_path).expanduser()
+        folder.mkdir(parents=True, exist_ok=True)
+        
+        processed_files = set()
+        
+        print(f"\n📂 Auto-archiwizacja dokumentów")
+        print(f"   Folder: {folder}")
+        print(f"   Projekt: {self.project_name}")
+        print(f"   OCR: {self.ocr_engine.name}")
+        print(f"\n   Wrzuć pliki do folderu - zostaną automatycznie przetworzone!")
+        print(f"   Ctrl+C aby zakończyć\n")
+        
+        try:
+            while True:
+                # Find new image files
+                for ext in ['*.jpg', '*.jpeg', '*.png', '*.pdf', '*.tiff', '*.bmp']:
+                    for file_path in folder.glob(ext):
+                        if file_path not in processed_files:
+                            print(f"   📄 Nowy plik: {file_path.name}")
+                            try:
+                                doc_info = self._process_file(file_path, preview=preview, confirm=confirm)
+                                processed_files.add(file_path)
+                                
+                                print(f"      ✅ {doc_info.type}: {doc_info.id}")
+                                
+                                if callback:
+                                    callback(doc_info)
+                                    
+                                # Move to processed folder
+                                processed_folder = folder / "processed"
+                                processed_folder.mkdir(exist_ok=True)
+                                file_path.rename(processed_folder / file_path.name)
+                                
+                            except Exception as e:
+                                print(f"      ❌ Błąd: {e}")
+                
+                time.sleep(interval)
+                
+        except KeyboardInterrupt:
+            print(f"\n📋 Zakończono. Przetworzono {len(processed_files)} dokumentów.")
+    
+    def batch_process(self, folder_path: str, move_processed: bool = True, preview: bool = False, confirm: bool = False) -> List[DocumentInfo]:
+        """
+        Przetwórz wszystkie pliki z folderu.
+        
+        Args:
+            folder_path: Ścieżka do folderu
+            move_processed: Czy przenosić przetworzone pliki
+            
+        Returns:
+            Lista przetworzonych dokumentów
+        """
+        folder = Path(folder_path).expanduser()
+        if not folder.exists():
+            raise ComponentError(f"Folder nie istnieje: {folder}")
+        
+        processed = []
+        
+        print(f"\n📂 Batch processing: {folder}")
+        
+        for ext in ['*.jpg', '*.jpeg', '*.png', '*.pdf', '*.tiff', '*.bmp']:
+            for file_path in folder.glob(ext):
+                print(f"   📄 {file_path.name}...", end=" ")
+                try:
+                    doc_info = self._process_file(file_path, preview=preview, confirm=confirm)
+                    processed.append(doc_info)
+                    print(f"✅ {doc_info.type}")
+                    
+                    if move_processed:
+                        processed_folder = folder / "processed"
+                        processed_folder.mkdir(exist_ok=True)
+                        file_path.rename(processed_folder / file_path.name)
+                        
+                except Exception as e:
+                    print(f"❌ {e}")
+        
+        print(f"\n📋 Przetworzono {len(processed)} dokumentów.")
+        return processed
+    
+    def continuous_scan(self, source: str = "screen", interval: float = 5.0, 
+                        auto_detect_change: bool = True, preview: bool = False, confirm: bool = False):
+        """
+        Ciągłe skanowanie z kamery/ekranu.
+        
+        Args:
+            source: 'camera' lub 'screen'
+            interval: Interwał między skanami
+            auto_detect_change: Skanuj tylko gdy wykryto zmianę
+        """
+        scanner = InteractiveScanner(self.manager, self.project_name)
+        
+        print(f"\n📸 Ciągłe skanowanie")
+        print(f"   Źródło: {source}")
+        print(f"   Interwał: {interval}s")
+        print(f"   Pokaż dokument przed kamerą/na ekranie")
+        print(f"   Ctrl+C aby zakończyć\n")
+        
+        last_hash = None
+        scan_count = 0
+        
+        try:
+            while True:
+                image_path = scanner.capture_multiple_and_select_best(source, count=1)
+                
+                if image_path:
+                    # Check if image changed (simple hash comparison)
+                    current_hash = hashlib.md5(image_path.read_bytes()).hexdigest()
+                    
+                    if not auto_detect_change or current_hash != last_hash:
+                        last_hash = current_hash
+
+                        if preview:
+                            ok = scanner._preview_and_confirm(image_path, confirm=confirm)
+                            if not ok:
+                                print("   ↩️  Odrzucono ujęcie")
+                                time.sleep(interval)
+                                continue
+                        
+                        print(f"   📸 Skan #{scan_count + 1}...", end=" ")
+                        doc_info = scanner.process_document(image_path)
+                        scan_count += 1
+                        
+                        print(f"✅ {doc_info.type} - {doc_info.id}")
+                
+                time.sleep(interval)
+                
+        except KeyboardInterrupt:
+            print(f"\n📋 Zakończono. Zeskanowano {scan_count} dokumentów.")
+    
+    def _process_file(self, file_path: Path, preview: bool = False, confirm: bool = False) -> DocumentInfo:
+        """Process a single file."""
+        scanner = InteractiveScanner(self.manager, self.project_name)
+        if preview:
+            ok = scanner._preview_and_confirm(file_path, confirm=confirm)
+            if not ok:
+                raise ComponentError("Ujęcie odrzucone")
+        return scanner.process_document(file_path, auto_crop=True)
+
+
+class VoiceAssistant:
+    """
+    Asystent głosowy do odpowiadania na pytania o zarchiwizowane dokumenty.
+    
+    Przykładowe pytania:
+    - "Ile mam faktur?"
+    - "Jaka jest suma paragonów?"
+    - "Pokaż ostatnie dokumenty"
+    - "Znajdź faktury z Biedronki"
+    """
+    
+    def __init__(self):
+        self.manager = AccountingProjectManager()
+    
+    def get_voice_summary(self, project_name: str = None) -> str:
+        """
+        Generuj podsumowanie do odczytania głosowo.
+        
+        Returns:
+            Tekst do TTS
+        """
+        if project_name:
+            projects = [project_name]
+        else:
+            projects = self.manager.list_projects()
+        
+        if not projects:
+            return "Nie masz jeszcze żadnych zarchiwizowanych dokumentów."
+        
+        total_docs = 0
+        total_invoices = 0
+        total_receipts = 0
+        invoice_sum = 0.0
+        receipt_sum = 0.0
+        
+        for proj_name in projects:
+            summary = self.manager.get_summary(proj_name)
+            total_docs += summary.get("total_documents", 0)
+            total_invoices += summary.get("by_type", {}).get("invoice", 0)
+            total_receipts += summary.get("by_type", {}).get("receipt", 0)
+            invoice_sum += summary.get("total_amounts", {}).get("invoices", 0)
+            receipt_sum += summary.get("total_amounts", {}).get("receipts", 0)
+        
+        # Build voice-friendly summary
+        parts = []
+        
+        if len(projects) == 1:
+            parts.append(f"W projekcie {projects[0]}")
+        else:
+            parts.append(f"W {len(projects)} projektach")
+        
+        parts.append(f"masz {total_docs} dokumentów.")
+        
+        if total_invoices > 0:
+            parts.append(f"{total_invoices} faktur na łączną kwotę {invoice_sum:.0f} złotych.")
+        
+        if total_receipts > 0:
+            parts.append(f"{total_receipts} paragonów na łączną kwotę {receipt_sum:.0f} złotych.")
+        
+        return " ".join(parts)
+    
+    def answer_question(self, question: str, project_name: str = None) -> str:
+        """
+        Odpowiedz na pytanie o dokumenty.
+        
+        Args:
+            question: Pytanie użytkownika
+            project_name: Opcjonalna nazwa projektu
+            
+        Returns:
+            Odpowiedź tekstowa
+        """
+        question_lower = question.lower()
+        
+        # Get all summaries
+        if project_name:
+            projects = {project_name: self.manager.get_summary(project_name)}
+        else:
+            projects = {name: self.manager.get_summary(name) for name in self.manager.list_projects()}
+        
+        # Parse question intent
+        if any(word in question_lower for word in ["ile", "liczba", "count", "how many"]):
+            return self._answer_count_question(question_lower, projects)
+        
+        elif any(word in question_lower for word in ["suma", "łącznie", "total", "razem"]):
+            return self._answer_sum_question(question_lower, projects)
+        
+        elif any(word in question_lower for word in ["ostatni", "recent", "najnowsz"]):
+            return self._answer_recent_question(projects)
+        
+        elif any(word in question_lower for word in ["znajdź", "szukaj", "find", "search"]):
+            return self._answer_search_question(question_lower, projects)
+        
+        elif any(word in question_lower for word in ["podsumowanie", "summary", "raport"]):
+            return self.get_voice_summary(project_name)
+        
+        else:
+            return self.get_voice_summary(project_name)
+    
+    def _answer_count_question(self, question: str, projects: Dict) -> str:
+        """Answer counting questions."""
+        total_docs = sum(p.get("total_documents", 0) for p in projects.values())
+        total_invoices = sum(p.get("by_type", {}).get("invoice", 0) for p in projects.values())
+        total_receipts = sum(p.get("by_type", {}).get("receipt", 0) for p in projects.values())
+        
+        if "faktur" in question:
+            return f"Masz {total_invoices} faktur."
+        elif "paragon" in question:
+            return f"Masz {total_receipts} paragonów."
+        else:
+            return f"Masz łącznie {total_docs} dokumentów: {total_invoices} faktur i {total_receipts} paragonów."
+    
+    def _answer_sum_question(self, question: str, projects: Dict) -> str:
+        """Answer sum questions."""
+        invoice_sum = sum(p.get("total_amounts", {}).get("invoices", 0) for p in projects.values())
+        receipt_sum = sum(p.get("total_amounts", {}).get("receipts", 0) for p in projects.values())
+        
+        if "faktur" in question:
+            return f"Suma faktur wynosi {invoice_sum:.0f} złotych."
+        elif "paragon" in question:
+            return f"Suma paragonów wynosi {receipt_sum:.0f} złotych."
+        else:
+            total = invoice_sum + receipt_sum
+            return f"Łączna suma dokumentów to {total:.0f} złotych. Faktury: {invoice_sum:.0f} zł, paragony: {receipt_sum:.0f} zł."
+    
+    def _answer_recent_question(self, projects: Dict) -> str:
+        """Answer questions about recent documents."""
+        all_docs = []
+        for proj_name, summary in projects.items():
+            for doc in summary.get("documents", []):
+                doc["project"] = proj_name
+                all_docs.append(doc)
+        
+        if not all_docs:
+            return "Nie masz jeszcze żadnych dokumentów."
+        
+        # Sort by date
+        all_docs.sort(key=lambda x: x.get("date", ""), reverse=True)
+        recent = all_docs[:3]
+        
+        parts = ["Ostatnie dokumenty:"]
+        for doc in recent:
+            doc_type = "faktura" if doc["type"] == "invoice" else "paragon" if doc["type"] == "receipt" else "dokument"
+            amount = doc.get("amount")
+            if amount:
+                parts.append(f"{doc_type} na {amount:.0f} złotych")
+            else:
+                parts.append(f"{doc_type}")
+        
+        return " ".join(parts)
+    
+    def _answer_search_question(self, question: str, projects: Dict) -> str:
+        """Answer search questions."""
+        # Extract search term (simple approach)
+        search_terms = []
+        for word in question.split():
+            if len(word) > 3 and word not in ["znajdź", "szukaj", "find", "search", "faktur", "paragon"]:
+                search_terms.append(word)
+        
+        if not search_terms:
+            return "Podaj co mam znaleźć, na przykład: znajdź faktury z Biedronki"
+        
+        # Search in documents (would need full text search in real implementation)
+        return f"Szukam dokumentów zawierających: {', '.join(search_terms)}. Ta funkcja wymaga pełnego indeksu tekstowego."
+    
+    def speak_summary(self, project_name: str = None):
+        """Speak the summary using TTS."""
+        text = self.get_voice_summary(project_name)
+        
+        try:
+            from ..tts_worker_process import get_tts_worker
+            worker = get_tts_worker(engine="pico", lang="pl")
+            worker.speak(text, voice="pl")
+        except Exception as e:
+            print(f"TTS niedostępny: {e}")
+            print(f"📢 {text}")
+
+
+def get_llm_context_for_accounting() -> str:
+    """
+    Generuj kontekst dla LLM o zarchiwizowanych dokumentach.
+    Używane przez voice shell do odpowiadania na pytania.
+    """
+    assistant = VoiceAssistant()
+    manager = assistant.manager
+    
+    context_parts = ["# Zarchiwizowane dokumenty księgowe\n"]
+    
+    for proj_name in manager.list_projects():
+        summary = manager.get_summary(proj_name)
+        
+        context_parts.append(f"\n## Projekt: {proj_name}")
+        context_parts.append(f"- Dokumentów: {summary.get('total_documents', 0)}")
+        context_parts.append(f"- Faktur: {summary.get('by_type', {}).get('invoice', 0)}")
+        context_parts.append(f"- Paragonów: {summary.get('by_type', {}).get('receipt', 0)}")
+        context_parts.append(f"- Suma faktur: {summary.get('total_amounts', {}).get('invoices', 0):.2f} PLN")
+        context_parts.append(f"- Suma paragonów: {summary.get('total_amounts', {}).get('receipts', 0):.2f} PLN")
+        
+        # Add recent documents
+        docs = summary.get("documents", [])[:5]
+        if docs:
+            context_parts.append("\nOstatnie dokumenty:")
+            for doc in docs:
+                context_parts.append(f"  - {doc['type']}: {doc.get('amount', 'N/A')} PLN ({doc['date'][:10]})")
+    
+    return "\n".join(context_parts)
+
+
+# Quick functions for CLI/voice
+def auto_watch(folder: str, project: str = "auto_archive"):
+    """Uruchom automatyczną archiwizację folderu."""
+    scanner = AutoScanner(project)
+    scanner.watch_folder(folder)
+
+
+def auto_batch(folder: str, project: str = "auto_archive"):
+    """Przetwórz wszystkie pliki z folderu."""
+    scanner = AutoScanner(project)
+    return scanner.batch_process(folder)
+
+
+def voice_summary(project: str = None) -> str:
+    """Pobierz podsumowanie głosowe."""
+    assistant = VoiceAssistant()
+    return assistant.get_voice_summary(project)
+
+
+def voice_ask(question: str, project: str = None) -> str:
+    """Zadaj pytanie o dokumenty."""
+    assistant = VoiceAssistant()
+    return assistant.answer_question(question, project)

@@ -567,12 +567,13 @@ Shortcuts:
     
     # Accounting command - document scanning, OCR, invoices (NEW!)
     acc_parser = subparsers.add_parser('accounting', help='Księgowość: skanowanie dokumentów, OCR, faktury, paragony')
-    acc_parser.add_argument('operation', choices=['scan', 'analyze', 'interactive', 'summary', 'export', 'list', 'create', 'engines'],
+    acc_parser.add_argument('operation', choices=['scan', 'analyze', 'interactive', 'summary', 'export', 'list', 'create', 'engines', 'watch', 'batch', 'ask', 'auto', 'web', 'preview'],
                             nargs='?', default='interactive', help='Operacja (default: interactive)')
     acc_parser.add_argument('--project', '-p', default='default', help='Nazwa projektu księgowego')
-    acc_parser.add_argument('--source', '-s', choices=['camera', 'screen', 'file'], default='camera',
-                            help='Źródło obrazu: camera, screen, file')
+    acc_parser.add_argument('--source', '-s', choices=['camera', 'screen', 'file'], default='screen',
+                            help='Źródło obrazu: screen (domyślne), camera, file')
     acc_parser.add_argument('--file', '-f', help='Ścieżka do pliku obrazu')
+    acc_parser.add_argument('--folder', help='Folder do obserwacji/przetwarzania (watch/batch)')
     acc_parser.add_argument('--type', '-t', choices=['invoice', 'receipt', 'contract', 'auto'], default='auto',
                             help='Typ dokumentu: invoice (faktura), receipt (paragon), contract (umowa), auto')
     acc_parser.add_argument('--ocr-engine', choices=['tesseract', 'easyocr', 'paddleocr', 'doctr', 'auto'], 
@@ -580,8 +581,20 @@ Shortcuts:
     acc_parser.add_argument('--lang', '-l', default='pol', help='Język OCR: pol, eng, deu (default: pol)')
     acc_parser.add_argument('--crop', action='store_true', default=True, help='Automatyczne przycinanie dokumentu')
     acc_parser.add_argument('--no-crop', action='store_true', help='Wyłącz przycinanie')
+    acc_parser.add_argument('--preview', action='store_true', help='Pokaż podgląd ujęcia przed zapisem')
+    acc_parser.add_argument('--confirm', action='store_true', help='Wymagaj potwierdzenia ujęcia (y/n)')
     acc_parser.add_argument('--tts', action='store_true', help='Odczytuj wyniki głosowo')
     acc_parser.add_argument('--format', choices=['csv', 'json'], default='csv', help='Format eksportu')
+    acc_parser.add_argument('--question', '-q', help='Pytanie do asystenta (dla operacji ask)')
+    acc_parser.add_argument('--interval', '-i', type=float, default=2.0, help='Interwał skanowania (sekundy)')
+    acc_parser.add_argument('--no-browser', action='store_true', help='Nie otwieraj przeglądarki automatycznie (web)')
+    acc_parser.add_argument('--camera-device', type=int, default=0, help='Numer urządzenia kamery lokalnej (default: 0)')
+    acc_parser.add_argument('--rtsp', help='URL kamery RTSP (np. rtsp://user:pass@192.168.1.100:554/stream)')
+    acc_parser.add_argument('--camera', help='Nazwa kamery z .env (SQ_CAMERAS) lub indeks (0,1,2...)')
+    acc_parser.add_argument('--receipt', '--paragon', action='store_true', help='Tryb wykrywania paragonów (zoptymalizowany)')
+    acc_parser.add_argument('--invoice', '--faktura', action='store_true', help='Tryb wykrywania faktur (zoptymalizowany)')
+    acc_parser.add_argument('--document', '--doc', action='store_true', help='Tryb wykrywania dokumentów ogólnych')
+    acc_parser.add_argument('--detect-mode', choices=['fast', 'accurate', 'auto'], default='auto', help='Tryb detekcji: fast (szybki), accurate (dokładny), auto')
     
     # Global options
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
@@ -3944,7 +3957,8 @@ def handle_accounting(args) -> int:
     """Handle accounting command - document scanning, OCR, invoices."""
     from .components.accounting import (
         AccountingComponent, AccountingProjectManager, 
-        InteractiveScanner, get_available_engines
+        InteractiveScanner, get_available_engines,
+        AutoScanner, VoiceAssistant, voice_summary, voice_ask
     )
     from .core import StreamwareURI
     import json
@@ -3953,16 +3967,136 @@ def handle_accounting(args) -> int:
     project = getattr(args, 'project', 'default')
     source = getattr(args, 'source', 'camera')
     file_path = getattr(args, 'file', None)
+    folder_path = getattr(args, 'folder', None)
     doc_type = getattr(args, 'type', 'auto')
     ocr_engine = getattr(args, 'ocr_engine', 'auto')
     lang = getattr(args, 'lang', 'pol')
     crop = not getattr(args, 'no_crop', False)
     tts = getattr(args, 'tts', False)
     export_format = getattr(args, 'format', 'csv')
+    question = getattr(args, 'question', None)
+    interval = getattr(args, 'interval', 2.0)
+    preview = getattr(args, 'preview', False)
+    confirm = getattr(args, 'confirm', False)
     
-    # Build URI
+    # Handle special operations that don't use URI
+    if operation == 'watch':
+        if not folder_path:
+            folder_path = f"~/Documents/accounting/{project}"
+            print(f"💡 Używam domyślnego folderu: {folder_path}")
+        
+        scanner = AutoScanner(project)
+        scanner.watch_folder(folder_path, interval=interval, preview=preview, confirm=confirm)
+        return 0
+    
+    elif operation == 'batch':
+        if not folder_path:
+            print("❌ Podaj folder: --folder /ścieżka/do/folderu", file=sys.stderr)
+            return 1
+        
+        scanner = AutoScanner(project)
+        scanner.batch_process(folder_path, preview=preview, confirm=confirm)
+        return 0
+    
+    elif operation == 'auto':
+        # Continuous scanning from screen/camera
+        scanner = AutoScanner(project)
+        scanner.continuous_scan(source=source, interval=interval, preview=preview, confirm=confirm)
+        return 0
+    
+    elif operation == 'preview':
+        # OpenCV window preview (no browser needed)
+        from .accounting_web import run_opencv_preview
+        camera_device = getattr(args, 'camera_device', 0)
+        run_opencv_preview(source=source, camera_device=camera_device)
+        return 0
+    
+    elif operation == 'web':
+        # Web-based live scanner
+        from .accounting_web import run_accounting_web, load_camera_config_from_env, list_available_cameras
+        port = 8088
+        no_browser = getattr(args, 'no_browser', False)
+        camera_device = getattr(args, 'camera_device', 0)
+        rtsp_url = getattr(args, 'rtsp', None)
+        camera_name = getattr(args, 'camera', None)
+        
+        # If camera name provided, look it up in .env
+        if camera_name and not rtsp_url:
+            env_config = load_camera_config_from_env()
+            available = list_available_cameras(env_config)
+            
+            # Try by name
+            for cam in available:
+                if cam["name"] == camera_name:
+                    rtsp_url = cam["url"]
+                    source = "rtsp"
+                    break
+            
+            # Try by index
+            if not rtsp_url and camera_name.isdigit():
+                idx = int(camera_name)
+                if idx < len(available):
+                    rtsp_url = available[idx]["url"]
+                    source = "rtsp"
+        
+        # If RTSP provided, switch source to rtsp
+        if rtsp_url:
+            source = "rtsp"
+        
+        # Document type specialization
+        doc_types = []
+        if getattr(args, 'receipt', False):
+            doc_types.append('receipt')
+        if getattr(args, 'invoice', False):
+            doc_types.append('invoice')
+        if getattr(args, 'document', False):
+            doc_types.append('document')
+        
+        detect_mode = getattr(args, 'detect_mode', 'auto')
+        
+        run_accounting_web(
+            project=project, 
+            port=port, 
+            open_browser=not no_browser,
+            source=source,
+            camera_device=camera_device,
+            rtsp_url=rtsp_url,
+            doc_types=doc_types if doc_types else None,
+            detect_mode=detect_mode
+        )
+        return 0
+    
+    elif operation == 'ask':
+        if not question:
+            # Interactive Q&A mode
+            assistant = VoiceAssistant()
+            print("\n🎤 Asystent księgowy - zadaj pytanie (q=koniec)")
+            print("   Przykłady: 'ile mam faktur?', 'jaka jest suma paragonów?'\n")
+            
+            while True:
+                try:
+                    q = input("❓ ").strip()
+                    if q.lower() in ['q', 'quit', 'exit']:
+                        break
+                    if q:
+                        answer = assistant.answer_question(q, project if project != 'default' else None)
+                        print(f"📢 {answer}\n")
+                        if tts:
+                            assistant.speak_summary(project if project != 'default' else None)
+                except (KeyboardInterrupt, EOFError):
+                    break
+            return 0
+        else:
+            answer = voice_ask(question, project if project != 'default' else None)
+            print(f"📢 {answer}")
+            if tts:
+                VoiceAssistant().speak_summary(project if project != 'default' else None)
+            return 0
+    
+    # Build URI for standard operations
     uri_str = f"accounting://{operation}?project={project}&source={source}&lang={lang}"
     uri_str += f"&ocr_engine={ocr_engine}&crop={'true' if crop else 'false'}"
+    uri_str += f"&preview={'true' if preview else 'false'}&confirm={'true' if confirm else 'false'}"
     uri_str += f"&tts={'true' if tts else 'false'}&format={export_format}"
     
     if file_path:
@@ -3989,6 +4123,11 @@ def handle_accounting(args) -> int:
             print("-" * 40)
             for proj in result.get('projects', []):
                 print(f"  📂 {proj['name']} ({proj['documents']} dokumentów)")
+            
+            # Show voice summary
+            if tts or True:  # Always show summary
+                summary = voice_summary()
+                print(f"\n📢 {summary}")
                 
         elif operation == 'summary':
             print(f"\n📊 Podsumowanie projektu: {project}")
@@ -4000,6 +4139,10 @@ def handle_accounting(args) -> int:
             amounts = result.get('total_amounts', {})
             print(f"  💰 Suma faktur: {amounts.get('invoices', 0):.2f} PLN")
             print(f"  💵 Suma paragonów: {amounts.get('receipts', 0):.2f} PLN")
+            
+            # Voice summary
+            if tts:
+                VoiceAssistant().speak_summary(project)
             
         elif operation == 'export':
             print(f"\n✅ Eksportowano do: {result.get('path', '')}")
