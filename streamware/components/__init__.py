@@ -239,6 +239,18 @@ from .live_narrator import (
     describe_now,
 )
 
+from .accounting import (
+    AccountingComponent,
+    scan_document,
+    analyze_document,
+    get_project_summary,
+    export_project,
+    interactive_scan,
+    list_ocr_engines,
+    create_project,
+    list_projects,
+)
+
 __all__ = [
     # CurLLM
     "CurLLMComponent",
@@ -439,4 +451,15 @@ __all__ = [
     "live_narrator",
     "watch_for",
     "describe_now",
+    
+    # Accounting (OCR, invoices, receipts)
+    "AccountingComponent",
+    "scan_document",
+    "analyze_document",
+    "get_project_summary",
+    "export_project",
+    "interactive_scan",
+    "list_ocr_engines",
+    "create_project",
+    "list_projects",
 ]

@@ -125,6 +125,11 @@ class RegistryComponent(Component):
                 "description": "SSH operations and file transfer",
                 "dependencies": ["paramiko"],
                 "tags": ["network", "deployment", "files"]
+            },
+            "accounting": {
+                "description": "Document scanning, OCR, invoice/receipt processing",
+                "dependencies": ["opencv-python", "tesseract-ocr"],
+                "tags": ["ocr", "accounting", "invoices", "receipts", "documents"]
             }
         }
     

@@ -565,6 +565,24 @@ Shortcuts:
     voice_shell_parser.add_argument('--verbose', '-v', action='store_true', help='Verbose logging')
     voice_shell_parser.add_argument('--lang', '-l', default='en', help='Default language (en, pl, de)')
     
+    # Accounting command - document scanning, OCR, invoices (NEW!)
+    acc_parser = subparsers.add_parser('accounting', help='Księgowość: skanowanie dokumentów, OCR, faktury, paragony')
+    acc_parser.add_argument('operation', choices=['scan', 'analyze', 'interactive', 'summary', 'export', 'list', 'create', 'engines'],
+                            nargs='?', default='interactive', help='Operacja (default: interactive)')
+    acc_parser.add_argument('--project', '-p', default='default', help='Nazwa projektu księgowego')
+    acc_parser.add_argument('--source', '-s', choices=['camera', 'screen', 'file'], default='camera',
+                            help='Źródło obrazu: camera, screen, file')
+    acc_parser.add_argument('--file', '-f', help='Ścieżka do pliku obrazu')
+    acc_parser.add_argument('--type', '-t', choices=['invoice', 'receipt', 'contract', 'auto'], default='auto',
+                            help='Typ dokumentu: invoice (faktura), receipt (paragon), contract (umowa), auto')
+    acc_parser.add_argument('--ocr-engine', choices=['tesseract', 'easyocr', 'paddleocr', 'doctr', 'auto'], 
+                            default='auto', help='Silnik OCR (default: auto - wybiera najlepszy)')
+    acc_parser.add_argument('--lang', '-l', default='pol', help='Język OCR: pol, eng, deu (default: pol)')
+    acc_parser.add_argument('--crop', action='store_true', default=True, help='Automatyczne przycinanie dokumentu')
+    acc_parser.add_argument('--no-crop', action='store_true', help='Wyłącz przycinanie')
+    acc_parser.add_argument('--tts', action='store_true', help='Odczytuj wyniki głosowo')
+    acc_parser.add_argument('--format', choices=['csv', 'json'], default='csv', help='Format eksportu')
+    
     # Global options
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--quiet', '-q', action='store_true', help='Quiet mode')
@@ -651,6 +669,8 @@ Shortcuts:
             return handle_functions(args)
         elif args.command == 'voice-shell':
             return handle_voice_shell(args)
+        elif args.command == 'accounting':
+            return handle_accounting(args)
         else:
             print(f"Unknown command: {args.command}", file=sys.stderr)
             return 1
@@ -3918,6 +3938,97 @@ def handle_functions(args) -> int:
     print("=" * 60)
     
     return 0
+
+
+def handle_accounting(args) -> int:
+    """Handle accounting command - document scanning, OCR, invoices."""
+    from .components.accounting import (
+        AccountingComponent, AccountingProjectManager, 
+        InteractiveScanner, get_available_engines
+    )
+    from .core import StreamwareURI
+    import json
+    
+    operation = getattr(args, 'operation', 'interactive')
+    project = getattr(args, 'project', 'default')
+    source = getattr(args, 'source', 'camera')
+    file_path = getattr(args, 'file', None)
+    doc_type = getattr(args, 'type', 'auto')
+    ocr_engine = getattr(args, 'ocr_engine', 'auto')
+    lang = getattr(args, 'lang', 'pol')
+    crop = not getattr(args, 'no_crop', False)
+    tts = getattr(args, 'tts', False)
+    export_format = getattr(args, 'format', 'csv')
+    
+    # Build URI
+    uri_str = f"accounting://{operation}?project={project}&source={source}&lang={lang}"
+    uri_str += f"&ocr_engine={ocr_engine}&crop={'true' if crop else 'false'}"
+    uri_str += f"&tts={'true' if tts else 'false'}&format={export_format}"
+    
+    if file_path:
+        uri_str += f"&file={file_path}"
+    if doc_type and doc_type != 'auto':
+        uri_str += f"&type={doc_type}"
+    
+    try:
+        uri = StreamwareURI(uri_str)
+        component = AccountingComponent(uri)
+        result = component.process(None)
+        
+        # Format output
+        if operation == 'engines':
+            print("\n🔧 Dostępne silniki OCR:")
+            print("-" * 40)
+            for engine in result.get('engines', []):
+                status = "✅" if engine['available'] else "❌"
+                print(f"  {status} {engine['name']}")
+            print(f"\n  📌 Zalecany: {result.get('recommended', 'tesseract')}")
+            
+        elif operation == 'list':
+            print("\n📁 Projekty księgowe:")
+            print("-" * 40)
+            for proj in result.get('projects', []):
+                print(f"  📂 {proj['name']} ({proj['documents']} dokumentów)")
+                
+        elif operation == 'summary':
+            print(f"\n📊 Podsumowanie projektu: {project}")
+            print("-" * 40)
+            print(f"  📄 Dokumenty: {result.get('total_documents', 0)}")
+            by_type = result.get('by_type', {})
+            print(f"  📝 Faktury: {by_type.get('invoice', 0)}")
+            print(f"  🧾 Paragony: {by_type.get('receipt', 0)}")
+            amounts = result.get('total_amounts', {})
+            print(f"  💰 Suma faktur: {amounts.get('invoices', 0):.2f} PLN")
+            print(f"  💵 Suma paragonów: {amounts.get('receipts', 0):.2f} PLN")
+            
+        elif operation == 'export':
+            print(f"\n✅ Eksportowano do: {result.get('path', '')}")
+            
+        elif operation == 'create':
+            proj = result.get('project', {})
+            print(f"\n✅ Utworzono projekt: {proj.get('name', '')}")
+            print(f"   Ścieżka: {proj.get('path', '')}")
+            
+        elif operation == 'scan' or operation == 'analyze':
+            doc = result.get('document', result)
+            print(f"\n✅ Dokument przetworzony")
+            print(f"   📄 Typ: {doc.get('document_type', doc.get('type', 'unknown'))}")
+            print(f"   🎯 Pewność OCR: {doc.get('confidence', 0):.0%}")
+            if doc.get('extracted_data'):
+                data = doc['extracted_data']
+                if 'amounts' in data:
+                    print(f"   💰 Kwota: {data['amounts'].get('gross', 'N/A')} PLN")
+                elif 'total_amount' in data:
+                    print(f"   💰 Suma: {data.get('total_amount', 'N/A')} PLN")
+        else:
+            # Interactive mode - result is summary
+            print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
+        
+        return 0
+        
+    except Exception as e:
+        print(f"❌ Błąd: {e}", file=sys.stderr)
+        return 1
 
 
 if __name__ == '__main__':
