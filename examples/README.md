@@ -7,23 +7,35 @@ This directory contains example scripts demonstrating various features and usage
 **Natural language commands with LLM understanding**
 
 ```bash
-# Start interactive shell
+# Start interactive shell (terminal)
 sq shell
 
-# With auto-execute (no confirmation)
-sq shell --auto
+# Start voice shell (browser)
+sq voice-shell
+# Open http://localhost:8766 in browser
 
 # List available functions
 sq functions
-
-# Example session:
-# sq> detect person and email admin@company.com immediately
-# ✅ Start person detection, send email immediately
-#    Command: sq watch --detect person --email admin@company.com --notify-mode instant
-#    Execute? [Y/n]: y
 ```
 
-See: [LLM Shell Guide](../docs/LLM_SHELL.md)
+### Terminal Shell
+```bash
+sq shell
+sq> detect person and email admin@company.com immediately
+✅ Start person detection, send email immediately
+   Command: sq watch --detect person --email admin@company.com --notify-mode instant
+   Execute? [Y/n]: y
+```
+
+### Browser Voice Shell
+```bash
+sq voice-shell
+# Open http://localhost:8766
+# Click 🎤 and say: "detect person and email me"
+# Say "yes" to confirm
+```
+
+See: [LLM Shell Guide](../docs/LLM_SHELL.md) | [Voice Shell Guide](../docs/VOICE_SHELL.md)
 
 ---
 

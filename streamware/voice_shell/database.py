@@ -212,6 +212,20 @@ class VoiceShellDB:
                 return SessionRecord(**dict(row))
             return None
     
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session and all its related data."""
+        with sqlite3.connect(self.db_path) as conn:
+            # Delete logs (table is 'logs', not 'output_logs')
+            conn.execute("DELETE FROM logs WHERE session_id = ?", (session_id,))
+            # Delete commands
+            conn.execute("DELETE FROM commands WHERE session_id = ?", (session_id,))
+            # Delete context
+            conn.execute("DELETE FROM context WHERE session_id = ?", (session_id,))
+            # Delete session
+            conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+            conn.commit()
+            return True
+    
     def get_recent_sessions(self, limit: int = 10) -> List[SessionRecord]:
         """Get recent sessions."""
         with sqlite3.connect(self.db_path) as conn:

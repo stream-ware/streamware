@@ -1142,9 +1142,36 @@ class LiveNarratorComponent(Component):
             logger.debug(f"DSL TTS worker error: {e}")
 
     def _speak_tracker_event(self, obj, action: str) -> None:
-        """Speak tracker entry/exit events using TTS."""
+        """Speak tracker entry/exit events using TTS with language support."""
+        lang = getattr(self, 'tts_lang', 'en')
         label = obj.object_type.title()
-        text = f"{label} #{obj.id} {action} the frame"
+        
+        # Translate action based on language
+        if lang == 'pl':
+            # Polish translations
+            labels_pl = {'Person': 'Osoba', 'Car': 'Samochód', 'Animal': 'Zwierzę', 'Bird': 'Ptak'}
+            label = labels_pl.get(label, label)
+            actions_pl = {
+                'entered': 'weszła do kadru',
+                'exited': 'opuściła kadr',
+                'is in': 'jest w kadrze'
+            }
+            action_text = actions_pl.get(action, action)
+            text = f"{label} numer {obj.id} {action_text}"
+        elif lang == 'de':
+            # German translations
+            labels_de = {'Person': 'Person', 'Car': 'Auto', 'Animal': 'Tier', 'Bird': 'Vogel'}
+            label = labels_de.get(label, label)
+            actions_de = {
+                'entered': 'hat den Rahmen betreten',
+                'exited': 'hat den Rahmen verlassen',
+                'is in': 'ist im Rahmen'
+            }
+            action_text = actions_de.get(action, action)
+            text = f"{label} Nummer {obj.id} {action_text}"
+        else:
+            # English (default)
+            text = f"{label} number {obj.id} {action} the frame"
         
         # Avoid duplicate TTS for same event
         last_tracker_tts = getattr(self, "_last_tracker_tts", "")
@@ -1158,8 +1185,11 @@ class LiveNarratorComponent(Component):
                 engine=self.tts_engine,
                 rate=self.tts_rate,
                 voice=self.tts_voice,
+                lang=lang,  # Pass language
             )
-            worker.speak(text)
+            # Pass voice/lang per-message
+            voice = self.tts_voice or (lang if lang != 'en' else '')
+            worker.speak(text, voice=voice)
         except Exception as e:
             logger.debug(f"Tracker TTS error: {e}")
 
@@ -2853,82 +2883,99 @@ class LiveNarratorComponent(Component):
                 file_prompt = get_prompt("track_person")
                 if file_prompt:
                     try:
-                        return file_prompt.format(**prompt_vars)
+                        return self._add_lang_instruction(file_prompt.format(**prompt_vars))
                     except KeyError:
                         pass  # Fall through to default
                 
                 # Ultra-lenient prompt for person detection - prioritize detection over accuracy
-                return "Is there a person in this image? Look for ANY human shape: person, silhouette, shadow, reflection, partial view. If you see anything that could be a person, say YES and describe them. Only say 'No person visible' if the image is 100% empty room with no humans at all. Be very generous - false positives are better than missing a person."
+                return self._add_lang_instruction("Is there a person in this image? Look for ANY human shape: person, silhouette, shadow, reflection, partial view. If you see anything that could be a person, say YES and describe them. Only say 'No person visible' if the image is 100% empty room with no humans at all. Be very generous - false positives are better than missing a person.")
             
             elif focus_obj in ("bird", "birds"):
                 # Load from file
                 file_prompt = get_prompt("track_bird")
                 if file_prompt:
                     try:
-                        return file_prompt.format(**prompt_vars)
+                        return self._add_lang_instruction(file_prompt.format(**prompt_vars))
                     except KeyError:
                         pass
-                return "Describe any birds in this image - count, activity, and location."
+                return self._add_lang_instruction("Describe any birds in this image - count, activity, and location.")
             
             elif focus_obj in ("animal", "cat", "dog", "pet", "wildlife"):
                 # Load from file
                 file_prompt = get_prompt("track_animal")
                 if file_prompt:
                     try:
-                        return file_prompt.format(**prompt_vars)
+                        return self._add_lang_instruction(file_prompt.format(**prompt_vars))
                     except KeyError:
                         pass
-                return f"Describe any {focus_obj} in this image - what it is doing and where."
+                return self._add_lang_instruction(f"Describe any {focus_obj} in this image - what it is doing and where.")
             
             else:
                 # Generic tracking - load from file
                 file_prompt = get_prompt("track_generic")
                 if file_prompt:
                     try:
-                        return file_prompt.format(**prompt_vars)
+                        return self._add_lang_instruction(file_prompt.format(**prompt_vars))
                     except KeyError:
                         pass
-                return f"Describe {self.focus}'s position and movement in this image."
+                return self._add_lang_instruction(f"Describe {self.focus}'s position and movement in this image.")
 
         elif self.mode == "diff":
             # Diff mode - load from file
             file_prompt = get_prompt("diff_describe")
             if file_prompt:
                 try:
-                    return file_prompt.format(
+                    return self._add_lang_instruction(file_prompt.format(
                         context=context,
                         prev_description=self._prev_description[:150],
                         focus=self.focus or "any changes"
-                    )
+                    ))
                 except KeyError:
                     pass
-            return f"Describe only what changed from previous frame. Focus on: {self.focus or 'any changes'}"
+            return self._add_lang_instruction(f"Describe only what changed from previous frame. Focus on: {self.focus or 'any changes'}")
 
         else:  # full mode
             # Full mode - load from file
             file_prompt = get_prompt("full_describe")
             if file_prompt:
                 try:
-                    return file_prompt.format(context=context)
+                    return self._add_lang_instruction(file_prompt.format(context=context))
                 except KeyError:
                     pass
-            return "Describe what you see in this security camera image. Be concise."
+            return self._add_lang_instruction("Describe what you see in this security camera image. Be concise.")
+    
+    def _add_lang_instruction(self, prompt: str) -> str:
+        """Add language instruction to prompt for non-English languages."""
+        lang = getattr(self, 'tts_lang', 'en')
+        if lang == 'pl':
+            # Add instruction at BOTH start and end for better compliance
+            instruction = "🇵🇱 ODPOWIEDZ PO POLSKU! Mów tylko po polsku.\n\n"
+            return instruction + prompt + "\n\n⚠️ WAŻNE: Odpowiedz TYLKO po polsku. NIE używaj angielskiego."
+        elif lang == 'de':
+            instruction = "🇩🇪 ANTWORTE AUF DEUTSCH! Sprich nur Deutsch.\n\n"
+            return instruction + prompt + "\n\n⚠️ WICHTIG: Antworte NUR auf Deutsch. Kein Englisch."
+        elif lang not in ('en', ''):
+            return f"⚠️ Respond in {lang} language.\n\n" + prompt + f"\n\n⚠️ IMPORTANT: Respond ONLY in {lang}."
+        return prompt
     
     def _build_full_prompt(self) -> str:
         """Build prompt for full description mode"""
         from ..prompts import render_prompt
-        return render_prompt("live_narrator_full", focus=self.focus or "general scene")
+        prompt = render_prompt("live_narrator_full", focus=self.focus or "general scene")
+        return self._add_lang_instruction(prompt)
 
     def _build_diff_prompt(self) -> str:
         """Build prompt for diff mode - only describe changes"""
         from ..prompts import render_prompt
         prev = self._prev_description[:150] if self._prev_description else "none"
-        return render_prompt("live_narrator_diff", focus=self.focus or "any", prev_description=prev)
+        prompt = render_prompt("live_narrator_diff", focus=self.focus or "any", prev_description=prev)
+        return self._add_lang_instruction(prompt)
 
     def _build_track_prompt(self) -> str:
         """Build prompt for tracking specific object (e.g., person)"""
         from ..prompts import render_prompt
-        return render_prompt("live_narrator_track", focus=self.focus)
+        prompt = render_prompt("live_narrator_track", focus=self.focus)
+        return self._add_lang_instruction(prompt)
     
     def _check_triggers_with_llm(self, frame_path: Path, analysis: Optional[Dict] = None) -> Optional[str]:
         """Check if any triggers match using LLM.
@@ -3003,13 +3050,16 @@ class LiveNarratorComponent(Component):
         """Speak text using unified TTS module."""
         try:
             from ..tts_worker_process import get_tts_worker
+            lang = getattr(self, 'tts_lang', 'en')
             worker = get_tts_worker(
                 engine=self.tts_engine,
                 rate=self.tts_rate,
                 voice=self.tts_voice,
-                lang=getattr(self, 'tts_lang', 'en'),  # Pass language to TTS
+                lang=lang,  # Pass language to TTS
             )
-            worker.speak(text)
+            # Pass voice/lang per-message for correct language
+            voice = self.tts_voice or (lang if lang != 'en' else '')
+            worker.speak(text, voice=voice)
         except Exception as e:
             logger.warning(f"TTS failed: {e}")
     

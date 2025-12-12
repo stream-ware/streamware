@@ -182,10 +182,13 @@ class VoiceShellServer:
         host: str = "0.0.0.0",
         port: int = 8765,
         model: str = "llama3.2",
+        verbose: bool = False,
+        default_language: str = "en",
     ):
         self.host = host
         self.port = port
         self.model = model
+        self.verbose = verbose
         
         # Event store
         self.events = EventStore()
@@ -197,11 +200,15 @@ class VoiceShellServer:
         # Load saved config first (needed for language)
         saved_config = self.db.get_all_config()
         
-        # Language support with Translator
-        self.language = saved_config.get("language", "en")
+        # Language support with Translator (prefer saved, fallback to CLI arg)
+        self.language = saved_config.get("language") or default_language
+        if self.verbose:
+            print(f"🔤 Server language: {self.language}")
         
         # Shell instance with language
         self.shell = LLMShell(model=model, language=self.language)
+        if self.verbose:
+            print(f"🔤 Shell language: {self.shell.language}")
         
         # Load saved config into shell context
         if saved_config.get("email"):
@@ -344,10 +351,20 @@ class VoiceShellServer:
     
     def close_session(self, session_id: str):
         """Close and cleanup a session."""
+        print(f"🗑️ Closing session: {session_id}")
+        
         if session_id in self.sessions:
             session = self.sessions[session_id]
             session.stop()
             del self.sessions[session_id]
+            print(f"   ✅ Removed from memory")
+            
+            # Delete from database
+            try:
+                self.db.delete_session(session_id)
+                print(f"   ✅ Deleted from database")
+            except Exception as e:
+                print(f"   ⚠️ Could not delete session from DB: {e}")
             
             # If closing current session, switch to another
             if self.current_session_id == session_id:
@@ -355,6 +372,8 @@ class VoiceShellServer:
                     self.current_session_id = list(self.sessions.keys())[-1]
                 else:
                     self.current_session_id = None
+        else:
+            print(f"   ⚠️ Session not found in memory: {session_id}")
         
     async def broadcast(self, event: Event):
         """Broadcast event to all connected clients."""
@@ -590,7 +609,10 @@ class VoiceShellServer:
     
     def _get_sessions_list(self) -> List[Dict]:
         """Get list of all sessions."""
-        return [s.to_dict() for s in self.sessions.values()]
+        sessions_list = [s.to_dict() for s in self.sessions.values()]
+        if self.verbose:
+            print(f"📋 Sessions: {len(sessions_list)} - {[s['id']+':'+s['status'] for s in sessions_list]}")
+        return sessions_list
     
     async def speak(self, text: str):
         """Send TTS message and save to session history AND database."""
@@ -974,6 +996,10 @@ class VoiceShellServer:
             executed=True
         )
         
+        # Debug: Show full command being executed
+        if self.verbose:
+            print(f"🚀 Executing: {cmd}")
+        
         await self.broadcast(Event(
             type=EventType.COMMAND_EXECUTED,
             data={"command": cmd, "session_id": session.id}
@@ -1275,25 +1301,209 @@ class VoiceShellServer:
         print("✅ Cleanup complete")
     
     async def serve_http(self):
-        """Serve the web UI."""
+        """Serve the web UI with authentication."""
         from http.server import HTTPServer, SimpleHTTPRequestHandler
+        from urllib.parse import urlparse, parse_qs
         import threading
+        import http.cookies
         
-        # Create handler that serves our HTML
+        voice_shell_server = self  # Reference for handler
+        
+        # Create handler that serves our HTML with auth
         class Handler(SimpleHTTPRequestHandler):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, directory=str(Path(__file__).parent), **kwargs)
             
+            def _get_session_user(self):
+                """Get user from session cookie."""
+                try:
+                    from .voice_shell.auth import get_auth_db
+                    
+                    cookie_header = self.headers.get('Cookie', '')
+                    cookies = http.cookies.SimpleCookie(cookie_header)
+                    
+                    if 'session' in cookies:
+                        session_token = cookies['session'].value
+                        db = get_auth_db()
+                        return db.verify_session(session_token)
+                except Exception:
+                    pass
+                return None
+            
+            def _send_json(self, data: dict, status: int = 200):
+                """Send JSON response."""
+                self.send_response(status)
+                self.send_header("Content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(data).encode())
+            
             def do_GET(self):
-                if self.path == "/" or self.path == "/index.html":
+                parsed = urlparse(self.path)
+                path = parsed.path
+                query = parse_qs(parsed.query)
+                
+                # Main page
+                if path == "/" or path == "/index.html":
                     self.send_response(200)
                     self.send_header("Content-type", "text/html")
                     self.end_headers()
-                    # Try template first, fallback to inline
                     html = get_voice_shell_html_from_template(self.server.ws_port, self.server.language)
                     self.wfile.write(html.encode())
+                
+                # Static files (CSS, JS)
+                elif path.startswith("/static/"):
+                    filename = path.replace("/static/", "")
+                    templates_dir = Path(__file__).parent / "templates"
+                    file_path = templates_dir / filename
+                    
+                    if file_path.exists() and file_path.is_file():
+                        # Determine content type
+                        content_type = "text/plain"
+                        if filename.endswith(".css"):
+                            content_type = "text/css"
+                        elif filename.endswith(".js"):
+                            content_type = "application/javascript"
+                        elif filename.endswith(".html"):
+                            content_type = "text/html"
+                        
+                        self.send_response(200)
+                        self.send_header("Content-type", content_type)
+                        self.end_headers()
+                        self.wfile.write(file_path.read_bytes())
+                    else:
+                        self.send_response(404)
+                        self.end_headers()
+                
+                # Auth: Verify magic link
+                elif path == "/auth/verify":
+                    token = query.get('token', [None])[0]
+                    if not token:
+                        self._send_json({"error": "Missing token"}, 400)
+                        return
+                    
+                    try:
+                        from .voice_shell.auth import verify_magic_link_token
+                        user, session_token = verify_magic_link_token(token)
+                        
+                        if user and session_token:
+                            # Set session cookie and redirect to main page
+                            self.send_response(302)
+                            cookie = f"session={session_token}; Path=/; Max-Age={30*24*60*60}; HttpOnly; SameSite=Lax"
+                            self.send_header("Set-Cookie", cookie)
+                            self.send_header("Location", "/")
+                            self.end_headers()
+                            print(f"✅ User logged in: {user.email}")
+                        else:
+                            self.send_response(200)
+                            self.send_header("Content-type", "text/html")
+                            self.end_headers()
+                            self.wfile.write(b"<h1>Invalid or expired link</h1><p><a href='/'>Go back</a></p>")
+                    except Exception as e:
+                        self._send_json({"error": str(e)}, 500)
+                
+                # Auth: Get current user
+                elif path == "/auth/me":
+                    user = self._get_session_user()
+                    if user:
+                        self._send_json({
+                            "authenticated": True,
+                            "user": {"id": user.id, "email": user.email}
+                        })
+                    else:
+                        self._send_json({"authenticated": False})
+                
+                # Auth: Logout
+                elif path == "/auth/logout":
+                    try:
+                        from .voice_shell.auth import get_auth_db
+                        
+                        cookie_header = self.headers.get('Cookie', '')
+                        cookies = http.cookies.SimpleCookie(cookie_header)
+                        
+                        if 'session' in cookies:
+                            db = get_auth_db()
+                            db.delete_session(cookies['session'].value)
+                        
+                        self.send_response(302)
+                        self.send_header("Set-Cookie", "session=; Path=/; Max-Age=0")
+                        self.send_header("Location", "/")
+                        self.end_headers()
+                    except Exception as e:
+                        self._send_json({"error": str(e)}, 500)
+                
+                # Auth: Get user settings (grid positions)
+                elif path == "/auth/settings":
+                    user = self._get_session_user()
+                    if not user:
+                        self._send_json({"error": "Not authenticated"}, 401)
+                        return
+                    
+                    try:
+                        from .voice_shell.auth import get_auth_db
+                        db = get_auth_db()
+                        settings = db.get_user_settings(user.id)
+                        self._send_json(settings)
+                    except Exception as e:
+                        self._send_json({"error": str(e)}, 500)
+                
                 else:
                     super().do_GET()
+            
+            def do_POST(self):
+                parsed = urlparse(self.path)
+                path = parsed.path
+                
+                # Auth: Request magic link
+                if path == "/auth/login":
+                    try:
+                        content_length = int(self.headers.get('Content-Length', 0))
+                        body = self.rfile.read(content_length).decode()
+                        data = json.loads(body) if body else {}
+                        
+                        email = data.get('email', '').strip()
+                        if not email or '@' not in email:
+                            self._send_json({"error": "Invalid email"}, 400)
+                            return
+                        
+                        from .voice_shell.auth import send_magic_link_email
+                        
+                        # Get base URL from request
+                        host = self.headers.get('Host', f'localhost:{self.server.server_port}')
+                        base_url = f"http://{host}"
+                        
+                        success = send_magic_link_email(email, base_url)
+                        
+                        if success:
+                            self._send_json({"success": True, "message": "Magic link sent! Check your email."})
+                        else:
+                            self._send_json({"error": "Failed to send email"}, 500)
+                    except Exception as e:
+                        self._send_json({"error": str(e)}, 500)
+                
+                # Auth: Save user settings (grid positions)
+                elif path == "/auth/settings":
+                    user = self._get_session_user()
+                    if not user:
+                        self._send_json({"error": "Not authenticated"}, 401)
+                        return
+                    
+                    try:
+                        from .voice_shell.auth import get_auth_db
+                        
+                        content_length = int(self.headers.get('Content-Length', 0))
+                        body = self.rfile.read(content_length).decode()
+                        settings = json.loads(body) if body else {}
+                        
+                        db = get_auth_db()
+                        db.save_user_settings(user.id, settings)
+                        
+                        self._send_json({"success": True})
+                    except Exception as e:
+                        self._send_json({"error": str(e)}, 500)
+                
+                else:
+                    self.send_response(404)
+                    self.end_headers()
             
             def log_message(self, format, *args):
                 pass  # Suppress logging
@@ -1302,10 +1512,11 @@ class VoiceShellServer:
         http_port = self.port + 1
         server = HTTPServer(("0.0.0.0", http_port), Handler)
         server.ws_port = self.port  # Store WS port for HTML to connect to
-        server.language = "en"  # Default language
+        server.language = self.language  # Use server's language
         self.http_server = server  # Store reference for cleanup
         
         print(f"   HTTP UI: http://localhost:{http_port}")
+        print(f"   Auth: POST /auth/login with {{email}} for magic link")
         
         # Run in thread
         thread = threading.Thread(target=server.serve_forever, daemon=True)

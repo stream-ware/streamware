@@ -6,7 +6,8 @@ body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
     color: #e0e0e0;
-    min-height: 100vh;
+    height: 100vh;
+    overflow: hidden;  /* No scroll - all content fits in viewport */
 }
 
 .container {
@@ -64,12 +65,14 @@ h1 {
 .dashboard {
     display: grid;
     grid-template-columns: repeat(10, 1fr);
-    grid-template-rows: auto repeat(7, minmax(80px, 1fr));  /* 1 header + 7 content rows = 8 total */
-    gap: 10px;
-    padding: 10px;
+    grid-template-rows: auto repeat(7, minmax(60px, 1fr));  /* Smaller min-height for more rows on screen */
+    gap: 8px;
+    padding: 8px;
     min-height: 100vh;
+    height: 100vh;  /* Force full viewport height */
     max-width: 1800px;
     margin: 0 auto;
+    overflow: hidden;  /* Prevent scroll, fit all content */
 }
 
 /* Header Panel - spans full width (row 1) */
@@ -161,8 +164,10 @@ h1 {
     background: #16213e;
     border-radius: 8px;
     padding: 12px;
-    overflow: hidden;
+    overflow: auto;  /* Allow internal scroll if content overflows */
     position: relative;
+    display: flex;
+    flex-direction: column;
 }
 
 /* Panel header */
@@ -451,8 +456,7 @@ h1 {
 
 /* Conversations panel */
 .conversations-panel {
-    max-height: 300px;
-    overflow-y: auto;
+    /* No max-height - let grid control size */
 }
 
 .conversations-panel h2 {
@@ -461,17 +465,180 @@ h1 {
     align-items: center;
 }
 
+/* Conversation controls */
+.conv-controls {
+    display: flex;
+    gap: 5px;
+    margin-bottom: 10px;
+}
+
+.conv-controls input {
+    flex: 1;
+    padding: 5px 8px;
+    background: #1a1a2e;
+    border: 1px solid #333;
+    border-radius: 4px;
+    color: #e0e0e0;
+    font-size: 0.85em;
+}
+
+.conv-controls input:focus {
+    border-color: #4fc3f7;
+    outline: none;
+}
+
+.btn-new-session {
+    background: #4fc3f7;
+    color: #000;
+    border: none;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+    font-weight: bold;
+    white-space: nowrap;
+}
+
+.btn-new-session:hover {
+    background: #81d4fa;
+}
+
+/* Conversation items */
+.conv-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 10px;
+    margin-bottom: 5px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.conv-item:hover {
+    background: rgba(79, 195, 247, 0.1);
+}
+
+.conv-item.active {
+    background: rgba(79, 195, 247, 0.2);
+    border-left: 3px solid #4fc3f7;
+}
+
+.conv-item .session-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.conv-item .session-name {
+    font-size: 0.9em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.conv-item .session-status {
+    font-size: 0.75em;
+    color: #888;
+}
+
+.btn-delete-conv {
+    background: transparent;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    font-size: 1.2em;
+    padding: 0 5px;
+    border-radius: 3px;
+    opacity: 0;
+    transition: all 0.2s;
+}
+
+.conv-item:hover .btn-delete-conv {
+    opacity: 1;
+}
+
+.btn-delete-conv:hover {
+    background: rgba(255, 82, 82, 0.2);
+    color: #ff5252;
+}
+
 /* Processes panel */
 .processes-panel {
     flex: 1;
-    max-height: 300px;
-    overflow-y: auto;
+    /* No max-height - let grid control size */
 }
 
 .processes-panel h2 {
     display: flex;
     align-items: center;
     gap: 10px;
+}
+
+/* Process filter */
+.process-filter {
+    display: flex;
+    gap: 5px;
+    margin-bottom: 10px;
+    flex-shrink: 0;
+}
+
+.process-filter input {
+    flex: 1;
+    padding: 5px 8px;
+    background: #1a1a2e;
+    border: 1px solid #333;
+    border-radius: 4px;
+    color: #e0e0e0;
+    font-size: 0.85em;
+}
+
+.process-filter input:focus {
+    border-color: #4fc3f7;
+    outline: none;
+}
+
+.process-filter select {
+    padding: 5px;
+    background: #1a1a2e;
+    border: 1px solid #333;
+    border-radius: 4px;
+    color: #e0e0e0;
+    font-size: 0.85em;
+    cursor: pointer;
+}
+
+.btn-clear-all {
+    background: transparent;
+    border: none;
+    color: #888;
+    cursor: pointer;
+    font-size: 0.9em;
+    padding: 3px 6px;
+    border-radius: 3px;
+    transition: all 0.2s;
+}
+
+.btn-clear-all:hover {
+    background: rgba(255, 82, 82, 0.2);
+    color: #ff5252;
+}
+
+/* Delete button in process item */
+.btn-delete-process {
+    background: transparent;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    font-size: 0.9em;
+    padding: 2px 5px;
+    border-radius: 3px;
+    transition: all 0.2s;
+}
+
+.btn-delete-process:hover {
+    background: rgba(255, 82, 82, 0.2);
+    color: #ff5252;
 }
 
 .badge {
@@ -1290,4 +1457,154 @@ select.var-input {
 @keyframes highlight {
     0%, 100% { background: #0d1117; }
     50% { background: rgba(79, 195, 247, 0.2); }
+}
+
+/* =============================================================================
+   Authentication UI
+   ============================================================================= */
+
+.auth-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.btn-login, .btn-logout {
+    padding: 5px 12px;
+    border-radius: 6px;
+    border: 1px solid #4fc3f7;
+    background: rgba(79, 195, 247, 0.1);
+    color: #4fc3f7;
+    cursor: pointer;
+    font-size: 0.85em;
+}
+
+.btn-login:hover, .btn-logout:hover {
+    background: rgba(79, 195, 247, 0.2);
+}
+
+.user-email {
+    color: #4fc3f7;
+    font-size: 0.85em;
+}
+
+/* Login Modal */
+.modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border: 1px solid #333;
+    border-radius: 12px;
+    padding: 20px;
+    width: 400px;
+    max-width: 90%;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.modal-header h3 {
+    color: #4fc3f7;
+    margin: 0;
+}
+
+.modal-close {
+    background: none;
+    border: none;
+    color: #888;
+    font-size: 24px;
+    cursor: pointer;
+}
+
+.modal-close:hover {
+    color: #fff;
+}
+
+.modal-body {
+    margin-bottom: 20px;
+}
+
+.modal-body p {
+    color: #ccc;
+    margin-bottom: 10px;
+}
+
+.modal-body input {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #333;
+    border-radius: 6px;
+    background: #0d1117;
+    color: #fff;
+    font-size: 1em;
+}
+
+.modal-body input:focus {
+    outline: none;
+    border-color: #4fc3f7;
+}
+
+.login-status {
+    margin-top: 10px;
+    padding: 8px;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+
+.login-status.success {
+    background: rgba(76, 175, 80, 0.2);
+    color: #4caf50;
+}
+
+.login-status.error {
+    background: rgba(244, 67, 54, 0.2);
+    color: #f44336;
+}
+
+.modal-footer {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.btn-primary {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    background: #4fc3f7;
+    color: #000;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+.btn-primary:hover {
+    background: #81d4fa;
+}
+
+.btn-secondary {
+    padding: 10px 20px;
+    border: 1px solid #666;
+    border-radius: 6px;
+    background: transparent;
+    color: #ccc;
+    cursor: pointer;
+}
+
+.btn-secondary:hover {
+    background: rgba(255, 255, 255, 0.1);
 }

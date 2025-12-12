@@ -457,8 +457,8 @@ Shortcuts:
     
     # Live narrator command (TTS, triggers)
     live_parser = subparsers.add_parser('live', help='Live narration with TTS and triggers', parents=[format_parser])
-    live_parser.add_argument('operation', choices=['narrator', 'watch', 'describe'],
-                             nargs='?', default='narrator', help='Operation')
+    live_parser.add_argument('operation', choices=['narrator', 'watch', 'describe', 'reader'],
+                             nargs='?', default='narrator', help='Operation: narrator, watch, describe, reader (OCR)')
     live_parser.add_argument('--url', '-u', required=True, help='Video source')
     live_parser.add_argument('--mode', '-m', choices=['full', 'diff', 'track'],
                              default='full', help='Mode: full (describe all), diff (only changes), track (follow object)')
@@ -503,6 +503,12 @@ Shortcuts:
     live_parser.add_argument('--realtime', action='store_true', help='Real-time viewer: stream DSL to browser (http://localhost:8766)')
     live_parser.add_argument('--dsl-only', action='store_true', help='DSL-only mode: skip LLM, use only OpenCV tracking (fast, up to 20 FPS)')
     live_parser.add_argument('--fps', type=float, default=None, help='Target FPS for real-time mode (default: 2 for normal, 10 for dsl-only)')
+    # OCR Reader arguments
+    live_parser.add_argument('--ocr', action='store_true', help='Enable OCR text extraction (for reader operation)')
+    live_parser.add_argument('--ocr-engine', choices=['tesseract', 'easyocr', 'paddleocr'], default='tesseract',
+                             help='OCR engine: tesseract (default), easyocr, paddleocr')
+    live_parser.add_argument('--llm-query', '--query', help='Custom LLM query about the image')
+    live_parser.add_argument('--continuous', action='store_true', help='Run continuously (for reader)')
     
     # Visualize command - real-time SVG visualization
     viz_parser = subparsers.add_parser('visualize', help='Real-time SVG visualization in browser')
@@ -556,6 +562,8 @@ Shortcuts:
     voice_shell_parser.add_argument('--host', default='0.0.0.0', help='Host to bind (default: 0.0.0.0)')
     voice_shell_parser.add_argument('--port', '-p', type=int, default=8765, help='WebSocket port (default: 8765)')
     voice_shell_parser.add_argument('--model', '-m', default='llama3.2', help='LLM model (default: llama3.2)')
+    voice_shell_parser.add_argument('--verbose', '-v', action='store_true', help='Verbose logging')
+    voice_shell_parser.add_argument('--lang', '-l', default='en', help='Default language (en, pl, de)')
     
     # Global options
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
@@ -3083,6 +3091,85 @@ def _save_watch_markdown_log(result: dict, args, output_file: str):
     print(f"📄 Markdown log saved: {output_path}")
 
 
+def _handle_reader(args) -> int:
+    """Handle live reader operation (OCR + LLM vision)."""
+    from .components.frame_reader import FrameReaderComponent
+    from .core import StreamwareURI
+    import json
+    
+    url = args.url
+    if not url:
+        print("❌ Error: --url parameter is required.", file=sys.stderr)
+        print("\nExamples:")
+        print("  sq live reader --url rtsp://192.168.1.100/stream --ocr")
+        print("  sq live reader --url /dev/video0 --ocr --llm-query 'what do you see?'")
+        print("  sq live reader --url screen:// --ocr --lang pol --tts")
+        return 1
+    
+    # Build URI
+    uri_str = f"live://reader?url={url}"
+    
+    # OCR settings
+    if getattr(args, 'ocr', True):
+        uri_str += "&ocr=true"
+    ocr_engine = getattr(args, 'ocr_engine', 'tesseract')
+    uri_str += f"&ocr_engine={ocr_engine}"
+    
+    # Language
+    lang = getattr(args, 'lang', 'eng')
+    uri_str += f"&lang={lang}"
+    
+    # LLM settings
+    llm_query = getattr(args, 'llm_query', None)
+    if llm_query:
+        uri_str += f"&llm=true&query={llm_query}"
+    
+    model = getattr(args, 'model', 'llava:7b')
+    uri_str += f"&model={model}"
+    
+    # Timing
+    interval = getattr(args, 'interval', 2.0) or 2.0
+    duration = getattr(args, 'duration', 60)
+    uri_str += f"&interval={interval}&duration={duration}"
+    
+    if getattr(args, 'continuous', False):
+        uri_str += "&continuous=true"
+    
+    if getattr(args, 'tts', False):
+        tts_lang = 'pl' if lang == 'pol' else ('de' if lang == 'deu' else 'en')
+        uri_str += f"&tts=true&tts_lang={tts_lang}"
+    
+    # Diff mode
+    if getattr(args, 'tts_diff', False):
+        uri_str += "&diff=true"
+    
+    try:
+        uri = StreamwareURI(uri_str)
+        component = FrameReaderComponent(uri)
+        result = component.process()
+        
+        # Output result
+        fmt = _get_output_format(args)
+        if fmt == "json":
+            print(json.dumps(result, indent=2, default=str))
+        else:
+            print("\n# Frame Reader Results")
+            print("---")
+            print(f"frames: {result.get('frames', 0)}")
+            print(f"analyses: {result.get('analyses', 0)}")
+            if result.get('history'):
+                print("recent_extractions:")
+                for h in result['history'][-5:]:
+                    if h.get('ocr') and h['ocr'].get('text'):
+                        print(f"  - \"{h['ocr']['text'][:60]}...\"")
+        
+        return 0
+        
+    except Exception as e:
+        print(f"❌ Error: {e}", file=sys.stderr)
+        return 1
+
+
 def handle_live(args) -> int:
     """Handle live narration command"""
     from .core import flow
@@ -3092,6 +3179,10 @@ def handle_live(args) -> int:
     
     op = getattr(args, 'operation', 'narrator') or 'narrator'
     url = args.url
+    
+    # Handle 'reader' operation separately (OCR + LLM)
+    if op == 'reader':
+        return _handle_reader(args)
     
     if not url:
         print("❌ Error: --url parameter is required (and cannot be empty).", file=sys.stderr)
@@ -3758,10 +3849,15 @@ def handle_voice_shell(args) -> int:
         from .voice_shell_server import VoiceShellServer
         import asyncio
         
+        verbose = getattr(args, 'verbose', False)
+        lang = getattr(args, 'lang', 'en')
+        
         server = VoiceShellServer(
             host=args.host,
             port=args.port,
             model=args.model,
+            verbose=verbose,
+            default_language=lang,
         )
         
         asyncio.run(server.run())

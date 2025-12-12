@@ -75,6 +75,9 @@ COMMANDS:
 - detect: sq live narrator --mode track --focus TARGET --duration 60 --skip-checks --adaptive
 - track+speak: sq live narrator --mode track --focus TARGET --duration 60 --tts --tts-diff --model llava:7b --skip-checks  
 - email alert: SQ_NOTIFY_EMAIL=EMAIL sq live narrator --mode track --focus TARGET --duration 60 --skip-checks --adaptive
+- read/ocr: sq live reader --ocr --llm-query "QUERY" --tts --duration 30
+- read clock: sq live reader --ocr --llm-query "what time does the clock show?" --tts --duration 10
+- read display: sq live reader --ocr --llm-query "what do you see on the display?" --tts --duration 30
 - stop: pkill -f 'sq watch'; pkill -f 'sq live'
 
 EXAMPLES:
@@ -86,6 +89,15 @@ User: track person and speak
 
 User: email tom@x.com when person detected
 {{"understood": true, "function": "notify", "shell_command": "SQ_NOTIFY_EMAIL=tom@x.com sq live narrator --mode track --focus person --duration 60 --skip-checks --adaptive", "explanation": "Detect person, email tom@x.com"}}
+
+User: read clock / what time is it / która godzina
+{{"understood": true, "function": "read_clock", "shell_command": "sq live reader --ocr --llm-query 'what time does the clock show?' --tts --duration 10", "explanation": "Read time from clock"}}
+
+User: read display / czytaj wyświetlacz
+{{"understood": true, "function": "read_display", "shell_command": "sq live reader --ocr --llm-query 'what do you see on the display?' --tts --duration 30", "explanation": "Read text from display"}}
+
+User: describe / opisz
+{{"understood": true, "function": "describe", "shell_command": "sq live narrator --mode full --duration 10 --tts --model llava:7b --skip-checks", "explanation": "Describe what camera sees"}}
 
 User: stop
 {{"understood": true, "function": "stop", "shell_command": "pkill -f 'sq watch'; pkill -f 'sq live'", "explanation": "Stop all"}}
@@ -128,6 +140,20 @@ User: unknown request
         self.system_prompt = self.SYSTEM_PROMPT.format(
             functions=get_llm_context()
         )
+    
+    def _get_help_text(self) -> str:
+        """Get help text with available commands."""
+        t = self.t
+        lines = [
+            t.conv("help_intro"),
+            "",
+            f"  • {t.conv('help_track')}",
+            f"  • {t.conv('help_describe')}",
+            f"  • {t.conv('help_read_clock')}",
+            f"  • {t.conv('help_read_display')}",
+            f"  • {t.conv('help_stop')}",
+        ]
+        return "\n".join(lines)
     
     def parse(self, user_input: str) -> ShellResult:
         """Parse user input using LLM."""
@@ -200,6 +226,50 @@ User: unknown request
                     ("3", f"{self.t.cmd('tracking')} {target_tr} {opt_email}", "need_email"),
                 ],
                 explanation=question,
+            )
+        
+        # Reader commands - OCR + LLM vision
+        if any(x in lower for x in ["read clock", "czytaj zegar", "what time", "która godzina", "jaka godzina", "zegar"]):
+            lang_param = f"--lang {self.language}" if hasattr(self, 'language') and self.language != 'en' else ""
+            return ShellResult(
+                understood=True,
+                function_name="read_clock",
+                shell_command=f"sq live reader --ocr --llm-query 'what time does the clock show? Answer with just the time.' --tts --duration 10 {lang_param}".strip(),
+                explanation=self.t.conv("reading_clock") if hasattr(self, 't') else "Reading time from clock",
+            )
+        
+        if any(x in lower for x in ["read display", "czytaj wyświetlacz", "read screen", "czytaj ekran", "wyświetlacz"]):
+            lang_param = f"--lang {self.language}" if hasattr(self, 'language') and self.language != 'en' else ""
+            return ShellResult(
+                understood=True,
+                function_name="read_display",
+                shell_command=f"sq live reader --ocr --llm-query 'what text do you see on the display? Read it out loud.' --tts --duration 30 {lang_param}".strip(),
+                explanation=self.t.conv("reading_display") if hasattr(self, 't') else "Reading text from display",
+            )
+        
+        if any(x in lower for x in ["read", "czytaj", "ocr"]) and "clock" not in lower and "display" not in lower:
+            lang_param = f"--lang {self.language}" if hasattr(self, 'language') and self.language != 'en' else ""
+            return ShellResult(
+                understood=True,
+                function_name="read",
+                shell_command=f"sq live reader --ocr --tts --duration 30 {lang_param}".strip(),
+                explanation=self.t.conv("reading_text") if hasattr(self, 't') else "Reading text from camera",
+            )
+        
+        if any(x in lower for x in ["describe", "opisz", "co widzisz", "what do you see"]):
+            lang_param = f"--lang {self.language}" if hasattr(self, 'language') and self.language != 'en' else ""
+            return ShellResult(
+                understood=True,
+                function_name="describe",
+                shell_command=f"sq live narrator --mode full --duration 10 --tts --model llava:7b --skip-checks {lang_param}".strip(),
+                explanation=self.t.conv("describing") if hasattr(self, 't') else "Describing what camera sees",
+            )
+        
+        if any(x in lower for x in ["hello", "hi", "cześć", "hej", "help", "pomoc"]):
+            return ShellResult(
+                understood=True,
+                function_name="help",
+                explanation=self._get_help_text(),
             )
         
         if "detect" in lower and "email" in lower:

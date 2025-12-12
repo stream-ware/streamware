@@ -166,6 +166,20 @@ class ConversationMessages:
     person_detected: str = "Person detected"
     motion_detected: str = "Motion detected"
     no_target: str = "No {target} visible"
+    
+    # Reader / OCR commands
+    reading_clock: str = "Reading time from clock..."
+    reading_display: str = "Reading text from display..."
+    reading_text: str = "Reading text from camera..."
+    describing: str = "Describing what camera sees..."
+    
+    # Help
+    help_intro: str = "Available commands:"
+    help_track: str = "Track [person/car] - detect and follow objects"
+    help_describe: str = "Describe / Opisz - describe what camera sees"
+    help_read_clock: str = "Read clock / Która godzina - read time from clock"
+    help_read_display: str = "Read display / Czytaj wyświetlacz - OCR text"
+    help_stop: str = "Stop - stop current operation"
 
 
 @dataclass
@@ -289,6 +303,18 @@ POLISH = LanguagePack(
         person_detected="Wykryto osobę",
         motion_detected="Wykryto ruch",
         no_target="Brak {target}",
+        # Reader / OCR
+        reading_clock="Czytam godzinę z zegara...",
+        reading_display="Czytam tekst z wyświetlacza...",
+        reading_text="Czytam tekst z kamery...",
+        describing="Opisuję co widzi kamera...",
+        # Help
+        help_intro="Dostępne polecenia:",
+        help_track="Śledź [osobę/samochód] - wykryj i śledź obiekty",
+        help_describe="Opisz - opisz co widzi kamera",
+        help_read_clock="Która godzina / Czytaj zegar - odczytaj godzinę",
+        help_read_display="Czytaj wyświetlacz - OCR tekstu",
+        help_stop="Stop - zatrzymaj bieżącą operację",
     ),
     voice=VoicePrompts(
         welcome="Witaj! Co chciałbyś monitorować?",

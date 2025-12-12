@@ -55,8 +55,9 @@ def _run_tts_worker(queue: mp.Queue, stop_event: mp.Event, config: TTSWorkerConf
         print(f"❌ TTS worker init failed: cannot import tts.speak: {e}", flush=True)
         return
 
+    voice_info = f", voice={config.voice}" if config.voice else ""
     print(
-        f"🔊 TTS Worker started (PID={mp.current_process().pid}, engine={config.engine})",
+        f"🔊 TTS Worker started (PID={mp.current_process().pid}, engine={config.engine}{voice_info})",
         flush=True,
     )
 
@@ -97,7 +98,7 @@ def _run_tts_worker(queue: mp.Queue, stop_event: mp.Event, config: TTSWorkerConf
                     block=True,
                 )
             except Exception as e:
-                logger.debug(f"TTS worker speak failed: {e}")
+                print(f"❌ TTS speak failed: {e}", flush=True)
                 time.sleep(0.1)
 
     except Exception as e:  # pragma: no cover - best effort
@@ -166,8 +167,13 @@ class TTSWorkerProcess:
     # ------------------------------------------------------------------
     # API
     # ------------------------------------------------------------------
-    def speak(self, text: str) -> None:
-        """Enqueue text to be spoken by worker process."""
+    def speak(self, text: str, voice: str = "") -> None:
+        """Enqueue text to be spoken by worker process.
+        
+        Args:
+            text: Text to speak
+            voice: Optional voice/language override (e.g. 'pl', 'de')
+        """
 
         if not text:
             return
@@ -177,7 +183,10 @@ class TTSWorkerProcess:
 
         if self._queue is not None:
             try:
-                self._queue.put_nowait({"text": text})
+                msg = {"text": text}
+                if voice:
+                    msg["voice"] = voice
+                self._queue.put_nowait(msg)
             except Exception as e:
                 logger.debug(f"Failed to enqueue TTS text: {e}")
 

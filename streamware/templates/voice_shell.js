@@ -26,6 +26,97 @@ let currentSessionId = null;
 let sessions = {};
 let continuousMode = true;
 let bargeInMode = true;
+let currentUser = null;  // Logged in user
+
+// =============================================================================
+// Authentication Functions
+// =============================================================================
+
+function showLoginModal() {
+    document.getElementById('login-modal').style.display = 'flex';
+    document.getElementById('login-email').focus();
+    document.getElementById('login-status').textContent = '';
+}
+
+function hideLoginModal() {
+    document.getElementById('login-modal').style.display = 'none';
+}
+
+async function requestMagicLink() {
+    const email = document.getElementById('login-email').value.trim();
+    const statusEl = document.getElementById('login-status');
+    
+    if (!email || !email.includes('@')) {
+        statusEl.textContent = '❌ Please enter a valid email';
+        statusEl.className = 'login-status error';
+        return;
+    }
+    
+    statusEl.textContent = '⏳ Sending...';
+    statusEl.className = 'login-status';
+    
+    try {
+        const resp = await fetch('/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email })
+        });
+        
+        const data = await resp.json();
+        
+        if (data.success) {
+            statusEl.textContent = '✅ Magic link sent! Check your email or terminal.';
+            statusEl.className = 'login-status success';
+            // Keep modal open so user can see the message
+        } else {
+            statusEl.textContent = `❌ ${data.error || 'Failed to send email'}`;
+            statusEl.className = 'login-status error';
+        }
+    } catch (e) {
+        statusEl.textContent = `❌ Error: ${e.message}`;
+        statusEl.className = 'login-status error';
+    }
+}
+
+async function checkAuthStatus() {
+    try {
+        const resp = await fetch('/auth/me');
+        const data = await resp.json();
+        
+        if (data.authenticated && data.user) {
+            currentUser = data.user;
+            updateAuthUI(true);
+            console.log(`👤 Logged in as: ${data.user.email}`);
+        } else {
+            currentUser = null;
+            updateAuthUI(false);
+        }
+    } catch (e) {
+        currentUser = null;
+        updateAuthUI(false);
+    }
+}
+
+function updateAuthUI(isLoggedIn) {
+    const loginBtn = document.getElementById('btn-login');
+    const logoutBtn = document.getElementById('btn-logout');
+    const userEmail = document.getElementById('user-email');
+    
+    if (isLoggedIn && currentUser) {
+        loginBtn.style.display = 'none';
+        logoutBtn.style.display = 'inline-block';
+        userEmail.style.display = 'inline-block';
+        userEmail.textContent = `👤 ${currentUser.email}`;
+    } else {
+        loginBtn.style.display = 'inline-block';
+        logoutBtn.style.display = 'none';
+        userEmail.style.display = 'none';
+    }
+}
+
+function logout() {
+    window.location.href = '/auth/logout';
+}
 
 // =============================================================================
 // Centralized Multi-language Translations
@@ -320,12 +411,21 @@ function updateSessionsList(sessionsList) {
     const convContainer = document.getElementById('conversations-list');
     const procContainer = document.getElementById('processes-list');
     
+    console.log(`📋 updateSessionsList: ${sessionsList.length} sessions received`);
+    
     // Store sessions
     sessions = {};
     sessionsList.forEach(s => { sessions[s.id] = s; });
     
-    // Separate conversations (idle) and processes (running/completed)
-    const conversations = sessionsList.filter(s => s.status === 'idle' || !s.has_process);
+    // Show ALL sessions in conversations panel (sorted by name/id)
+    const conversations = sessionsList.slice().sort((a, b) => {
+        // Sort by id number descending (newest first)
+        const numA = parseInt(a.id.replace(/\D/g, '')) || 0;
+        const numB = parseInt(b.id.replace(/\D/g, '')) || 0;
+        return numB - numA;
+    });
+    
+    // Processes panel shows only running/recent completed
     const processes = sessionsList.filter(s => s.status === 'running' || s.status === 'completed' || s.status === 'error');
     
     // Update conversations panel
@@ -333,18 +433,32 @@ function updateSessionsList(sessionsList) {
         convContainer.innerHTML = '';
         conversations.forEach(s => {
             const div = document.createElement('div');
-            div.className = 'conv-item' + (s.id === currentSessionId ? ' active' : '');
+            // Add status class for styling
+            let statusClass = s.status === 'running' ? ' running' : (s.status === 'completed' ? ' completed' : '');
+            div.className = 'conv-item' + (s.id === currentSessionId ? ' active' : '') + statusClass;
             div.setAttribute('data-session-id', s.id);
+            
+            // Status indicator
+            const statusIcon = s.status === 'running' ? '🔄' : (s.status === 'completed' ? '✓' : '');
+            
             div.innerHTML = `
-                <div class="session-name">${s.name || 'Conversation'}</div>
-                <div class="session-status">${s.output_lines} lines</div>
+                <div class="session-info" onclick="switchSession('${s.id}')">
+                    <div class="session-name">${statusIcon} ${s.name || 'Conversation'}</div>
+                    <div class="session-status">${s.output_lines} lines</div>
+                </div>
+                <button class="btn-delete-conv" onclick="event.stopPropagation(); deleteConversation('${s.id}')" title="Delete">×</button>
             `;
-            div.addEventListener('click', () => switchSession(s.id));
             convContainer.appendChild(div);
         });
         
         if (conversations.length === 0) {
             convContainer.innerHTML = '<div class="empty-state">No conversations</div>';
+        }
+        
+        // Update conversation count badge
+        const convBadge = document.getElementById('conv-count');
+        if (convBadge) {
+            convBadge.textContent = conversations.length;
         }
     }
     
@@ -370,7 +484,8 @@ function updateSessionsList(sessionsList) {
                     <span class="process-time">${s.output_lines} lines</span>
                     <span class="process-actions">
                         ${s.status === 'running' ? '<button onclick="event.stopPropagation(); stopProcess(\'' + s.id + '\')" title="Stop">⏹</button>' : ''}
-                        <button onclick="event.stopPropagation(); viewProcess('` + s.id + `')" title="View">👁</button>
+                        <button onclick="event.stopPropagation(); viewProcess('${s.id}')" title="View">👁</button>
+                        <button class="btn-delete-process" onclick="event.stopPropagation(); deleteProcess('${s.id}')" title="Delete">🗑️</button>
                     </span>
                 </div>
             `;
@@ -400,6 +515,123 @@ function viewProcess(sessionId) {
     switchSession(sessionId);
 }
 
+function deleteProcess(sessionId) {
+    if (confirm(`Delete session ${sessionId}?`)) {
+        ws.send(JSON.stringify({ type: 'close_session', content: sessionId }));
+        showToast('Session deleted', 'info');
+    }
+}
+
+function deleteConversation(sessionId) {
+    // Don't allow deleting current session
+    if (sessionId === currentSessionId) {
+        showToast('Cannot delete current session', 'error');
+        return;
+    }
+    
+    ws.send(JSON.stringify({ type: 'close_session', content: sessionId }));
+    showToast('Conversation deleted', 'info');
+}
+
+function clearAllConversations() {
+    const deletableSessions = Object.values(sessions).filter(s => 
+        s.id !== currentSessionId
+    );
+    
+    if (deletableSessions.length === 0) {
+        showToast('No conversations to clear', 'info');
+        return;
+    }
+    
+    if (confirm(`Delete ${deletableSessions.length} conversations (except current)?`)) {
+        deletableSessions.forEach(s => {
+            ws.send(JSON.stringify({ type: 'close_session', content: s.id }));
+        });
+        showToast(`Cleared ${deletableSessions.length} conversations`, 'success');
+    }
+}
+
+function filterConversations(query) {
+    const items = document.querySelectorAll('#conversations-list .conv-item');
+    const lowerQuery = query.toLowerCase();
+    
+    let visibleCount = 0;
+    items.forEach(item => {
+        const name = item.querySelector('.session-name')?.textContent.toLowerCase() || '';
+        
+        if (!query || name.includes(lowerQuery)) {
+            item.style.display = '';
+            visibleCount++;
+        } else {
+            item.style.display = 'none';
+        }
+    });
+    
+    // Update count badge
+    const badge = document.getElementById('conv-count');
+    if (badge) {
+        badge.textContent = visibleCount;
+    }
+}
+
+function clearAllProcesses() {
+    const completedSessions = Object.values(sessions).filter(s => 
+        s.status === 'completed' || s.status === 'error'
+    );
+    
+    if (completedSessions.length === 0) {
+        showToast('No completed sessions to clear', 'info');
+        return;
+    }
+    
+    if (confirm(`Delete ${completedSessions.length} completed/error sessions?`)) {
+        completedSessions.forEach(s => {
+            ws.send(JSON.stringify({ type: 'close_session', content: s.id }));
+        });
+        showToast(`Cleared ${completedSessions.length} sessions`, 'success');
+    }
+}
+
+function filterProcesses(query) {
+    const statusFilter = document.getElementById('process-status-filter')?.value || 'all';
+    const items = document.querySelectorAll('#processes-list .process-item');
+    const lowerQuery = query.toLowerCase();
+    
+    let visibleCount = 0;
+    items.forEach(item => {
+        const name = item.querySelector('.process-name')?.textContent.toLowerCase() || '';
+        const cmd = item.querySelector('.process-cmd')?.textContent.toLowerCase() || '';
+        const status = item.classList.contains('running') ? 'running' : 
+                       item.classList.contains('completed') ? 'completed' : 
+                       item.classList.contains('error') ? 'error' : '';
+        
+        // Check text filter
+        const matchesText = !query || name.includes(lowerQuery) || cmd.includes(lowerQuery);
+        
+        // Check status filter
+        const matchesStatus = statusFilter === 'all' || status === statusFilter;
+        
+        if (matchesText && matchesStatus) {
+            item.style.display = '';
+            visibleCount++;
+        } else {
+            item.style.display = 'none';
+        }
+    });
+    
+    // Show empty state if no visible items
+    const procList = document.getElementById('processes-list');
+    const emptyState = procList.querySelector('.empty-state');
+    if (visibleCount === 0 && !emptyState) {
+        const msg = document.createElement('div');
+        msg.className = 'empty-state filter-empty';
+        msg.textContent = 'No matching processes';
+        procList.appendChild(msg);
+    } else if (visibleCount > 0 && emptyState?.classList.contains('filter-empty')) {
+        emptyState.remove();
+    }
+}
+
 // ============================================================================
 // WebSocket
 // ============================================================================
@@ -411,8 +643,9 @@ function connectWS() {
         document.getElementById('ws-status').classList.add('connected');
         document.getElementById('ws-status-text').textContent = 'Connected';
         addOutput(msg('connected'), 'system');
+        // Request sessions - server will create first session if none exist
         ws.send(JSON.stringify({ type: 'get_sessions' }));
-        ws.send(JSON.stringify({ type: 'new_session' }));
+        // Don't send new_session here - let server handle it in get_sessions
     };
     
     ws.onclose = () => {
@@ -1191,15 +1424,18 @@ document.addEventListener('keydown', (e) => {
 // Initialize
 // ============================================================================
 
-function init() {
+async function init() {
     // Load state from URL first
     AppState.loadFromURL();
     if (AppState.language) {
         CONFIG.language = AppState.language;
     }
     
-    // Initialize grid manager
-    GridManager.init();
+    // Check auth status and update UI
+    await checkAuthStatus();
+    
+    // Initialize grid manager (async - loads positions from server if logged in)
+    await GridManager.init();
     
     // Connect to WebSocket
     connectWS();
@@ -1462,36 +1698,76 @@ const GridManager = {
     },
     
     // Initialize grid
-    init() {
-        this.loadPositions();
+    async init() {
+        await this.loadPositions();
         this.applyPositions();
         this.setupDragDrop();
         this.setupResize();
     },
     
-    // Load positions from server/URL
-    loadPositions() {
-        // Try URL params first
-        const hash = window.location.hash.slice(1);
-        const params = new URLSearchParams(hash);
-        if (params.has('grid')) {
-            try {
-                this.positions = JSON.parse(decodeURIComponent(params.get('grid')));
-                return;
-            } catch (e) {}
+    // Current user (null if not logged in)
+    currentUser: null,
+    
+    // Load positions from server (if logged in) or localStorage
+    async loadPositions() {
+        // Try to get user from server
+        try {
+            const resp = await fetch('/auth/me');
+            const data = await resp.json();
+            if (data.authenticated && data.user) {
+                this.currentUser = data.user;
+                console.log(`👤 Logged in as: ${data.user.email}`);
+                
+                // Load user settings from server
+                const settingsResp = await fetch('/auth/settings');
+                if (settingsResp.ok) {
+                    const settings = await settingsResp.json();
+                    if (settings.panel_positions) {
+                        this.positions = settings.panel_positions;
+                        console.log('📐 Loaded grid positions from server');
+                        return;
+                    }
+                }
+            }
+        } catch (e) {
+            console.log('Not logged in, using local storage');
         }
+        
+        // Try localStorage fallback
+        try {
+            const stored = localStorage.getItem('streamware_grid_positions');
+            if (stored) {
+                this.positions = JSON.parse(stored);
+                console.log('📐 Loaded grid positions from localStorage');
+                return;
+            }
+        } catch (e) {}
         
         // Use defaults
         this.positions = { ...this.defaults };
+        console.log('📐 Using default grid positions');
     },
     
-    // Save positions to URL
-    savePositions() {
-        // Update URL with grid state
-        const hash = window.location.hash.slice(1);
-        const params = new URLSearchParams(hash);
-        params.set('grid', encodeURIComponent(JSON.stringify(this.positions)));
-        window.history.replaceState(null, '', window.location.pathname + '#' + params.toString());
+    // Save positions to server (if logged in) and localStorage
+    async savePositions() {
+        // Save to localStorage (always)
+        try {
+            localStorage.setItem('streamware_grid_positions', JSON.stringify(this.positions));
+        } catch (e) {}
+        
+        // Save to server (if logged in)
+        if (this.currentUser) {
+            try {
+                await fetch('/auth/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ panel_positions: this.positions })
+                });
+                console.log('📐 Saved grid positions to server');
+            } catch (e) {
+                console.log('Failed to save to server:', e);
+            }
+        }
     },
     
     // Apply positions to panels
@@ -1636,9 +1912,6 @@ const GridManager = {
             // Preview size
             panel.style.gridColumn = `${startCol} / span ${colSpan}`;
             panel.style.gridRow = `${startRow} / span ${rowSpan}`;
-            
-            // Debug info
-            console.log(`Resize: col=${startCol} row=${startRow} span=${colSpan}x${rowSpan} (gridRow=${gridRow}, maxRow=${maxRowSpan}, cellH=${Math.round(cellHeight)})`);
         };
         
         const onUp = (e) => {
@@ -1661,9 +1934,7 @@ const GridManager = {
             const rowSpan = Math.max(1, Math.min(maxRowSpan, gridRow - startRow + 1));
             
             this.setPosition(panel.id, startCol, startRow, colSpan, rowSpan);
-            
             trackAction('resize-end', { panel: panel.id, colSpan, rowSpan });
-            showToast(`Panel resized: ${colSpan}x${rowSpan}`, 'info');
         };
         
         document.addEventListener('mousemove', onMove);
