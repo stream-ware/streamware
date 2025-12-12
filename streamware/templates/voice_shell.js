@@ -756,21 +756,38 @@ function handleEvent(event) {
             }
             
             // Parse existing output into conversation vs process
+            // Clear existing data for this session to avoid duplicates
+            sessionConversations[currentSessionId] = [];
+            sessionProcessOutput[currentSessionId] = [];
+            
             if (event.data.output && event.data.output.length > 0) {
                 let inProcess = false;
                 event.data.output.forEach(line => {
                     if (!line) return;
                     
-                    // Detect process output boundaries
-                    if (line.includes('🚀 EXECUTING COMMAND:') || line.includes('EXECUTING COMMAND')) {
+                    // Detect start of process output
+                    if (line.includes('🚀 EXECUTING COMMAND:') || line.includes('EXECUTING COMMAND') ||
+                        line.includes('━━━━━━━━━━━━━━━━━━━━')) {
                         inProcess = true;
                     }
-                    if (line.includes('✓ Command completed') || line.includes('Command completed')) {
+                    
+                    // Detect end of process output - user input starts new conversation
+                    if (line.startsWith('> ')) {
                         inProcess = false;
                     }
                     
+                    // Determine if this is a conversation line
+                    const isConvLine = line.startsWith('> ') || 
+                                       line.startsWith('✅ ') ||
+                                       line.startsWith('❓ ') ||
+                                       line.startsWith('❌ ') ||
+                                       line.startsWith('🔊 ') ||
+                                       line.includes('Say \'yes\'') || 
+                                       line.includes('Powiedz tak') ||
+                                       (line.includes('Command:') && !inProcess);
+                    
                     const lineData = { text: line, type: 'system' };
-                    if (inProcess) {
+                    if (inProcess && !isConvLine) {
                         sessionProcessOutput[currentSessionId].push(lineData);
                     } else {
                         sessionConversations[currentSessionId].push(lineData);
@@ -886,32 +903,40 @@ function addOutput(text, type = 'system') {
         sessionProcessOutput[currentSessionId] = [];
     }
     
-    // Detect start of process output
-    if (text.includes('🚀 EXECUTING COMMAND:') || text.includes('EXECUTING COMMAND')) {
+    // Detect start of process output (EXECUTING COMMAND or separator before it)
+    if (text.includes('🚀 EXECUTING COMMAND:') || text.includes('EXECUTING COMMAND') ||
+        text.includes('━━━━━━━━━━━━━━━━━━━━')) {
         isProcessOutput = true;
     }
     
-    // Detect end of process output
-    if (text.includes('✓ Command completed') || text.includes('Command completed')) {
+    // Detect end of process output - when user input starts ("> " prefix) or new conversation
+    // Process output ends when we see user input (type 'input') or explicit conversation markers
+    if (type === 'input' || text.startsWith('> ')) {
         isProcessOutput = false;
     }
     
     // Store in appropriate array
     const lineData = { text, type };
     
-    if (isProcessOutput || type === 'process') {
-        // Process output (after EXECUTING COMMAND)
+    // Conversation types: input, tts (before execution), command_parsed, options
+    // Process types: everything after EXECUTING COMMAND until next user input
+    const isConversationType = type === 'input' || type === 'tts' || 
+                               text.startsWith('> ') || 
+                               text.startsWith('✅ ') ||  // Parsed command
+                               text.startsWith('❓ ') ||  // Options question
+                               text.startsWith('❌ ') ||  // Error in parsing
+                               text.includes('Say \'yes\'') || text.includes('Powiedz tak') ||
+                               text.includes('Command:') && !isProcessOutput;  // Command preview (not execution)
+    
+    if (isProcessOutput && !isConversationType) {
+        // Process output (after EXECUTING COMMAND until next user input)
         sessionProcessOutput[currentSessionId].push(lineData);
     } else {
-        // Conversation (user input, parsed commands, TTS responses)
+        // Conversation (user input, parsed commands, TTS responses, options)
         sessionConversations[currentSessionId].push(lineData);
     }
     
-    // Only display if matches current view mode
-    const shouldDisplay = (viewMode === 'conversation' && !isProcessOutput && type !== 'process') ||
-                          (viewMode === 'process' && (isProcessOutput || type === 'process'));
-    
-    // Always display in unified mode (default behavior)
+    // Always display (unified view by default)
     const output = document.getElementById('output');
     const line = document.createElement('div');
     line.className = 'output-line ' + type;
