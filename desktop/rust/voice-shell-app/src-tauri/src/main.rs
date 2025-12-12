@@ -27,13 +27,10 @@ fn main() {
                 Ok(_) => {
                     log::info!("Backend server started successfully");
                     
-                    // Navigate to the server URL
+                    // Navigate to the server URL (server is already ready)
                     if let Some(window) = app.get_webview_window("main") {
                         let url = format!("http://127.0.0.1:{}", port + 1);
                         log::info!("Loading UI from {}", url);
-                        
-                        // Wait a moment for server to be ready
-                        std::thread::sleep(std::time::Duration::from_secs(2));
                         
                         let _ = window.eval(&format!(
                             "window.location.href = '{}'",
