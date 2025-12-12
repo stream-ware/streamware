@@ -1,6 +1,4 @@
-![sq live narrator --url rtsp://192.168.1.1:554/h264Preview_01_main --tts --duration 20 --yaml --frames changed --focus person --tts --file report.html --model llava:13b --motion people](docs/v2/report2.png)
-
-![img.png](img.png)
+![gui](docs/gui.png)
 
 # 🚀 Streamware
 
@@ -48,6 +46,7 @@ sq get api.example.com/users | sq transform --json | sq file save users.json
 ```
 
 ---
+![sq live narrator --url rtsp://192.168.1.1:554/h264Preview_01_main --tts --duration 20 --yaml --frames changed --focus person --tts --file report.html --model llava:13b --motion people](docs/v2/report2.png)
 
 **Streamware** is a modern Python framework that combines:
 - **Apache Camel-style** data pipelines
