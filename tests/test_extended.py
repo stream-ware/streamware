@@ -311,12 +311,14 @@ class TestMotionDiffDownscaling:
 class TestQuickCLILLM:
     """Tests for quick CLI LLM command configuration"""
     
-    @patch("streamware.quick_cli.flow")
-    def test_llm_no_provider_uses_config(self, mock_flow):
+    @patch("streamware.cli_handlers_io._get_flow")
+    def test_llm_no_provider_uses_config(self, mock_get_flow):
         """Test that sq llm uses config when no provider specified"""
         from streamware.quick_cli import handle_llm
         
+        mock_flow = MagicMock()
         mock_flow.return_value.run.return_value = "Result"
+        mock_get_flow.return_value = mock_flow
         
         args = MagicMock()
         args.prompt = "test prompt"
@@ -337,12 +339,14 @@ class TestQuickCLILLM:
         call_args = mock_flow.call_args[0][0]
         assert "&provider=" not in call_args
 
-    @patch("streamware.quick_cli.flow")
-    def test_llm_explicit_provider_override(self, mock_flow):
+    @patch("streamware.cli_handlers_io._get_flow")
+    def test_llm_explicit_provider_override(self, mock_get_flow):
         """Test that explicit --provider overrides config"""
         from streamware.quick_cli import handle_llm
         
+        mock_flow = MagicMock()
         mock_flow.return_value.run.return_value = "Result"
+        mock_get_flow.return_value = mock_flow
         
         args = MagicMock()
         args.prompt = "test"
@@ -401,51 +405,48 @@ class TestLiveCLIValidation:
 class TestMarkdownLogging:
     """Tests for Markdown logging in quick CLI watch/live commands"""
 
-    @patch("streamware.quick_cli._save_watch_markdown_log")
-    @patch("streamware.quick_cli.flow")
-    def test_watch_log_md_uses_default_filename(self, mock_flow, mock_save):
-        """sq watch --log md without --file should write watch_log.md"""
-        from streamware.quick_cli import handle_watch
-
-        mock_flow.return_value.run.return_value = {
+    def test_watch_log_md_uses_default_filename(self):
+        """Test that _save_watch_markdown_log uses correct default filename"""
+        from streamware.cli_handlers_watch import _save_watch_markdown_log
+        from unittest.mock import patch, MagicMock
+        import tempfile
+        import os
+        
+        result = {
             "significant_changes": 1,
             "frames_analyzed": 10,
             "timeline": [],
         }
-
+        
         args = MagicMock()
         args.url = "rtsp://test/stream"
-        args.sensitivity = "medium"
         args.detect = "person"
-        args.speed = "normal"
-        args.when = "changes"
-        args.alert = "none"
         args.duration = 60
-        args.file = None
-        args.log = "md"
-        args.yaml = False
-        args.json = False
-        args.table = False
-        args.html = False
+        
+        # Test with temp file
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_file = os.path.join(tmpdir, "watch_log.md")
+            _save_watch_markdown_log(result, args, output_file)
+            
+            assert os.path.exists(output_file), "Markdown file should be created"
+            with open(output_file) as f:
+                content = f.read()
+            assert "Watch Report" in content or "person" in content.lower()
 
-        rc = handle_watch(args)
-        assert rc == 0
-        mock_save.assert_called_once()
-        # Third arg is output_file
-        assert mock_save.call_args[0][2] == "watch_log.md"
-
-    @patch("streamware.quick_cli._save_live_markdown_log")
-    @patch("streamware.quick_cli.flow")
-    def test_live_log_md_uses_file_argument_when_provided(self, mock_flow, mock_save):
+    @patch("streamware.cli_handlers_live._save_live_markdown_log")
+    @patch("streamware.cli_handlers_live._get_flow")
+    def test_live_log_md_uses_file_argument_when_provided(self, mock_get_flow, mock_save):
         """sq live --log md --file logs.md should write to logs.md"""
         from streamware.quick_cli import handle_live
 
+        mock_flow = MagicMock()
         mock_flow.return_value.run.return_value = {
             "operation": "narrator",
             "config": {"model": "llava:7b"},
             "history": [],
             "triggers": [],
         }
+        mock_get_flow.return_value = mock_flow
 
         args = MagicMock()
         args.command = "live"

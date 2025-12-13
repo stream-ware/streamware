@@ -16,10 +16,12 @@ class TestQuickCLIConfig:
         for key, value in self.original_config.items():
             config.set(key, value)
 
-    @patch("streamware.quick_cli.flow")
-    def test_llm_command_uses_config(self, mock_flow):
+    @patch("streamware.cli_handlers_io._get_flow")
+    def test_llm_command_uses_config(self, mock_get_flow):
         """Test that 'sq llm' uses configured provider when not specified"""
+        mock_flow = MagicMock()
         mock_flow.return_value.run.return_value = "Result"
+        mock_get_flow.return_value = mock_flow
         
         # Simulate args
         args = MagicMock()
@@ -33,18 +35,20 @@ class TestQuickCLIConfig:
         args.summarize = False
         args.input = None
         args.execute = False
+        args.quiet = False
         
         handle_llm(args)
         
         # Verify flow was called with correct URI (NO provider param)
-        # It should rely on LLMComponent default logic which I verified in previous tests
         expected_uri = "llm://generate?prompt=test" 
         mock_flow.assert_called_with(expected_uri)
 
-    @patch("streamware.quick_cli.flow")
-    def test_llm_command_overrides_config(self, mock_flow):
+    @patch("streamware.cli_handlers_io._get_flow")
+    def test_llm_command_overrides_config(self, mock_get_flow):
         """Test that 'sq llm --provider' overrides config"""
+        mock_flow = MagicMock()
         mock_flow.return_value.run.return_value = "Result"
+        mock_get_flow.return_value = mock_flow
         
         args = MagicMock()
         args.prompt = "test"
@@ -57,6 +61,7 @@ class TestQuickCLIConfig:
         args.summarize = False
         args.input = None
         args.execute = False
+        args.quiet = False
         
         handle_llm(args)
         

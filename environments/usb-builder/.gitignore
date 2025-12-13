@@ -1,0 +1,10 @@
+# Cache directory - contains large downloaded files
+# Do not commit these to git
+cache/
+
+# Output directory - generated ISOs
+output/
+
+# Temp files
+*.tmp
+*.log
