@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  ollama:
+    image: ollama/ollama:rocm
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./models:/root/.ollama
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - HSA_OVERRIDE_GFX_VERSION=11.0.0
+      - ROCM_PATH=/opt/rocm
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: amdgpu
+              capabilities: [gpu]
+
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    ports:
+      - "3000:8080"
+    volumes:
+      - ./webui-data:/app/backend/data
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - WEBUI_AUTH=false
+      - ENABLE_SIGNUP=false
+    depends_on:
+      - ollama
+
+volumes:
+  ollama-data:
+  webui-data:

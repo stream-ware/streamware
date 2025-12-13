@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  llama-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: llama-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./models:/models:ro
+      - /dev/kfd:/dev/kfd
+      - /dev/dri:/dev/dri
+    devices:
+      - /dev/kfd
+      - /dev/dri
+    group_add:
+      - video
+    environment:
+      - HSA_OVERRIDE_GFX_VERSION=11.0.0
+      - ROCM_PATH=/opt/rocm
+      - HIP_VISIBLE_DEVICES=0
+    command: >
+      ./build/bin/llama-server
+      --host 0.0.0.0
+      --port 8080
+      -m /models/model.gguf
+      -ngl 99
+      --ctx-size 4096
+      --parallel 2
+
+  webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: llama-webui
+    restart: unless-stopped
+    ports:
+      - "3000:8080"
+    volumes:
+      - ./webui-data:/app/backend/data
+    environment:
+      - OPENAI_API_BASE_URL=http://llama-server:8080/v1
+      - OPENAI_API_KEY=not-needed
+      - WEBUI_AUTH=false
+    depends_on:
+      - llama-server

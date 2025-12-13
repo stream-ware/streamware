@@ -1,0 +1,16 @@
+[Unit]
+Description=LLM Station Auto-Start Service
+After=network.target podman.service graphical.target
+Wants=graphical.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/llm-station/autostart.sh
+User=llm
+Group=video
+Environment=HSA_OVERRIDE_GFX_VERSION=11.0.0
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=multi-user.target
