@@ -50,14 +50,51 @@ make usb-test USB=/dev/sdX
 
 ```
 /dev/sdX
-├── Partition 1 (8GB, FAT32, EFI)
-│   └── Bootable Linux Live system
-│   └── LLM Station scripts
-└── Partition 2 (22GB, ext4)
-    ├── environments/     # LLM configurations
-    ├── models/ollama/    # Ollama models
-    ├── models/gguf/      # GGUF models
-    └── images/           # Container images
+├── Partition 1 (8GB, FAT32, EFI) - INTELI-LIVE
+│   ├── EFI/BOOT/           # UEFI bootloader
+│   ├── LiveOS/             # Squashfs root filesystem
+│   ├── images/pxeboot/     # Kernel + initrd
+│   ├── etc/skel/.config/autostart/  # Desktop autostart
+│   └── usr/local/bin/      # Autorun scripts
+│
+└── Partition 2 (22GB, ext4) - LLM-DATA
+    ├── streamware/         # Full project (dev mode, with .git)
+    ├── environments/       # LLM configurations
+    ├── models/ollama/      # Ollama models
+    ├── models/gguf/        # GGUF models
+    ├── images/             # Container images (.tar)
+    ├── config/             # Configuration files
+    │   └── accounting.conf # Streamware accounting config
+    ├── setup.sh            # Manual setup script
+    ├── install-service.sh  # Systemd service installer
+    ├── autostart.sh        # Main autostart script
+    └── llm-station.service # Systemd service file
+```
+
+```
+Boot → Login → Terminal otwiera się automatycznie
+                    ↓
+         "LLM Station First Boot Setup"
+                    ↓
+         Montuje LLM-DATA partition
+                    ↓
+         Uruchamia install-service.sh
+                    ↓
+         Instaluje systemd service
+                    ↓
+         Uruchamia autostart.sh:
+           - Python + pip
+           - Streamware (dev mode)
+           - Ollama + llava:7b
+           - Open-WebUI container
+           - sq accounting web
+                    ↓
+         "LLM Station installed successfully!"
+         
+         Services:
+           Open-WebUI:  http://localhost:3000
+           Ollama API:  http://localhost:11434
+           Accounting:  http://localhost:8080
 ```
 
 ## USB Verification
@@ -100,15 +137,63 @@ make test-deep
 - **RAM**: 16GB+
 - **Storage**: 16GB+ USB drive (32GB+ recommended)
 
-## After Booting
+## After Booting (Fully Automatic!)
+
+**Everything starts automatically on first boot:**
+
+1. Terminal opens with setup wizard
+2. Installs systemd service
+3. Starts all services:
+   - **Ollama** (port 11434) + downloads llava:7b model
+   - **Open-WebUI** (port 3000)
+   - **Streamware accounting** (port 8080)
+
+### Available Services
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| Open-WebUI | http://localhost:3000 | Chat interface for LLMs |
+| Ollama API | http://localhost:11434 | LLM inference API |
+| Accounting | http://localhost:8080 | `sq accounting web` |
+
+### Service Management
 
 ```bash
-# Mount data partition (usually auto-mounted)
-# Run setup script
-/run/media/$USER/LLM-DATA/setup.sh
+# Check status
+sudo systemctl status llm-station
 
-# Or manually
-sudo /cdrom/llm-data/first-boot.sh
+# View logs
+sudo journalctl -u llm-station -f
+
+# Restart services
+sudo systemctl restart llm-station
+```
+
+### Configuration
+
+Edit `/run/media/$USER/LLM-DATA/config/accounting.conf`:
+
+```bash
+PROJECT="faktury"        # Project name
+SOURCE="camera"          # camera, screen, or rtsp://...
+PORT="8080"              # Web interface port
+TTS_ENABLED="false"      # Voice announcements
+MODEL="llava:7b"         # Ollama model
+```
+
+### Development Mode
+
+The entire streamware project is copied to USB:
+
+```bash
+cd /run/media/$USER/LLM-DATA/streamware
+
+# Activate dev environment
+./activate-dev.sh
+
+# Now you can edit code and test
+sq --help
+pytest tests/
 ```
 
 ## Related Documentation

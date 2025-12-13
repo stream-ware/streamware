@@ -150,20 +150,27 @@ RAM=16G CPUS=8 ./test-iso.sh
 ./test-iso.sh --gui
 ```
 
-### After Booting the USB
+### After Booting the USB (Fully Automatic!)
 
-```bash
-# Navigate to data partition
-cd /run/media/$USER/LLM-DATA
+**Everything starts automatically on first boot - no manual steps required!**
 
-# Run setup (one-time)
-sudo ./setup.sh
+1. System boots from USB
+2. Desktop login → Terminal opens automatically
+3. Setup wizard installs systemd service
+4. All services start:
+   - **Ollama** (port 11434) + downloads llava:7b
+   - **Open-WebUI** (port 3000)
+   - **Streamware accounting** (port 8080)
 
-# Install autostart service (optional - starts on every boot)
-sudo ./install-service.sh
-```
+### Available Services
 
-### Autostart Configuration
+| Service | URL | Description |
+|---------|-----|-------------|
+| Open-WebUI | http://localhost:3000 | Chat interface for LLMs |
+| Ollama API | http://localhost:11434 | LLM inference API |
+| Accounting | http://localhost:8080 | `sq accounting web` |
+
+### Configuration
 
 Edit `config/accounting.conf` on data partition:
 
@@ -171,6 +178,8 @@ Edit `config/accounting.conf` on data partition:
 PROJECT="faktury"        # Project name
 SOURCE="camera"          # camera, screen, or rtsp://...
 PORT="8080"              # Web interface port
+TTS_ENABLED="false"      # Voice announcements
+MODEL="llava:7b"         # Ollama model for analysis
 ```
 
 ### Service Management
@@ -179,9 +188,26 @@ PORT="8080"              # Web interface port
 sudo systemctl status llm-station    # Check status
 sudo journalctl -u llm-station -f    # View logs
 sudo systemctl restart llm-station   # Restart
+sudo systemctl disable llm-station   # Disable autostart
 ```
 
-### Manual Start
+### Development Mode
+
+Full streamware project is on USB with git history:
+
+```bash
+cd /run/media/$USER/LLM-DATA/streamware
+
+# Activate dev environment
+./activate-dev.sh
+
+# Edit code, run tests
+sq --help
+pytest tests/
+git status
+```
+
+### Manual Start (if needed)
 
 ```bash
 # Start LLM environment
@@ -290,3 +316,30 @@ make test-lib
 | `OUTPUT_DIR` | `./output` | Output directory path |
 | `RAM` | `8G` | QEMU RAM allocation |
 | `CPUS` | `4` | QEMU CPU count |
+
+
+```
+Boot → Login → Terminal otwiera się automatycznie
+                    ↓
+         "LLM Station First Boot Setup"
+                    ↓
+         Montuje LLM-DATA partition
+                    ↓
+         Uruchamia install-service.sh
+                    ↓
+         Instaluje systemd service
+                    ↓
+         Uruchamia autostart.sh:
+           - Python + pip
+           - Streamware (dev mode)
+           - Ollama + llava:7b
+           - Open-WebUI container
+           - sq accounting web
+                    ↓
+         "LLM Station installed successfully!"
+         
+         Services:
+           Open-WebUI:  http://localhost:3000
+           Ollama API:  http://localhost:11434
+           Accounting:  http://localhost:8080
+```

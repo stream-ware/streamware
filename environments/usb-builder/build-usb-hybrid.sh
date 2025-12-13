@@ -825,7 +825,8 @@ fi
 # Create setup scripts on data partition
 # =============================================================================
 
-log_info "Creating setup scripts..."
+log_info "Creating setup scripts (4 files)..."
+printf "  [1/4] setup.sh..."
 
 cat > "$MOUNT_DATA/setup.sh" << 'SETUP'
 #!/bin/bash
@@ -906,6 +907,8 @@ echo "=========================================="
 SETUP
 
 chmod +x "$MOUNT_DATA/setup.sh"
+echo " done"
+printf "  [2/4] README.md..."
 
 # Create README
 cat > "$MOUNT_DATA/README.md" << 'README'
