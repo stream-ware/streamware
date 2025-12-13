@@ -234,3 +234,35 @@ iso-build:
 	@echo "Building bootable ISO for Balena Etcher..."
 	@echo "Output: $(ENV_DIR)/usb-builder/output/llm-station-um790pro.iso"
 	@cd $(ENV_DIR)/usb-builder && sudo ./build-iso.sh
+
+iso-test:
+	@echo "Testing ISO in QEMU/KVM virtual machine..."
+	@$(ENV_DIR)/usb-builder/test-iso.sh
+
+iso-test-gui:
+	@echo "Opening ISO in virt-manager..."
+	@$(ENV_DIR)/usb-builder/test-iso.sh --gui
+
+iso-clean:
+	@echo "Cleaning ISO build artifacts..."
+	@sudo rm -rf $(ENV_DIR)/usb-builder/output/*.iso
+	@sudo rm -rf $(ENV_DIR)/usb-builder/output/*.sha256
+	@sudo rm -rf $(ENV_DIR)/usb-builder/output/*.md5
+	@echo "ISO artifacts cleaned"
+
+iso-cache-clean:
+	@echo "Cleaning ISO cache (will re-download on next build)..."
+	@sudo rm -rf $(ENV_DIR)/usb-builder/cache/iso/*
+	@echo "ISO cache cleaned"
+
+env-status:
+	@echo "Checking LLM environments status..."
+	@$(ENV_DIR)/usb-builder/diagnose.sh
+
+env-diagnose:
+	@echo "Running full environment diagnostics..."
+	@$(ENV_DIR)/usb-builder/diagnose.sh --full
+
+iso-verify:
+	@echo "Verifying ISO image..."
+	@$(ENV_DIR)/usb-builder/verify-iso.sh

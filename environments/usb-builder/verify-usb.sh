@@ -77,18 +77,22 @@ if [ -z "$USB_DEVICE" ]; then
     
     i=1
     declare -a devices
+    
+    # List all block devices except system ones
     while IFS= read -r line; do
         [ -z "$line" ] && continue
         dev=$(echo "$line" | awk '{print $1}')
         size=$(echo "$line" | awk '{print $2}')
-        model=$(echo "$line" | awk '{print $3}')
+        model=$(echo "$line" | awk '{$1=$2=""; print $0}' | xargs)
         
+        # Skip empty size or loop devices
         [ "$size" = "0B" ] && continue
+        [ -z "$size" ] && continue
         
         printf "[%d] /dev/%-6s %8s  %s\n" "$i" "$dev" "$size" "$model"
         devices[$i]="/dev/$dev"
         i=$((i + 1))
-    done < <(lsblk -d -n -o NAME,SIZE,MODEL 2>/dev/null | grep -v "loop\|sr0\|nvme\|sda")
+    done < <(lsblk -d -n -o NAME,SIZE,MODEL 2>/dev/null | grep -vE "^loop|^sr|^nvme0n1$|^sda$|^vda$")
     
     echo "─────────────────────────────────────────────────────────────────"
     echo ""
@@ -433,6 +437,12 @@ if command -v qemu-system-x86_64 &> /dev/null; then
     read -p "Run QEMU boot test now? [y/N]: " run_test
     if [ "$run_test" = "y" ] || [ "$run_test" = "Y" ]; then
         echo ""
+        info "Unmounting USB partitions..."
+        for part in ${USB_DEVICE}*; do
+            umount "$part" 2>/dev/null || true
+        done
+        sleep 1
+        
         info "Starting QEMU boot test..."
         info "Press Ctrl+Alt+G to release mouse, Ctrl+Alt+Q to quit"
         echo ""

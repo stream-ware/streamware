@@ -129,19 +129,26 @@ extract_iso_with_progress() {
     
     log_info "Extracting ISO (${iso_mb}MB)..."
     
-    if command -v pv &> /dev/null && command -v 7z &> /dev/null; then
-        # Use pv for progress with 7z
-        pv -p -e -r "$iso" | 7z x -si -tiso -o"$dest" -y > /dev/null 2>&1
-    elif command -v 7z &> /dev/null; then
-        # 7z with manual progress
-        7z x -o"$dest" "$iso" -y 2>&1 | while read -r line; do
-            if [[ "$line" =~ ([0-9]+)% ]]; then
-                local pct="${BASH_REMATCH[1]}"
-                local current=$((iso_size * pct / 100))
-                show_progress "Extracting" "$current" "$iso_size" "$start_time"
-            fi
+    # Use 7z directly (most reliable)
+    if command -v 7z &> /dev/null; then
+        # Run 7z in background and monitor progress
+        7z x -o"$dest" "$iso" -y > /dev/null 2>&1 &
+        local pid=$!
+        
+        while kill -0 $pid 2>/dev/null; do
+            local current=$(du -sb "$dest" 2>/dev/null | cut -f1)
+            [ -z "$current" ] && current=0
+            show_progress "Extracting" "$current" "$iso_size" "$start_time"
+            sleep 1
         done
+        wait $pid
+        local exit_code=$?
         echo ""
+        
+        if [ $exit_code -ne 0 ]; then
+            log_error "7z extraction failed with code $exit_code"
+            return 1
+        fi
     elif command -v bsdtar &> /dev/null; then
         bsdtar -xf "$iso" -C "$dest" 2>&1 &
         local pid=$!
@@ -189,12 +196,51 @@ extract_iso_with_progress() {
 LIVE_PARTITION_SIZE="${LIVE_PARTITION_SIZE:-8G}"  # Linux Live system
 # DATA partition uses remaining space
 
-# Labels
-LIVE_LABEL="LLM-LIVE"
+# Labels - IMPORTANT: LIVE_LABEL must match what GRUB expects!
+# Fedora Live ISO expects the original volume label for dracut to find root
 DATA_LABEL="LLM-DATA"
 
-# Source ISO
-ISO_FILE="${ISO_FILE:-$SCRIPT_DIR/output/llm-station-um790pro.iso}"
+# Source config
+source "$SCRIPT_DIR/config.sh" 2>/dev/null || true
+
+# Distro selection
+DISTRO="${DISTRO:-fedora}"
+
+# Source ISO - use distro-specific or default
+case "$DISTRO" in
+    suse|opensuse)
+        ISO_FILE="${ISO_FILE:-$CACHE_DIR/iso/$BASE_ISO_NAME_SUSE}"
+        ISO_URL="$BASE_ISO_URL_SUSE"
+        ;;
+    suse-leap)
+        ISO_FILE="${ISO_FILE:-$CACHE_DIR/iso/$BASE_ISO_NAME_SUSE_LEAP}"
+        ISO_URL="$BASE_ISO_URL_SUSE_LEAP"
+        ;;
+    ubuntu)
+        ISO_FILE="${ISO_FILE:-$CACHE_DIR/iso/$BASE_ISO_NAME_UBUNTU}"
+        ISO_URL="$BASE_ISO_URL_UBUNTU"
+        ;;
+    fedora|*)
+        ISO_FILE="${ISO_FILE:-$SCRIPT_DIR/output/llm-station-um790pro.iso}"
+        ISO_URL="$BASE_ISO_URL_FEDORA"
+        ;;
+esac
+
+log_info "Distro: $DISTRO"
+
+# Get original volume label from ISO (required for boot)
+get_iso_label() {
+    local iso="$1"
+    if command -v isoinfo &> /dev/null; then
+        isoinfo -d -i "$iso" 2>/dev/null | grep "Volume id:" | cut -d':' -f2 | xargs
+    else
+        # Fallback - try to extract from ISO
+        echo "Fedora-LXQt-Live-40-1-14"
+    fi
+}
+
+# Will be set after ISO validation
+LIVE_LABEL=""
 
 # =============================================================================
 # Validation
@@ -306,12 +352,46 @@ if echo "$USB_DEVICE" | grep -qE "^/dev/(sda|nvme0n1|vda)$"; then
     exit 1
 fi
 
-# Check ISO exists
+# Check ISO exists, download if needed
 if [ ! -f "$ISO_FILE" ]; then
-    log_error "ISO file not found: $ISO_FILE"
-    echo "Build it first with: make iso-build"
-    exit 1
+    log_warn "ISO file not found: $ISO_FILE"
+    
+    if [ -n "$ISO_URL" ]; then
+        log_info "Downloading $DISTRO ISO..."
+        mkdir -p "$(dirname "$ISO_FILE")"
+        
+        if command -v curl &> /dev/null; then
+            curl -L "$ISO_URL" -o "$ISO_FILE" --progress-bar
+        elif command -v wget &> /dev/null; then
+            wget "$ISO_URL" -O "$ISO_FILE" --show-progress
+        else
+            log_error "No download tool available (install curl or wget)"
+            exit 1
+        fi
+        
+        if [ ! -f "$ISO_FILE" ]; then
+            log_error "Download failed"
+            exit 1
+        fi
+        log_success "ISO downloaded: $ISO_FILE"
+    else
+        log_error "No ISO URL configured for distro: $DISTRO"
+        echo "Build Fedora ISO first with: make iso-build"
+        exit 1
+    fi
 fi
+
+# Get volume label from ISO - needed to update GRUB config
+ORIG_ISO_LABEL=$(get_iso_label "$ISO_FILE")
+if [ -z "$ORIG_ISO_LABEL" ]; then
+    ORIG_ISO_LABEL="Fedora-LXQt-Live-40-1-14"
+fi
+
+# FAT32 has 11 character limit for labels
+# Use short label for partition, but we'll update GRUB config to match
+LIVE_LABEL="INTELI-LIVE"
+log_info "Original ISO label: $ORIG_ISO_LABEL"
+log_info "Using FAT32 label: $LIVE_LABEL (will update GRUB config)"
 
 # Get detailed device info
 DEVICE_SIZE=$(lsblk -b -d -o SIZE "$USB_DEVICE" | tail -1)
@@ -362,7 +442,7 @@ echo "└───────────────────────�
 echo ""
 
 echo -e "${RED}╔═════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${RED}║  ⚠  WARNING: ALL DATA ON $USB_DEVICE WILL BE DESTROYED!     ║${NC}"
+echo -e "${RED}║  ⚠  WARNING: ALL DATA ON $USB_DEVICE WILL BE DESTROYED!        ║${NC}"
 echo -e "${RED}╚═════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo "To proceed, type the device name (e.g., 'sdc') to confirm:"
@@ -464,6 +544,36 @@ log_success "Partitions mounted"
 
 # Extract ISO with progress
 extract_iso_with_progress "$ISO_FILE" "$MOUNT_LIVE"
+
+# =============================================================================
+# Update GRUB config to use new volume label
+# =============================================================================
+
+log_info "Updating GRUB configuration for new volume label..."
+
+# Find and update GRUB config files
+for grub_cfg in "$MOUNT_LIVE/EFI/BOOT/grub.cfg" "$MOUNT_LIVE/boot/grub2/grub.cfg" "$MOUNT_LIVE/boot/grub/grub.cfg"; do
+    if [ -f "$grub_cfg" ]; then
+        log_info "  Updating: $grub_cfg"
+        # Replace old label with new label in GRUB config
+        sed -i "s/CDLABEL=$ORIG_ISO_LABEL/CDLABEL=$LIVE_LABEL/g" "$grub_cfg"
+        sed -i "s/LABEL=$ORIG_ISO_LABEL/LABEL=$LIVE_LABEL/g" "$grub_cfg"
+        # Also handle URL-encoded versions (spaces as %20, etc)
+        ORIG_ENCODED=$(echo "$ORIG_ISO_LABEL" | sed 's/ /%20/g; s/-/\\x2d/g')
+        sed -i "s/$ORIG_ENCODED/$LIVE_LABEL/g" "$grub_cfg" 2>/dev/null || true
+    fi
+done
+
+# Also update isolinux config if present
+for syslinux_cfg in "$MOUNT_LIVE/isolinux/isolinux.cfg" "$MOUNT_LIVE/syslinux/syslinux.cfg"; do
+    if [ -f "$syslinux_cfg" ]; then
+        log_info "  Updating: $syslinux_cfg"
+        sed -i "s/CDLABEL=$ORIG_ISO_LABEL/CDLABEL=$LIVE_LABEL/g" "$syslinux_cfg"
+        sed -i "s/LABEL=$ORIG_ISO_LABEL/LABEL=$LIVE_LABEL/g" "$syslinux_cfg"
+    fi
+done
+
+log_success "GRUB configuration updated"
 
 # =============================================================================
 # Copy project data
@@ -644,6 +754,50 @@ echo ""
 echo "=========================================="
 echo "Hybrid USB creation complete!"
 echo "=========================================="
+
+# Ask to verify
+echo ""
+read -p "Run verification now? [Y/n]: " verify_now
+if [ "$verify_now" != "n" ] && [ "$verify_now" != "N" ]; then
+    echo ""
+    "$SCRIPT_DIR/verify-usb.sh" "$USB_DEVICE"
+fi
+
+# Ask to test boot in QEMU
+echo ""
+read -p "Test boot in QEMU virtual machine? [y/N]: " test_boot
+if [ "$test_boot" = "y" ] || [ "$test_boot" = "Y" ]; then
+    echo ""
+    log_info "Starting QEMU boot test..."
+    echo "Controls: Ctrl+Alt+G (release mouse), Ctrl+Alt+Q (quit)"
+    echo ""
+    
+    # Find OVMF
+    OVMF=""
+    for path in "/usr/share/OVMF/OVMF_CODE_4M.fd" "/usr/share/OVMF/OVMF_CODE.fd" "/usr/share/edk2/ovmf/OVMF_CODE.fd"; do
+        [ -f "$path" ] && OVMF="$path" && break
+    done
+    
+    if [ -n "$OVMF" ]; then
+        qemu-system-x86_64 \
+            -enable-kvm \
+            -m 4G \
+            -smp 2 \
+            -drive file="$USB_DEVICE",format=raw,if=virtio \
+            -drive if=pflash,format=raw,readonly=on,file="$OVMF" \
+            -display gtk \
+            -usb \
+            -device usb-tablet
+    else
+        log_warn "OVMF not found, using BIOS mode..."
+        qemu-system-x86_64 \
+            -enable-kvm \
+            -m 4G \
+            -smp 2 \
+            -drive file="$USB_DEVICE",format=raw,if=virtio \
+            -display gtk
+    fi
+fi
 echo ""
 echo "Device: $USB_DEVICE"
 echo ""

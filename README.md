@@ -92,6 +92,7 @@ Detailed documentation is available in the [docs/](docs/) directory:
 | [🎯 Motion Analysis](docs/MOTION_ANALYSIS.md) | DSL tracking, blob detection |
 | [🏗️ Architecture](docs/ARCHITECTURE.md) | System design, multiprocessing |
 | [📡 API Reference](docs/API.md) | CLI options, configuration |
+| [💾 USB/ISO Builder](environments/usb-builder/README.md) | Bootable offline LLM environments |
 
 ## 🎛️ Voice Shell Dashboard (NEW!)
 

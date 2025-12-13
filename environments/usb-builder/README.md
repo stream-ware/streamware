@@ -41,17 +41,28 @@ make iso-test
 |--------|-------------|
 | `make install` | Install all build dependencies |
 | `make prepare` | Download and cache all offline resources |
-| `make iso-build` | Build bootable Live ISO |
+| `make iso-build` | Build bootable Live ISO (Fedora) |
 | `make models-iso` | Build separate Models ISO (compressed) |
 | `make iso-all` | Build both Live ISO and Models ISO |
 
-### USB Commands
+### USB Commands (Hybrid - 2 partitions)
 | Target | Description |
 |--------|-------------|
-| `make usb USB=/dev/sdX` | Build single-partition bootable USB |
-| `make usb-hybrid USB=/dev/sdX` | Build dual-partition USB (Linux + Data) |
+| `make usb-hybrid` | Build USB with Fedora (interactive) |
+| `make usb-hybrid USB=/dev/sdX` | Build USB with Fedora |
+| `make usb-suse` | Build USB with openSUSE Tumbleweed |
+| `make usb-suse-leap` | Build USB with openSUSE Leap (stable) |
+| `make usb-ubuntu` | Build USB with Ubuntu |
+| `make usb USB=/dev/sdX` | Build single-partition USB |
 
-### Testing Commands
+### USB Verification & Testing
+| Target | Description |
+|--------|-------------|
+| `make usb-verify` | Verify USB structure (interactive) |
+| `make usb-verify USB=/dev/sdX` | Verify specific USB device |
+| `make usb-test USB=/dev/sdX` | Boot USB in QEMU virtual machine |
+
+### ISO Testing Commands
 | Target | Description |
 |--------|-------------|
 | `make iso-test` | Test ISO in QEMU/KVM |
@@ -74,12 +85,13 @@ make iso-test
 | `prepare-offline.sh` | Download and cache all resources |
 | `build-iso.sh` | Build bootable Live ISO image |
 | `build-models-iso.sh` | Build Models ISO with compressed LLM models |
-| `build-usb.sh` | Build bootable USB drive |
+| `build-usb.sh` | Build single-partition bootable USB |
+| `build-usb-hybrid.sh` | Build dual-partition USB (Linux + Data) |
 | `test-iso.sh` | Test ISO in QEMU or virt-manager |
 | `test-iso-deep.sh` | Deep validation of ISO structure |
+| `verify-usb.sh` | Verify USB drive structure and bootability |
 | `diagnose.sh` | Run environment diagnostics |
-| `load-offline-images.sh` | Load cached container images |
-| `install-autostart.sh` | Install autostart services |
+| `config.sh` | Centralized configuration (distros, URLs) |
 
 ## Directory Structure
 

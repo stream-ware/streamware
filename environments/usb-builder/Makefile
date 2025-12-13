@@ -115,12 +115,59 @@ usb:
 	@sudo ./build-usb.sh $(USB)
 
 usb-hybrid:
-	@echo "Building hybrid USB (2 partitions)..."
+	@echo "Building hybrid USB (2 partitions) with $(DISTRO)..."
 	@if [ -z "$(USB)" ]; then \
-		sudo ./build-usb-hybrid.sh; \
+		sudo DISTRO=$(DISTRO) ./build-usb-hybrid.sh; \
 	else \
-		sudo ./build-usb-hybrid.sh $(USB); \
+		sudo DISTRO=$(DISTRO) ./build-usb-hybrid.sh $(USB); \
 	fi
+
+usb-suse:
+	@echo "Building hybrid USB with openSUSE Tumbleweed..."
+	@if [ -z "$(USB)" ]; then \
+		sudo DISTRO=suse ./build-usb-hybrid.sh; \
+	else \
+		sudo DISTRO=suse ./build-usb-hybrid.sh $(USB); \
+	fi
+
+usb-suse-leap:
+	@echo "Building hybrid USB with openSUSE Leap (stable)..."
+	@if [ -z "$(USB)" ]; then \
+		sudo DISTRO=suse-leap ./build-usb-hybrid.sh; \
+	else \
+		sudo DISTRO=suse-leap ./build-usb-hybrid.sh $(USB); \
+	fi
+
+usb-ubuntu:
+	@echo "Building hybrid USB with Ubuntu..."
+	@if [ -z "$(USB)" ]; then \
+		sudo DISTRO=ubuntu ./build-usb-hybrid.sh; \
+	else \
+		sudo DISTRO=ubuntu ./build-usb-hybrid.sh $(USB); \
+	fi
+
+usb-verify:
+	@echo "Verifying USB drive..."
+	@if [ -z "$(USB)" ]; then \
+		sudo ./verify-usb.sh; \
+	else \
+		sudo ./verify-usb.sh $(USB); \
+	fi
+
+usb-test:
+	@echo "Testing USB boot in QEMU..."
+	@if [ -z "$(USB)" ]; then \
+		echo "Usage: make usb-test USB=/dev/sdX"; \
+		exit 1; \
+	fi
+	@echo "Unmounting partitions..."
+	@sudo umount $(USB)* 2>/dev/null || true
+	@sleep 1
+	@echo "Starting QEMU (Ctrl+Alt+G to release mouse, Ctrl+Alt+Q to quit)..."
+	@sudo qemu-system-x86_64 -enable-kvm -m 8G -smp 4 -cpu host \
+		-drive file=$(USB),format=raw,if=virtio,cache=none \
+		-drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \
+		-display gtk -vga virtio -usb -device usb-tablet
 
 prepare-dirs:
 	@mkdir -p $(CACHE_DIR)/iso $(CACHE_DIR)/images $(OUTPUT_DIR)

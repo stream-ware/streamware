@@ -45,11 +45,21 @@ BASE_ISO_NAME_FEDORA="Fedora-LXQt-Live-x86_64-40-1.14.iso"
 BASE_ISO_URL_UBUNTU="https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso"
 BASE_ISO_NAME_UBUNTU="ubuntu-24.04-desktop-amd64.iso"
 
+# openSUSE Tumbleweed KDE Live ISO
+BASE_ISO_URL_SUSE="https://download.opensuse.org/tumbleweed/iso/openSUSE-Tumbleweed-KDE-Live-x86_64-Current.iso"
+BASE_ISO_NAME_SUSE="openSUSE-Tumbleweed-KDE-Live-x86_64-Current.iso"
+
+# openSUSE Leap (stable) - alternative
+BASE_ISO_URL_SUSE_LEAP="https://download.opensuse.org/distribution/leap/15.5/live/openSUSE-Leap-15.5-KDE-Live-x86_64-Media.iso"
+BASE_ISO_NAME_SUSE_LEAP="openSUSE-Leap-15.5-KDE-Live-x86_64-Media.iso"
+
 # Get URL and name based on selected distro
 get_base_iso_url() {
     case "${DISTRO}" in
         fedora) echo "$BASE_ISO_URL_FEDORA" ;;
         ubuntu) echo "$BASE_ISO_URL_UBUNTU" ;;
+        suse|opensuse) echo "$BASE_ISO_URL_SUSE" ;;
+        suse-leap) echo "$BASE_ISO_URL_SUSE_LEAP" ;;
         *) echo "$BASE_ISO_URL_FEDORA" ;;
     esac
 }
@@ -58,6 +68,8 @@ get_base_iso_name() {
     case "${DISTRO}" in
         fedora) echo "$BASE_ISO_NAME_FEDORA" ;;
         ubuntu) echo "$BASE_ISO_NAME_UBUNTU" ;;
+        suse|opensuse) echo "$BASE_ISO_NAME_SUSE" ;;
+        suse-leap) echo "$BASE_ISO_NAME_SUSE_LEAP" ;;
         *) echo "$BASE_ISO_NAME_FEDORA" ;;
     esac
 }
