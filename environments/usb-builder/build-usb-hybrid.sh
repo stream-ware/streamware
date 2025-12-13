@@ -946,6 +946,7 @@ sudo ln -s /mnt/llm-data/environments /opt/llm-station
 ln -s /mnt/llm-data/models/ollama ~/.ollama/models
 ```
 README
+echo " done"
 
 log_success "Setup scripts created"
 
@@ -953,7 +954,8 @@ log_success "Setup scripts created"
 # Create autostart service (systemd)
 # =============================================================================
 
-log_info "Creating autostart service..."
+log_info "Creating autostart service (4 files)..."
+printf "  [1/4] llm-station.service..."
 
 # Create systemd service file
 cat > "$MOUNT_DATA/llm-station.service" << 'SERVICE'
@@ -972,6 +974,8 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 SERVICE
+echo " done"
+printf "  [2/4] autostart.sh..."
 
 # Create autostart script
 cat > "$MOUNT_DATA/autostart.sh" << 'AUTOSTART'
@@ -1175,6 +1179,8 @@ echo "=========================================="
 AUTOSTART
 
 chmod +x "$MOUNT_DATA/autostart.sh"
+echo " done"
+printf "  [3/4] install-service.sh..."
 
 # Create install-service script
 cat > "$MOUNT_DATA/install-service.sh" << 'INSTALL'
@@ -1214,6 +1220,8 @@ echo "The service will start automatically on next boot."
 INSTALL
 
 chmod +x "$MOUNT_DATA/install-service.sh"
+echo " done"
+printf "  [4/4] config/accounting.conf..."
 
 # Create accounting config
 mkdir -p "$MOUNT_DATA/config"
@@ -1236,6 +1244,7 @@ TTS_ENABLED="false"
 # Ollama model for analysis
 MODEL="llava:7b"
 CONFIG
+echo " done"
 
 log_success "Autostart service created"
 
