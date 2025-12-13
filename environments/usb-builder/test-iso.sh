@@ -125,9 +125,11 @@ else
     OVMF_CODE=""
     for path in \
         "/usr/share/OVMF/OVMF_CODE.fd" \
+        "/usr/share/OVMF/OVMF_CODE_4M.fd" \
         "/usr/share/edk2/ovmf/OVMF_CODE.fd" \
         "/usr/share/qemu/OVMF_CODE.fd" \
-        "/usr/share/edk2-ovmf/x64/OVMF_CODE.fd"; do
+        "/usr/share/edk2-ovmf/x64/OVMF_CODE.fd" \
+        "/usr/share/ovmf/OVMF.fd"; do
         if [ -f "$path" ]; then
             OVMF_CODE="$path"
             break
@@ -135,10 +137,18 @@ else
     done
     
     if [ -z "$OVMF_CODE" ]; then
-        echo "Warning: UEFI firmware not found, using BIOS mode"
+        echo ""
+        echo -e "${YELLOW}Warning: UEFI firmware not found${NC}"
+        echo "The ISO requires UEFI boot. Install OVMF:"
+        echo "  Ubuntu/Debian: sudo apt install ovmf"
+        echo "  Fedora: sudo dnf install edk2-ovmf"
+        echo ""
+        echo "Attempting BIOS mode (may not boot)..."
         UEFI_FLAGS=""
     else
-        UEFI_FLAGS="-bios $OVMF_CODE"
+        echo "Using UEFI firmware: $OVMF_CODE"
+        # Use -drive with pflash for proper UEFI boot
+        UEFI_FLAGS="-drive if=pflash,format=raw,readonly=on,file=$OVMF_CODE"
     fi
     
     qemu-system-x86_64 \
@@ -146,12 +156,12 @@ else
         -m "$RAM" \
         -smp "$CPUS" \
         -cpu host \
+        $UEFI_FLAGS \
         -cdrom "$ISO_FILE" \
         -boot d \
         -display gtk \
         -device virtio-net,netdev=n0 \
         -netdev user,id=n0,hostfwd=tcp::${PORT_FORWARD%:*}-:${PORT_FORWARD#*:} \
-        $UEFI_FLAGS \
         -usb \
         -device usb-tablet
 fi

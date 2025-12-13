@@ -357,12 +357,51 @@ ISO_OUTPUT="$OUTPUT_DIR/$ISO_NAME"
 
 # Find EFI boot image (for Fedora/modern distros)
 EFI_IMG=""
-for efi_path in "images/efiboot.img" "boot/grub/efi.img" "EFI/BOOT/efiboot.img"; do
-    if [ -f "$ISO_ROOT/$efi_path" ]; then
-        EFI_IMG="$efi_path"
-        break
-    fi
-done
+
+# Search for efiboot.img in common locations
+EFI_FOUND=$(find "$ISO_ROOT" -name "efiboot.img" -o -name "efi.img" 2>/dev/null | head -1)
+if [ -n "$EFI_FOUND" ]; then
+    EFI_IMG="${EFI_FOUND#$ISO_ROOT/}"
+fi
+
+# Fallback to known paths
+if [ -z "$EFI_IMG" ]; then
+    for efi_path in "images/efiboot.img" "boot/grub/efi.img"; do
+        if [ -f "$ISO_ROOT/$efi_path" ]; then
+            EFI_IMG="$efi_path"
+            break
+        fi
+    done
+fi
+
+# If no efiboot.img but EFI/BOOT exists, create one
+if [ -z "$EFI_IMG" ] && [ -d "$ISO_ROOT/EFI/BOOT" ]; then
+    echo "  Creating EFI boot image from EFI/BOOT directory..."
+    EFI_IMG="images/efiboot.img"
+    mkdir -p "$ISO_ROOT/images"
+    
+    # Calculate size needed (add 1MB padding)
+    EFI_SIZE=$(du -sm "$ISO_ROOT/EFI" | cut -f1)
+    EFI_SIZE=$((EFI_SIZE + 2))
+    
+    # Create FAT image
+    dd if=/dev/zero of="$ISO_ROOT/$EFI_IMG" bs=1M count=$EFI_SIZE 2>/dev/null
+    mkfs.vfat "$ISO_ROOT/$EFI_IMG" >/dev/null 2>&1
+    
+    # Mount and copy EFI files
+    EFI_MNT=$(mktemp -d)
+    mount -o loop "$ISO_ROOT/$EFI_IMG" "$EFI_MNT"
+    cp -r "$ISO_ROOT/EFI" "$EFI_MNT/"
+    umount "$EFI_MNT"
+    rmdir "$EFI_MNT"
+    
+    echo "  ✓ Created EFI boot image ($EFI_SIZE MB)"
+fi
+
+# Debug output
+echo "  Boot images found:"
+ls -la "$ISO_ROOT/images/" 2>/dev/null | grep -E "efi|eltorito" || echo "    (none in images/)"
+[ -d "$ISO_ROOT/EFI/BOOT" ] && echo "  EFI/BOOT directory: present"
 
 echo "  Boot type: $BOOT_TYPE"
 [ -n "$EFI_IMG" ] && echo "  EFI image: $EFI_IMG"
@@ -370,32 +409,83 @@ echo "  Boot type: $BOOT_TYPE"
 if command -v xorriso &> /dev/null; then
     echo "  Using xorriso..."
     
+    # Common options for all ISO types
+    # -iso-level 3 allows files > 4GB
+    # IMPORTANT: Keep original volume label for dracut to find root filesystem
+    ORIG_LABEL=$(isoinfo -d -i "$BASE_ISO" 2>/dev/null | grep "Volume id:" | cut -d':' -f2 | xargs)
+    if [ -z "$ORIG_LABEL" ]; then
+        # Fallback: extract from filename or use default
+        case "$DISTRO" in
+            fedora) ORIG_LABEL="Fedora-LXQt-Live-40-1-14" ;;
+            ubuntu) ORIG_LABEL="Ubuntu 24.04 LTS amd64" ;;
+            *) ORIG_LABEL="LIVE" ;;
+        esac
+    fi
+    echo "  Using volume label: $ORIG_LABEL"
+    COMMON_OPTS="-iso-level 3 -R -J -joliet-long -V $ORIG_LABEL"
+    
+    # Find eltorito.img for BIOS boot (Fedora uses this)
+    ELTORITO_IMG=""
+    for elt_path in "images/eltorito.img" "isolinux/isolinux.bin" "boot/grub/i386-pc/eltorito.img"; do
+        if [ -f "$ISO_ROOT/$elt_path" ]; then
+            ELTORITO_IMG="$elt_path"
+            break
+        fi
+    done
+    
+    echo "  EFI image: ${EFI_IMG:-none}"
+    echo "  BIOS image: ${ELTORITO_IMG:-none}"
+    
     if [ "$BOOT_TYPE" = "efi" ] || [ "$BOOT_TYPE" = "hybrid" ]; then
-        # EFI boot (Fedora-style)
-        if [ -n "$EFI_IMG" ]; then
+        # Fedora-style hybrid boot (EFI + BIOS)
+        if [ -n "$EFI_IMG" ] && [ -n "$ELTORITO_IMG" ]; then
+            # Full hybrid boot (BIOS + EFI)
             xorriso -as mkisofs \
                 -o "$ISO_OUTPUT" \
-                -R -J -joliet-long \
-                -V "LLM_STATION" \
+                $COMMON_OPTS \
+                -b "$ELTORITO_IMG" \
+                -c boot.cat \
+                -no-emul-boot \
+                -boot-load-size 4 \
+                -boot-info-table \
                 -eltorito-alt-boot \
                 -e "$EFI_IMG" \
                 -no-emul-boot \
-                -isohybrid-gpt-basdat \
-                "$ISO_ROOT"
-        else
-            # Simple EFI without eltorito
+                -isohybrid-mbr /usr/lib/ISOLINUX/isohdpfx.bin 2>/dev/null || \
             xorriso -as mkisofs \
                 -o "$ISO_OUTPUT" \
-                -R -J -joliet-long \
-                -V "LLM_STATION" \
+                $COMMON_OPTS \
+                -b "$ELTORITO_IMG" \
+                -c boot.cat \
+                -no-emul-boot \
+                -boot-load-size 4 \
+                -boot-info-table \
+                -eltorito-alt-boot \
+                -e "$EFI_IMG" \
+                -no-emul-boot \
+                "$ISO_ROOT"
+        elif [ -n "$EFI_IMG" ]; then
+            # EFI only
+            xorriso -as mkisofs \
+                -o "$ISO_OUTPUT" \
+                $COMMON_OPTS \
+                -eltorito-alt-boot \
+                -e "$EFI_IMG" \
+                -no-emul-boot \
+                -append_partition 2 0xef "$ISO_ROOT/$EFI_IMG" \
+                "$ISO_ROOT"
+        else
+            # Fallback - simple ISO
+            xorriso -as mkisofs \
+                -o "$ISO_OUTPUT" \
+                $COMMON_OPTS \
                 "$ISO_ROOT"
         fi
     elif [ "$BOOT_TYPE" = "bios" ]; then
         # BIOS boot (isolinux)
         xorriso -as mkisofs \
             -o "$ISO_OUTPUT" \
-            -R -J -joliet-long \
-            -V "LLM_STATION" \
+            $COMMON_OPTS \
             -b isolinux/isolinux.bin \
             -c isolinux/boot.cat \
             -no-emul-boot \
@@ -406,8 +496,7 @@ if command -v xorriso &> /dev/null; then
         # Unknown - create simple data ISO
         xorriso -as mkisofs \
             -o "$ISO_OUTPUT" \
-            -R -J -joliet-long \
-            -V "LLM_STATION" \
+            $COMMON_OPTS \
             "$ISO_ROOT"
     fi
 elif command -v genisoimage &> /dev/null; then

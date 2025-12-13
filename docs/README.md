@@ -21,8 +21,8 @@ Welcome to StreamWare documentation. This guide covers all features for real-tim
 ### Development
 - [🔧 Refactoring Plan](REFACTORING_PLAN.md) - Tracking optimization roadmap
 
-### Development
-- [🔧 Refactoring Plan](REFACTORING_PLAN.md) - Tracking optimization roadmap
+### Deployment
+- [💾 USB/ISO Builder](USB_ISO_BUILDER.md) - Bootable offline LLM environments
 
 ---
 

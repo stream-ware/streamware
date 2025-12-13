@@ -36,26 +36,47 @@ make iso-test
 
 ## Makefile Targets
 
+### Build Commands
 | Target | Description |
 |--------|-------------|
-| `make usb-prepare` | Download and cache all offline resources |
-| `make usb-build USB=/dev/sdX` | Build bootable USB drive |
-| `make iso-build` | Build bootable ISO image |
+| `make install` | Install all build dependencies |
+| `make prepare` | Download and cache all offline resources |
+| `make iso-build` | Build bootable Live ISO |
+| `make models-iso` | Build separate Models ISO (compressed) |
+| `make iso-all` | Build both Live ISO and Models ISO |
+
+### USB Commands
+| Target | Description |
+|--------|-------------|
+| `make usb USB=/dev/sdX` | Build single-partition bootable USB |
+| `make usb-hybrid USB=/dev/sdX` | Build dual-partition USB (Linux + Data) |
+
+### Testing Commands
+| Target | Description |
+|--------|-------------|
 | `make iso-test` | Test ISO in QEMU/KVM |
 | `make iso-test-gui` | Open virt-manager for GUI testing |
-| `make iso-clean` | Remove built ISO files |
-| `make iso-cache-clean` | Clear ISO download cache |
-| `make env-status` | Quick environment status check |
-| `make env-diagnose` | Full diagnostics report |
+| `make test-deep` | Deep validation of ISO structure |
+| `make verify` | Verify ISO checksums |
+
+### Maintenance Commands
+| Target | Description |
+|--------|-------------|
+| `make clean` | Remove built ISO files |
+| `make cache-clean` | Clear download cache |
+| `make diagnose` | Quick environment diagnostics |
+| `make diagnose-full` | Full diagnostics report |
 
 ## Scripts
 
 | Script | Description |
 |--------|-------------|
 | `prepare-offline.sh` | Download and cache all resources |
-| `build-iso.sh` | Build bootable ISO image |
+| `build-iso.sh` | Build bootable Live ISO image |
+| `build-models-iso.sh` | Build Models ISO with compressed LLM models |
 | `build-usb.sh` | Build bootable USB drive |
 | `test-iso.sh` | Test ISO in QEMU or virt-manager |
+| `test-iso-deep.sh` | Deep validation of ISO structure |
 | `diagnose.sh` | Run environment diagnostics |
 | `load-offline-images.sh` | Load cached container images |
 | `install-autostart.sh` | Install autostart services |

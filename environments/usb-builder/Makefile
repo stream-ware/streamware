@@ -12,7 +12,7 @@
 # =============================================================================
 
 SHELL := /bin/bash
-.PHONY: all install prepare iso usb test test-gui verify diagnose clean cache-clean help
+.PHONY: all install prepare iso iso-test iso-test-gui iso-build models-iso iso-all usb usb-hybrid test test-gui test-deep verify diagnose clean cache-clean help
 
 # Directories
 SCRIPT_DIR := $(shell pwd)
@@ -88,12 +88,20 @@ prepare:
 	@echo "Preparing offline resources..."
 	@./prepare-offline.sh
 
-iso: $(OUTPUT_DIR)/$(ISO_NAME)
-	@echo "✓ ISO ready: $(OUTPUT_DIR)/$(ISO_NAME)"
+iso: iso-build
 
-$(OUTPUT_DIR)/$(ISO_NAME): prepare-dirs
+iso-build: prepare-dirs
 	@echo "Building ISO..."
 	@sudo DISTRO=$(DISTRO) ISO_NAME=$(ISO_NAME) ./build-iso.sh
+	@echo "✓ ISO ready: $(OUTPUT_DIR)/$(ISO_NAME)"
+
+models-iso:
+	@echo "Building Models ISO..."
+	@./build-models-iso.sh
+	@echo "✓ Models ISO ready: $(OUTPUT_DIR)/llm-models.iso"
+
+iso-all: iso models-iso
+	@echo "✓ All ISOs built"
 
 usb:
 	@echo "Building bootable USB..."
@@ -106,6 +114,14 @@ usb:
 	fi
 	@sudo ./build-usb.sh $(USB)
 
+usb-hybrid:
+	@echo "Building hybrid USB (2 partitions)..."
+	@if [ -z "$(USB)" ]; then \
+		sudo ./build-usb-hybrid.sh; \
+	else \
+		sudo ./build-usb-hybrid.sh $(USB); \
+	fi
+
 prepare-dirs:
 	@mkdir -p $(CACHE_DIR)/iso $(CACHE_DIR)/images $(OUTPUT_DIR)
 
@@ -113,17 +129,23 @@ prepare-dirs:
 # Testing
 # =============================================================================
 
-test:
+test: iso-test
+
+iso-test:
 	@echo "Testing ISO in QEMU..."
 	@RAM=$(RAM) CPUS=$(CPUS) ./test-iso.sh
 
-test-gui:
+test-gui iso-test-gui:
 	@echo "Opening virt-manager..."
 	@./test-iso.sh --gui
 
 verify:
 	@echo "Verifying ISO..."
 	@./verify-iso.sh $(OUTPUT_DIR)/$(ISO_NAME)
+
+test-deep:
+	@echo "Running deep ISO validation..."
+	@./test-iso-deep.sh $(OUTPUT_DIR)/$(ISO_NAME)
 
 # =============================================================================
 # Diagnostics
