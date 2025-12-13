@@ -150,15 +150,46 @@ RAM=16G CPUS=8 ./test-iso.sh
 ./test-iso.sh --gui
 ```
 
-### After Booting the ISO
+### After Booting the USB
 
 ```bash
-# Run first-boot setup
-sudo /cdrom/llm-data/first-boot.sh
+# Navigate to data partition
+cd /run/media/$USER/LLM-DATA
 
+# Run setup (one-time)
+sudo ./setup.sh
+
+# Install autostart service (optional - starts on every boot)
+sudo ./install-service.sh
+```
+
+### Autostart Configuration
+
+Edit `config/accounting.conf` on data partition:
+
+```bash
+PROJECT="faktury"        # Project name
+SOURCE="camera"          # camera, screen, or rtsp://...
+PORT="8080"              # Web interface port
+```
+
+### Service Management
+
+```bash
+sudo systemctl status llm-station    # Check status
+sudo journalctl -u llm-station -f    # View logs
+sudo systemctl restart llm-station   # Restart
+```
+
+### Manual Start
+
+```bash
 # Start LLM environment
 cd /opt/llm-station/ollama-webui
 ./start.sh
+
+# Start accounting
+sq accounting web --project faktury --source camera
 
 # Access Open-WebUI
 firefox http://localhost:3000

@@ -48,13 +48,16 @@ show_progress() {
     local eta=""
     if [ -n "$start_time" ] && [ "$current" -gt 0 ]; then
         local elapsed=$(($(date +%s) - start_time))
-        local rate=$((current * 1000 / elapsed))  # bytes per second * 1000
-        if [ "$rate" -gt 0 ]; then
-            local remaining=$(((total - current) * 1000 / rate))
-            if [ "$remaining" -gt 60 ]; then
-                eta=" ETA: $((remaining / 60))m $((remaining % 60))s"
-            else
-                eta=" ETA: ${remaining}s"
+        # Avoid division by zero
+        if [ "$elapsed" -gt 0 ]; then
+            local rate=$((current * 1000 / elapsed))  # bytes per second * 1000
+            if [ "$rate" -gt 0 ]; then
+                local remaining=$(((total - current) * 1000 / rate))
+                if [ "$remaining" -gt 60 ]; then
+                    eta=" ETA: $((remaining / 60))m $((remaining % 60))s"
+                else
+                    eta=" ETA: ${remaining}s"
+                fi
             fi
         fi
     fi
@@ -200,29 +203,33 @@ LIVE_PARTITION_SIZE="${LIVE_PARTITION_SIZE:-8G}"  # Linux Live system
 # Fedora Live ISO expects the original volume label for dracut to find root
 DATA_LABEL="LLM-DATA"
 
-# Source config
-source "$SCRIPT_DIR/config.sh" 2>/dev/null || true
+# Cache directory (must be set before config.sh uses it)
+CACHE_DIR="${CACHE_DIR:-$SCRIPT_DIR/cache}"
 
-# Distro selection
+# Distro selection (before loading config)
 DISTRO="${DISTRO:-fedora}"
 
+# Source config (loads BASE_ISO_* variables)
+source "$SCRIPT_DIR/config.sh" 2>/dev/null || true
+
 # Source ISO - use distro-specific or default
+# Note: BASE_ISO_* variables are now loaded from config.sh
 case "$DISTRO" in
     suse|opensuse)
-        ISO_FILE="${ISO_FILE:-$CACHE_DIR/iso/$BASE_ISO_NAME_SUSE}"
-        ISO_URL="$BASE_ISO_URL_SUSE"
+        ISO_FILE="${ISO_FILE:-$CACHE_DIR/iso/${BASE_ISO_NAME_SUSE:-openSUSE-Tumbleweed-KDE-Live-x86_64-Current.iso}}"
+        ISO_URL="${BASE_ISO_URL_SUSE:-https://download.opensuse.org/tumbleweed/iso/openSUSE-Tumbleweed-KDE-Live-x86_64-Current.iso}"
         ;;
     suse-leap)
-        ISO_FILE="${ISO_FILE:-$CACHE_DIR/iso/$BASE_ISO_NAME_SUSE_LEAP}"
-        ISO_URL="$BASE_ISO_URL_SUSE_LEAP"
+        ISO_FILE="${ISO_FILE:-$CACHE_DIR/iso/${BASE_ISO_NAME_SUSE_LEAP:-openSUSE-Leap-15.5-KDE-Live-x86_64-Media.iso}}"
+        ISO_URL="${BASE_ISO_URL_SUSE_LEAP:-https://download.opensuse.org/distribution/leap/15.5/live/openSUSE-Leap-15.5-KDE-Live-x86_64-Media.iso}"
         ;;
     ubuntu)
-        ISO_FILE="${ISO_FILE:-$CACHE_DIR/iso/$BASE_ISO_NAME_UBUNTU}"
-        ISO_URL="$BASE_ISO_URL_UBUNTU"
+        ISO_FILE="${ISO_FILE:-$CACHE_DIR/iso/${BASE_ISO_NAME_UBUNTU:-ubuntu-24.04-desktop-amd64.iso}}"
+        ISO_URL="${BASE_ISO_URL_UBUNTU:-https://releases.ubuntu.com/24.04/ubuntu-24.04-desktop-amd64.iso}"
         ;;
     fedora|*)
         ISO_FILE="${ISO_FILE:-$SCRIPT_DIR/output/llm-station-um790pro.iso}"
-        ISO_URL="$BASE_ISO_URL_FEDORA"
+        ISO_URL="${BASE_ISO_URL_FEDORA:-https://download.fedoraproject.org/pub/fedora/linux/releases/40/Spins/x86_64/iso/Fedora-LXQt-Live-x86_64-40-1.14.iso}"
         ;;
 esac
 
@@ -576,6 +583,128 @@ done
 log_success "GRUB configuration updated"
 
 # =============================================================================
+# Create autorun for desktop session (runs on first login)
+# =============================================================================
+
+log_info "Creating desktop autostart..."
+
+# Create autostart directory for live user
+mkdir -p "$MOUNT_LIVE/etc/skel/.config/autostart"
+
+# Create desktop autostart entry
+cat > "$MOUNT_LIVE/etc/skel/.config/autostart/llm-station-setup.desktop" << 'DESKTOP'
+[Desktop Entry]
+Type=Application
+Name=LLM Station Setup
+Comment=Automatically setup LLM Station on first boot
+Exec=/usr/local/bin/llm-station-autorun.sh
+Terminal=true
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel
+DESKTOP
+
+# Create the autorun script on boot partition
+mkdir -p "$MOUNT_LIVE/usr/local/bin"
+cat > "$MOUNT_LIVE/usr/local/bin/llm-station-autorun.sh" << 'AUTORUN'
+#!/bin/bash
+# =============================================================================
+# LLM Station Auto-Setup (runs on first login)
+# =============================================================================
+
+# Check if already installed
+if [ -f /var/lib/llm-station-installed ]; then
+    echo "LLM Station already installed."
+    exit 0
+fi
+
+echo "=========================================="
+echo "LLM Station First Boot Setup"
+echo "=========================================="
+
+# Find data partition
+DATA_PART=""
+for mount in /run/media/*/LLM-DATA /media/*/LLM-DATA; do
+    if [ -d "$mount" ]; then
+        DATA_PART="$mount"
+        break
+    fi
+done
+
+if [ -z "$DATA_PART" ]; then
+    # Try to mount it
+    DATA_DEV=$(lsblk -o NAME,LABEL -n | grep LLM-DATA | awk '{print $1}' | head -1)
+    if [ -n "$DATA_DEV" ]; then
+        mkdir -p /mnt/llm-data
+        sudo mount "/dev/$DATA_DEV" /mnt/llm-data 2>/dev/null
+        DATA_PART="/mnt/llm-data"
+    fi
+fi
+
+if [ -z "$DATA_PART" ] || [ ! -d "$DATA_PART" ]; then
+    echo "ERROR: Cannot find LLM-DATA partition"
+    echo "Please mount it manually and run: $DATA_PART/install-service.sh"
+    read -p "Press Enter to continue..."
+    exit 1
+fi
+
+echo "Found data partition: $DATA_PART"
+
+# Run install-service.sh
+if [ -f "$DATA_PART/install-service.sh" ]; then
+    echo "Installing LLM Station service..."
+    sudo "$DATA_PART/install-service.sh"
+    
+    # Mark as installed
+    sudo touch /var/lib/llm-station-installed
+    
+    echo ""
+    echo "=========================================="
+    echo "LLM Station installed successfully!"
+    echo ""
+    echo "Services:"
+    echo "  Open-WebUI:  http://localhost:3000"
+    echo "  Ollama API:  http://localhost:11434"
+    echo "  Accounting:  http://localhost:8080"
+    echo ""
+    echo "Check status: sudo systemctl status llm-station"
+    echo "=========================================="
+else
+    echo "ERROR: install-service.sh not found in $DATA_PART"
+fi
+
+read -p "Press Enter to close..."
+AUTORUN
+
+chmod +x "$MOUNT_LIVE/usr/local/bin/llm-station-autorun.sh"
+
+# Also create rc.local fallback for non-desktop systems
+cat > "$MOUNT_LIVE/etc/rc.local" << 'RCLOCAL'
+#!/bin/bash
+# LLM Station auto-setup on boot
+
+# Skip if already installed
+[ -f /var/lib/llm-station-installed ] && exit 0
+
+# Find and mount data partition
+DATA_DEV=$(lsblk -o NAME,LABEL -n | grep LLM-DATA | awk '{print $1}' | head -1)
+if [ -n "$DATA_DEV" ]; then
+    mkdir -p /opt/llm-data
+    mount "/dev/$DATA_DEV" /opt/llm-data 2>/dev/null
+    
+    if [ -f /opt/llm-data/install-service.sh ]; then
+        /opt/llm-data/install-service.sh
+        touch /var/lib/llm-station-installed
+    fi
+fi
+
+exit 0
+RCLOCAL
+
+chmod +x "$MOUNT_LIVE/etc/rc.local"
+
+log_success "Desktop autostart created"
+
+# =============================================================================
 # Copy project data
 # =============================================================================
 
@@ -601,6 +730,75 @@ log_info "Copying usb-builder..."
 rsync -a --exclude='cache/' --exclude='output/' --exclude='*.iso' \
     "$SCRIPT_DIR/" "$MOUNT_DATA/environments/usb-builder/" 2>/dev/null || true
 log_success "usb-builder copied"
+
+# =============================================================================
+# Copy entire streamware project (development environment)
+# =============================================================================
+
+# Find project root (parent of environments/usb-builder)
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+if [ -d "$PROJECT_ROOT/streamware" ] && [ -f "$PROJECT_ROOT/pyproject.toml" ]; then
+    log_info "Copying streamware project (development mode)..."
+    
+    mkdir -p "$MOUNT_DATA/streamware"
+    
+    # Copy everything including .git (ignore .gitignore rules)
+    # Use rsync with --no-exclude to copy all files
+    rsync -a \
+        --exclude='__pycache__/' \
+        --exclude='*.pyc' \
+        --exclude='.pytest_cache/' \
+        --exclude='*.egg-info/' \
+        --exclude='dist/' \
+        --exclude='build/' \
+        --exclude='environments/usb-builder/cache/' \
+        --exclude='environments/usb-builder/output/' \
+        --exclude='*.iso' \
+        "$PROJECT_ROOT/" "$MOUNT_DATA/streamware/" 2>/dev/null &
+    
+    RSYNC_PID=$!
+    PROJECT_SIZE=$(du -sb "$PROJECT_ROOT" 2>/dev/null | cut -f1)
+    START_TIME=$(date +%s)
+    
+    while kill -0 $RSYNC_PID 2>/dev/null; do
+        CURRENT=$(du -sb "$MOUNT_DATA/streamware" 2>/dev/null | cut -f1)
+        [ -z "$CURRENT" ] && CURRENT=0
+        show_progress "Copying streamware" "$CURRENT" "$PROJECT_SIZE" "$START_TIME"
+        sleep 1
+    done
+    wait $RSYNC_PID
+    echo ""
+    
+    log_success "Streamware project copied (development mode)"
+    
+    # Create activation script
+    cat > "$MOUNT_DATA/streamware/activate-dev.sh" << 'DEVSCRIPT'
+#!/bin/bash
+# Activate streamware development environment
+
+cd "$(dirname "$0")"
+
+# Create virtual environment if not exists
+if [ ! -d "venv" ]; then
+    echo "Creating virtual environment..."
+    python3 -m venv venv
+fi
+
+# Activate
+source venv/bin/activate
+
+# Install in development mode
+pip install -e . 2>/dev/null
+
+echo ""
+echo "Streamware development environment activated!"
+echo "Run: sq --help"
+DEVSCRIPT
+    chmod +x "$MOUNT_DATA/streamware/activate-dev.sh"
+else
+    log_warn "Streamware project root not found at $PROJECT_ROOT"
+fi
 
 # Copy container images if cached
 if [ -d "$CACHE_DIR/images" ] && [ "$(ls -A $CACHE_DIR/images/*.tar 2>/dev/null)" ]; then
@@ -687,12 +885,21 @@ if [ -d "$DATA_PART/images" ]; then
     echo "✓ Container images loaded"
 fi
 
+# Install streamware if not present
+if ! command -v sq &> /dev/null; then
+    echo "Installing streamware..."
+    pip install streamware 2>/dev/null || pip3 install streamware 2>/dev/null || {
+        echo "⚠ Could not install streamware. Install manually: pip install streamware"
+    }
+fi
+
 echo ""
 echo "=========================================="
 echo "Setup complete!"
 echo ""
-echo "To start LLM Station:"
+echo "To start services manually:"
 echo "  cd /opt/llm-station/ollama-webui && ./start.sh"
+echo "  sq accounting web --project faktury --source camera"
 echo ""
 echo "Open: http://localhost:3000"
 echo "=========================================="
@@ -738,6 +945,296 @@ ln -s /mnt/llm-data/models/ollama ~/.ollama/models
 README
 
 log_success "Setup scripts created"
+
+# =============================================================================
+# Create autostart service (systemd)
+# =============================================================================
+
+log_info "Creating autostart service..."
+
+# Create systemd service file
+cat > "$MOUNT_DATA/llm-station.service" << 'SERVICE'
+[Unit]
+Description=LLM Station Autostart
+After=network.target graphical.target
+Wants=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/llm-data/autostart.sh
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+# Create autostart script
+cat > "$MOUNT_DATA/autostart.sh" << 'AUTOSTART'
+#!/bin/bash
+# =============================================================================
+# LLM Station Autostart Script
+# This runs automatically on boot via systemd
+# =============================================================================
+
+LOG="/var/log/llm-station.log"
+exec > >(tee -a "$LOG") 2>&1
+
+echo "=========================================="
+echo "LLM Station Autostart - $(date)"
+echo "=========================================="
+
+# Find and mount data partition
+DATA_PART=""
+for mount in /run/media/*/LLM-DATA /media/*/LLM-DATA /mnt/LLM-DATA /opt/llm-data; do
+    if [ -d "$mount" ]; then
+        DATA_PART="$mount"
+        break
+    fi
+done
+
+if [ -z "$DATA_PART" ]; then
+    echo "Mounting data partition..."
+    DATA_DEV=$(lsblk -o NAME,LABEL -n | grep LLM-DATA | awk '{print "/dev/"$1}')
+    if [ -n "$DATA_DEV" ]; then
+        mkdir -p /opt/llm-data
+        mount "$DATA_DEV" /opt/llm-data
+        DATA_PART="/opt/llm-data"
+    else
+        echo "ERROR: Cannot find LLM-DATA partition"
+        exit 1
+    fi
+fi
+
+echo "Data partition: $DATA_PART"
+
+# Create symlinks
+mkdir -p /opt
+ln -sf "$DATA_PART/environments" /opt/llm-station 2>/dev/null || true
+
+# Link Ollama models for all users
+for home in /home/*; do
+    if [ -d "$home" ]; then
+        user=$(basename "$home")
+        mkdir -p "$home/.ollama"
+        ln -sf "$DATA_PART/models/ollama" "$home/.ollama/models" 2>/dev/null || true
+        chown -R "$user:$user" "$home/.ollama" 2>/dev/null || true
+    fi
+done
+
+# Load container images (if not already loaded)
+if [ -d "$DATA_PART/images" ]; then
+    for img in "$DATA_PART/images"/*.tar; do
+        if [ -f "$img" ]; then
+            imgname=$(basename "$img" .tar)
+            if ! podman images | grep -q "$imgname" 2>/dev/null; then
+                echo "Loading container: $imgname"
+                podman load -i "$img" 2>/dev/null || docker load -i "$img" 2>/dev/null || true
+            fi
+        fi
+    done
+fi
+
+# =============================================================================
+# Install Python dependencies
+# =============================================================================
+
+echo "Setting up Python environment..."
+
+# Install pip if missing
+if ! command -v pip3 &> /dev/null; then
+    echo "Installing pip..."
+    python3 -m ensurepip --upgrade 2>/dev/null || true
+fi
+
+# Install streamware from local project if available
+if [ -d "$DATA_PART/streamware" ] && [ -f "$DATA_PART/streamware/pyproject.toml" ]; then
+    echo "Installing streamware from local project..."
+    cd "$DATA_PART/streamware"
+    pip3 install -e . 2>/dev/null || pip3 install . 2>/dev/null || true
+    cd -
+elif ! command -v sq &> /dev/null; then
+    echo "Installing streamware from PyPI..."
+    pip3 install streamware 2>/dev/null || true
+fi
+
+# Install additional dependencies for accounting
+pip3 install flask opencv-python pillow 2>/dev/null || true
+
+# =============================================================================
+# Install and start Ollama
+# =============================================================================
+
+echo "Setting up Ollama..."
+
+# Install Ollama if not present
+if ! command -v ollama &> /dev/null; then
+    echo "Installing Ollama..."
+    curl -fsSL https://ollama.com/install.sh | sh 2>/dev/null || {
+        # Fallback: try snap or flatpak
+        snap install ollama 2>/dev/null || flatpak install -y flathub com.ollama.Ollama 2>/dev/null || true
+    }
+fi
+
+# Start Ollama service
+if command -v ollama &> /dev/null; then
+    echo "Starting Ollama..."
+    # Kill existing if running
+    pkill -f "ollama serve" 2>/dev/null || true
+    sleep 1
+    ollama serve &
+    OLLAMA_PID=$!
+    sleep 5
+    
+    # Pull default model if not present
+    if ! ollama list 2>/dev/null | grep -q "llava"; then
+        echo "Pulling llava model (this may take a while)..."
+        ollama pull llava:7b &
+    fi
+fi
+
+# =============================================================================
+# Start Open-WebUI container
+# =============================================================================
+
+echo "Setting up Open-WebUI..."
+
+# Check if podman or docker available
+CONTAINER_CMD=""
+if command -v podman &> /dev/null; then
+    CONTAINER_CMD="podman"
+elif command -v docker &> /dev/null; then
+    CONTAINER_CMD="docker"
+fi
+
+if [ -n "$CONTAINER_CMD" ]; then
+    # Stop existing container
+    $CONTAINER_CMD stop open-webui 2>/dev/null || true
+    $CONTAINER_CMD rm open-webui 2>/dev/null || true
+    
+    # Start Open-WebUI
+    echo "Starting Open-WebUI container..."
+    $CONTAINER_CMD run -d --name open-webui \
+        -p 3000:8080 \
+        -e OLLAMA_BASE_URL=http://host.containers.internal:11434 \
+        --add-host=host.containers.internal:host-gateway \
+        ghcr.io/open-webui/open-webui:latest 2>/dev/null || {
+            # Try with localhost if host.containers.internal fails
+            $CONTAINER_CMD run -d --name open-webui \
+                -p 3000:8080 \
+                --network=host \
+                -e OLLAMA_BASE_URL=http://localhost:11434 \
+                ghcr.io/open-webui/open-webui:latest 2>/dev/null || true
+        }
+fi
+
+# =============================================================================
+# Start streamware accounting
+# =============================================================================
+
+echo "Starting streamware services..."
+
+# Load configuration
+if [ -f "$DATA_PART/config/accounting.conf" ]; then
+    source "$DATA_PART/config/accounting.conf"
+fi
+
+PROJECT="${PROJECT:-faktury}"
+SOURCE="${SOURCE:-camera}"
+PORT="${PORT:-8080}"
+
+# Wait for Ollama to be ready
+echo "Waiting for Ollama to be ready..."
+for i in {1..30}; do
+    if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
+        echo "Ollama is ready!"
+        break
+    fi
+    sleep 2
+done
+
+# Start streamware accounting web interface
+if command -v sq &> /dev/null; then
+    echo "Starting: sq accounting web --project $PROJECT --source $SOURCE --port $PORT"
+    sq accounting web --project "$PROJECT" --source "$SOURCE" --port "$PORT" &
+    SQ_PID=$!
+    echo "Streamware accounting started (PID: $SQ_PID)"
+else
+    echo "WARNING: sq command not found. Install with: pip install streamware"
+fi
+
+echo ""
+echo "=========================================="
+echo "LLM Station started!"
+echo "Open: http://localhost:3000"
+echo "=========================================="
+AUTOSTART
+
+chmod +x "$MOUNT_DATA/autostart.sh"
+
+# Create install-service script
+cat > "$MOUNT_DATA/install-service.sh" << 'INSTALL'
+#!/bin/bash
+# Install LLM Station as systemd service for auto-start on boot
+
+set -e
+
+DATA_PART="$(cd "$(dirname "$0")" && pwd)"
+
+echo "Installing LLM Station autostart service..."
+
+# Copy service file
+sudo cp "$DATA_PART/llm-station.service" /etc/systemd/system/
+
+# Create symlink to data partition
+sudo mkdir -p /opt/llm-data
+sudo mount --bind "$DATA_PART" /opt/llm-data 2>/dev/null || true
+
+# Add to fstab for persistent mount
+PART_UUID=$(blkid -o value -s UUID "$(df "$DATA_PART" | tail -1 | awk '{print $1}')")
+if ! grep -q "llm-data" /etc/fstab; then
+    echo "UUID=$PART_UUID /opt/llm-data auto defaults,nofail 0 0" | sudo tee -a /etc/fstab
+fi
+
+# Enable and start service
+sudo systemctl daemon-reload
+sudo systemctl enable llm-station.service
+sudo systemctl start llm-station.service
+
+echo ""
+echo "✓ Service installed and started!"
+echo "  Status: sudo systemctl status llm-station"
+echo "  Logs:   sudo journalctl -u llm-station"
+echo ""
+echo "The service will start automatically on next boot."
+INSTALL
+
+chmod +x "$MOUNT_DATA/install-service.sh"
+
+# Create accounting config
+mkdir -p "$MOUNT_DATA/config"
+cat > "$MOUNT_DATA/config/accounting.conf" << 'CONFIG'
+# LLM Station Accounting Configuration
+# Edit this file to customize autostart behavior
+
+# Project name for accounting
+PROJECT="faktury"
+
+# Video source (camera, screen, or RTSP URL)
+SOURCE="camera"
+
+# Web interface port
+PORT="8080"
+
+# Enable TTS announcements
+TTS_ENABLED="false"
+
+# Ollama model for analysis
+MODEL="llava:7b"
+CONFIG
+
+log_success "Autostart service created"
 
 # =============================================================================
 # Calculate sizes

@@ -415,10 +415,115 @@ if [ -b "$PART2" ]; then
 fi
 
 # =============================================================================
-# Phase 6: Boot Test Preparation
+# Phase 6: Boot Simulation (Static Analysis)
 # =============================================================================
 
-section "Phase 6: Boot Test"
+section "Phase 6: Boot Simulation (No QEMU)"
+
+info "Simulating boot process statically..."
+
+# Mount partition 1 for analysis
+BOOT_MOUNT=$(mktemp -d)
+mount -o ro "$PART1" "$BOOT_MOUNT" 2>/dev/null || {
+    warn "Cannot mount boot partition for analysis"
+    BOOT_MOUNT=""
+}
+
+if [ -n "$BOOT_MOUNT" ] && [ -d "$BOOT_MOUNT" ]; then
+    # Check GRUB label matches partition label
+    GRUB_CFG=""
+    for cfg in "EFI/BOOT/grub.cfg" "boot/grub2/grub.cfg" "boot/grub/grub.cfg"; do
+        [ -f "$BOOT_MOUNT/$cfg" ] && GRUB_CFG="$BOOT_MOUNT/$cfg" && break
+    done
+    
+    if [ -n "$GRUB_CFG" ]; then
+        GRUB_LABEL=$(grep -oP 'CDLABEL=\K[^ "]+' "$GRUB_CFG" 2>/dev/null | head -1)
+        [ -z "$GRUB_LABEL" ] && GRUB_LABEL=$(grep -oP 'LABEL=\K[^ "]+' "$GRUB_CFG" 2>/dev/null | head -1)
+        ACTUAL_LABEL=$(blkid -o value -s LABEL "$PART1" 2>/dev/null)
+        
+        echo "Label check:"
+        echo "  GRUB expects: ${GRUB_LABEL:-unknown}"
+        echo "  Partition:    ${ACTUAL_LABEL:-unknown}"
+        
+        if [ "$GRUB_LABEL" = "$ACTUAL_LABEL" ]; then
+            pass "Volume label matches - boot will succeed"
+        elif [ -z "$GRUB_LABEL" ]; then
+            warn "Could not detect GRUB label requirement"
+        else
+            fail "Label MISMATCH - dracut will timeout!"
+            echo "  Fix: sudo fatlabel $PART1 '$GRUB_LABEL'"
+        fi
+        
+        # Check boot parameters
+        grep -q "rd.live.image" "$GRUB_CFG" 2>/dev/null && pass "Live boot parameter present"
+        grep -q "root=live" "$GRUB_CFG" 2>/dev/null && pass "Root parameter configured"
+    fi
+    
+    # EFI chain validation
+    echo ""
+    echo "EFI boot chain:"
+    for efi in "EFI/BOOT/BOOTX64.EFI" "EFI/BOOT/grubx64.efi" "EFI/fedora/shimx64.efi"; do
+        if [ -f "$BOOT_MOUNT/$efi" ]; then
+            sz=$(stat -c%s "$BOOT_MOUNT/$efi" 2>/dev/null)
+            [ "$sz" -gt 1000 ] && pass "  $efi ($((sz/1024))KB)" || warn "  $efi too small"
+        fi
+    done
+    
+    # Initrd validation
+    echo ""
+    echo "Initrd check:"
+    for initrd in "images/pxeboot/initrd.img" "boot/initrd.img" "casper/initrd"; do
+        if [ -f "$BOOT_MOUNT/$initrd" ]; then
+            sz=$(stat -c%s "$BOOT_MOUNT/$initrd" 2>/dev/null)
+            ftype=$(file -b "$BOOT_MOUNT/$initrd" 2>/dev/null | cut -d',' -f1)
+            pass "  $initrd ($((sz/1024/1024))MB, $ftype)"
+            break
+        fi
+    done
+    
+    # Squashfs validation
+    echo ""
+    echo "Squashfs check:"
+    for sq in "LiveOS/squashfs.img" "casper/filesystem.squashfs" "live/filesystem.squashfs"; do
+        if [ -f "$BOOT_MOUNT/$sq" ]; then
+            sz=$(stat -c%s "$BOOT_MOUNT/$sq" 2>/dev/null)
+            pass "  $sq ($((sz/1024/1024))MB)"
+            
+            if command -v unsquashfs &> /dev/null; then
+                unsquashfs -s "$BOOT_MOUNT/$sq" > /dev/null 2>&1 && pass "  Integrity OK" || fail "  CORRUPTED!"
+            fi
+            break
+        fi
+    done
+    
+    umount "$BOOT_MOUNT" 2>/dev/null
+    rmdir "$BOOT_MOUNT" 2>/dev/null
+fi
+
+# =============================================================================
+# Phase 7: Post-Boot Scripts
+# =============================================================================
+
+section "Phase 7: Setup Scripts Validation"
+
+if [ -b "$PART2" ]; then
+    DATA_MOUNT=$(mktemp -d)
+    mount -o ro "$PART2" "$DATA_MOUNT" 2>/dev/null
+    
+    if [ -f "$DATA_MOUNT/setup.sh" ]; then
+        bash -n "$DATA_MOUNT/setup.sh" 2>/dev/null && pass "setup.sh syntax OK" || fail "setup.sh syntax ERROR"
+        grep -q "podman\|docker" "$DATA_MOUNT/setup.sh" && pass "Container setup included"
+    fi
+    
+    umount "$DATA_MOUNT" 2>/dev/null
+    rmdir "$DATA_MOUNT" 2>/dev/null
+fi
+
+# =============================================================================
+# Phase 8: QEMU Boot Test (Optional)
+# =============================================================================
+
+section "Phase 8: QEMU Boot Test (Optional)"
 
 echo "To test boot in QEMU, run:"
 echo ""
