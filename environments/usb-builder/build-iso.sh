@@ -53,17 +53,20 @@ check_deps() {
     # Check for file command
     command -v file &> /dev/null || missing+=("file")
     
+    # Check for isohybrid (needed for USB boot)
+    command -v isohybrid &> /dev/null || missing+=("syslinux-utils")
+    
     if [ ${#missing[@]} -gt 0 ]; then
         echo "Installing missing tools: ${missing[*]}..."
         if [ -f /etc/fedora-release ]; then
-            dnf install -y xorriso squashfs-tools p7zip p7zip-plugins file
+            dnf install -y xorriso squashfs-tools p7zip p7zip-plugins file syslinux
         elif [ -f /etc/debian_version ]; then
             apt-get update
-            apt-get install -y xorriso squashfs-tools p7zip-full file
+            apt-get install -y xorriso squashfs-tools p7zip-full file syslinux-utils
         elif [ -f /etc/arch-release ]; then
-            pacman -S --noconfirm xorriso squashfs-tools p7zip file
+            pacman -S --noconfirm xorriso squashfs-tools p7zip file syslinux
         else
-            echo "Please install: xorriso squashfs-tools p7zip file"
+            echo "Please install: xorriso squashfs-tools p7zip file syslinux-utils"
             exit 1
         fi
     fi
@@ -195,10 +198,24 @@ echo "[4/7] Adding LLM Station files..."
 LLM_DATA="$ISO_ROOT/llm-data"
 mkdir -p "$LLM_DATA/environments"
 
-# Copy environment configurations
+# Copy environment configurations (excluding large/generated files)
+echo "  Copying ollama-webui..."
+rsync -a --exclude='*.iso' --exclude='cache/' --exclude='output/' "$ENV_DIR/ollama-webui/" "$LLM_DATA/environments/ollama-webui/" 2>/dev/null || \
 cp -r "$ENV_DIR/ollama-webui" "$LLM_DATA/environments/"
+
+echo "  Copying llama-cpp-rocm..."
+rsync -a --exclude='*.iso' --exclude='cache/' --exclude='output/' "$ENV_DIR/llama-cpp-rocm/" "$LLM_DATA/environments/llama-cpp-rocm/" 2>/dev/null || \
 cp -r "$ENV_DIR/llama-cpp-rocm" "$LLM_DATA/environments/"
-cp -r "$SCRIPT_DIR" "$LLM_DATA/environments/usb-builder"
+
+echo "  Copying usb-builder (excluding cache/output)..."
+rsync -a --exclude='cache/' --exclude='output/' --exclude='*.iso' "$SCRIPT_DIR/" "$LLM_DATA/environments/usb-builder/" 2>/dev/null || {
+    mkdir -p "$LLM_DATA/environments/usb-builder"
+    cp -r "$SCRIPT_DIR"/*.sh "$LLM_DATA/environments/usb-builder/" 2>/dev/null || true
+    cp -r "$SCRIPT_DIR"/lib "$LLM_DATA/environments/usb-builder/" 2>/dev/null || true
+    cp -r "$SCRIPT_DIR"/systemd "$LLM_DATA/environments/usb-builder/" 2>/dev/null || true
+    cp "$SCRIPT_DIR"/Makefile "$LLM_DATA/environments/usb-builder/" 2>/dev/null || true
+    cp "$SCRIPT_DIR"/README.md "$LLM_DATA/environments/usb-builder/" 2>/dev/null || true
+}
 
 # Copy pre-downloaded models if they exist
 if [ -d "$ENV_DIR/ollama-webui/models" ]; then
@@ -212,10 +229,12 @@ if [ -d "$ENV_DIR/llama-cpp-rocm/models" ]; then
 fi
 
 # Copy pre-saved container images if they exist
-if [ -d "$SCRIPT_DIR/cache/images" ]; then
+if [ -d "$CACHE_DIR/images" ] && [ "$(ls -A $CACHE_DIR/images/*.tar 2>/dev/null)" ]; then
     echo "  Adding container images..."
     mkdir -p "$LLM_DATA/images"
-    cp -r "$SCRIPT_DIR/cache/images/"* "$LLM_DATA/images/"
+    cp -r "$CACHE_DIR/images/"*.tar "$LLM_DATA/images/"
+else
+    echo "  ⚠ No cached container images found (run prepare-offline.sh first for faster boot)"
 fi
 
 echo ""
@@ -403,10 +422,19 @@ else
     exit 1
 fi
 
-# Make hybrid ISO (bootable on USB via dd)
+# Make hybrid ISO (bootable on USB via dd/Balena Etcher)
+echo "  Making ISO hybrid (USB bootable)..."
 if command -v isohybrid &> /dev/null; then
-    echo "  Making ISO hybrid (USB bootable)..."
+    # isohybrid adds MBR partition table for USB boot
     isohybrid --uefi "$ISO_OUTPUT" 2>/dev/null || isohybrid "$ISO_OUTPUT" 2>/dev/null || true
+    echo "  ✓ Applied isohybrid MBR"
+elif command -v xorriso &> /dev/null; then
+    # xorriso can also make hybrid ISOs
+    echo "  Using xorriso to add MBR..."
+    xorriso -indev "$ISO_OUTPUT" -boot_image any replay -outdev "$ISO_OUTPUT" 2>/dev/null || true
+else
+    echo "  ⚠ isohybrid not found - ISO may not boot from USB"
+    echo "    Install: sudo apt install syslinux-utils  # or dnf install syslinux"
 fi
 
 echo ""
