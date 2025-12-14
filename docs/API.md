@@ -8,6 +8,14 @@ CLI options and configuration reference.
 
 ## CLI Commands
 
+### `sq accounting`
+
+Document scanning / OCR / accounting projects.
+
+Due to multiple modes (one-shot scan vs web UI + RTSP), the full up-to-date usage is documented here:
+
+- [🧾 Accounting Scanner](ACCOUNTING.md)
+
 ### `sq live narrator`
 
 Main command for live video analysis.

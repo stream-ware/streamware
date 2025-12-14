@@ -640,6 +640,7 @@ Shortcuts:
     acc_parser.add_argument('--question', '-q', help='Pytanie do asystenta (dla operacji ask)')
     acc_parser.add_argument('--interval', '-i', type=float, default=2.0, help='Interwał skanowania (sekundy)')
     acc_parser.add_argument('--no-browser', action='store_true', help='Nie otwieraj przeglądarki automatycznie (web)')
+    acc_parser.add_argument('--port', type=int, default=8088, help='Port interfejsu web (web)')
     acc_parser.add_argument('--camera-device', type=int, default=0, help='Numer urządzenia kamery lokalnej (default: 0)')
     acc_parser.add_argument('--rtsp', help='URL kamery RTSP (np. rtsp://user:pass@192.168.1.100:554/stream)')
     acc_parser.add_argument('--camera', help='Nazwa kamery z .env (SQ_CAMERAS) lub indeks (0,1,2...)')

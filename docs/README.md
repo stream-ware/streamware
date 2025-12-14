@@ -13,6 +13,7 @@ Welcome to StreamWare documentation. This guide covers all features for real-tim
 - [⚡ Performance Optimization](PERFORMANCE.md) - GPU acceleration, timing logs, benchmarks
 - [🤖 LLM Integration](LLM_INTEGRATION.md) - Vision models, async inference
 - [🎯 Motion Analysis](MOTION_ANALYSIS.md) - DSL-based tracking, blob detection
+- [🧾 Accounting Scanner](ACCOUNTING.md) - Document scanning (web UI + RTSP, OCR)
 
 ### Architecture
 - [🏗️ System Architecture](ARCHITECTURE.md) - Multiprocessing, data flow

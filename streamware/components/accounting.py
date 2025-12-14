@@ -14,9 +14,19 @@ Features:
     - Zapis/odczyt danych do plików
 
 Usage:
+    # Web UI (recommended, supports RTSP via .env / --rtsp / --camera)
+    sq accounting web --project faktury_2024 --port 8080 --camera main
+
+    # One-shot scan (local USB camera /dev/video*; RTSP not supported here)
     sq accounting scan --source camera --project faktury_2024
+
+    # Analyze existing file
     sq accounting analyze --file faktura.jpg --type invoice
+
+    # Project summary
     sq accounting summary --project paragony_grudzien
+
+    # Interactive scanning session
     sq accounting interactive --project faktury
 """
 
@@ -36,8 +46,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Iterator
 
-# Disable PaddleOCR model source check for faster startup
+# Disable PaddleOCR/PaddleX model source check for faster startup
 os.environ.setdefault('DISABLE_MODEL_SOURCE_CHECK', 'True')
+os.environ.setdefault('PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK', 'True')
 
 from ..core import Component, StreamComponent, register
 from ..uri import StreamwareURI

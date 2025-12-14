@@ -244,7 +244,7 @@ def handle_accounting(args) -> int:
     
     elif operation == 'web':
         from .accounting_web import run_accounting_web, load_camera_config_from_env, list_available_cameras
-        port = 8088
+        port = int(getattr(args, 'port', 8088) or 8088)
         no_browser = getattr(args, 'no_browser', False)
         camera_device = getattr(args, 'camera_device', 0)
         rtsp_url = getattr(args, 'rtsp', None)

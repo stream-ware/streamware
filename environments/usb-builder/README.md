@@ -215,7 +215,8 @@ cd /opt/llm-station/ollama-webui
 ./start.sh
 
 # Start accounting
-sq accounting web --project faktury --source camera
+# RTSP is loaded from .env (SQ_CAMERAS/SQ_DEFAULT_URL). Choose camera by name:
+sq accounting web --project faktury_2024 --port 8080 --camera main
 
 # Access Open-WebUI
 firefox http://localhost:3000

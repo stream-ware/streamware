@@ -5,8 +5,9 @@ Usługa webowa pokazująca podgląd ekranu w przeglądarce.
 Co sekundę robi zrzut ekranu, analizuje czy to dokument i automatycznie archiwizuje.
 
 Usage:
-    sq accounting-web --project faktury_2024 --port 8080
-    # Otwórz http://localhost:8080 w przeglądarce
+    # Web UI (recommended)
+    sq accounting web --project faktury_2024 --port 8080 --source camera --camera main
+    # Otwórz http://localhost:8080 w przeglądarce (lub uruchom w trybie kiosk)
 """
 
 import asyncio
@@ -25,6 +26,7 @@ from typing import Optional, Dict, List, Any, Tuple
 
 # Disable PaddleOCR model source check
 os.environ.setdefault('DISABLE_MODEL_SOURCE_CHECK', 'True')
+os.environ.setdefault('PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK', 'True')
 # Suppress OpenCV warnings
 os.environ.setdefault('OPENCV_LOG_LEVEL', 'ERROR')
 

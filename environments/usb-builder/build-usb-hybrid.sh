@@ -11,15 +11,136 @@
 
 set -e
 
- if [ -z "${BASH_VERSION:-}" ]; then
-     exec /bin/bash "$0" "$@"
- fi
+if [ -z "${BASH_VERSION:-}" ]; then
+    exec /bin/bash "$0" "$@"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# =============================================================================
+# Cleanup and signal handling
+# =============================================================================
+
+CLEANUP_PIDS=()
+MOUNT_LIVE=""
+MOUNT_DATA=""
+
+cleanup() {
+    local exit_code=$?
+    echo ""
+    log_warn "Cleaning up..."
+    
+    # Kill any background processes we started
+    for pid in "${CLEANUP_PIDS[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+        fi
+    done
+    
+    # Unmount if mounted
+    if [ -n "$MOUNT_LIVE" ] && mountpoint -q "$MOUNT_LIVE" 2>/dev/null; then
+        umount "$MOUNT_LIVE" 2>/dev/null || true
+    fi
+    if [ -n "$MOUNT_DATA" ] && mountpoint -q "$MOUNT_DATA" 2>/dev/null; then
+        umount "$MOUNT_DATA" 2>/dev/null || true
+    fi
+    
+    # Remove temp directories
+    [ -n "$MOUNT_LIVE" ] && [ -d "$MOUNT_LIVE" ] && rmdir "$MOUNT_LIVE" 2>/dev/null || true
+    [ -n "$MOUNT_DATA" ] && [ -d "$MOUNT_DATA" ] && rmdir "$MOUNT_DATA" 2>/dev/null || true
+    
+    if [ $exit_code -ne 0 ]; then
+        log_error "Script interrupted or failed (exit code: $exit_code)"
+    fi
+    exit $exit_code
+}
+
+trap cleanup EXIT INT TERM
+
+# Run command with spinner (for commands without progress info)
+# Usage: run_with_spinner "description" command [args...]
+run_with_spinner() {
+    local desc="$1"
+    shift
+    local spin='|/-\\'
+    local i=0
+    local start_time=$(date +%s)
+    
+    # Run command in background
+    "$@" &
+    local pid=$!
+    CLEANUP_PIDS+=("$pid")
+    
+    # Show spinner while running
+    while kill -0 "$pid" 2>/dev/null; do
+        local elapsed=$(($(date +%s) - start_time))
+        i=$(((i + 1) % 4))
+        printf "\r${BLUE}[INFO]${NC} %s %s (%ds)" "$desc" "${spin:$i:1}" "$elapsed"
+        sleep 0.2
+    done
+    
+    # Get exit status
+    wait "$pid"
+    local status=$?
+    
+    # Remove from cleanup list
+    CLEANUP_PIDS=("${CLEANUP_PIDS[@]/$pid}")
+    
+    local elapsed=$(($(date +%s) - start_time))
+    if [ $status -eq 0 ]; then
+        printf "\r${GREEN}✓${NC} %s (completed in %ds)%s\n" "$desc" "$elapsed" "          "
+    else
+        printf "\r${RED}✗${NC} %s (failed after %ds)%s\n" "$desc" "$elapsed" "          "
+        return $status
+    fi
+}
+
+# Run command with timeout and spinner
+# Usage: run_with_timeout timeout_sec "description" command [args...]
+run_with_timeout() {
+    local timeout="$1"
+    local desc="$2"
+    shift 2
+    local spin='|/-\\'
+    local i=0
+    local start_time=$(date +%s)
+    
+    # Run command in background
+    "$@" &
+    local pid=$!
+    CLEANUP_PIDS+=("$pid")
+    
+    # Show spinner while running, check timeout
+    while kill -0 "$pid" 2>/dev/null; do
+        local elapsed=$(($(date +%s) - start_time))
+        if [ "$elapsed" -ge "$timeout" ]; then
+            kill "$pid" 2>/dev/null || true
+            printf "\r${RED}✗${NC} %s (TIMEOUT after %ds)%s\n" "$desc" "$elapsed" "          "
+            CLEANUP_PIDS=("${CLEANUP_PIDS[@]/$pid}")
+            return 124
+        fi
+        i=$(((i + 1) % 4))
+        printf "\r${BLUE}[INFO]${NC} %s %s (%ds/%ds)" "$desc" "${spin:$i:1}" "$elapsed" "$timeout"
+        sleep 0.2
+    done
+    
+    wait "$pid"
+    local status=$?
+    CLEANUP_PIDS=("${CLEANUP_PIDS[@]/$pid}")
+    
+    local elapsed=$(($(date +%s) - start_time))
+    if [ $status -eq 0 ]; then
+        printf "\r${GREEN}✓${NC} %s (completed in %ds)%s\n" "$desc" "$elapsed" "          "
+    else
+        printf "\r${RED}✗${NC} %s (failed after %ds)%s\n" "$desc" "$elapsed" "          "
+        return $status
+    fi
+}
 ENV_DIR="$(dirname "$SCRIPT_DIR")"
 CACHE_DIR="${CACHE_DIR:-$SCRIPT_DIR/cache}"
 
-# Colors
+# Colors (define early for cleanup function)
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -30,6 +151,27 @@ log_info() { echo -e "${BLUE}[INFO]${NC} $*"; }
 log_success() { echo -e "${GREEN}✓${NC} $*"; }
 log_warn() { echo -e "${YELLOW}⚠${NC} $*"; }
 log_error() { echo -e "${RED}✗${NC} $*"; }
+
+# Timing helper - returns elapsed time in human readable format
+format_duration() {
+    local seconds=$1
+    if [ "$seconds" -ge 60 ]; then
+        printf "%dm %ds" $((seconds / 60)) $((seconds % 60))
+    else
+        printf "%ds" "$seconds"
+    fi
+}
+
+# Log with timing
+log_timed() {
+    local start=$1
+    local msg=$2
+    local elapsed=$(($(date +%s) - start))
+    echo -e "${GREEN}✓${NC} $msg ($(format_duration $elapsed))"
+}
+
+# Global script start time
+SCRIPT_START_TIME=$(date +%s)
 
 # Progress bar function
 # Usage: show_progress "message" current total [start_time]
@@ -484,35 +626,74 @@ echo ""
 # Unmount existing partitions
 # =============================================================================
 
+STEP_START=$(date +%s)
 log_info "Unmounting existing partitions..."
 for part in ${USB_DEVICE}*; do
-    umount "$part" 2>/dev/null || true
+    umount "$part" >/dev/null 2>&1 || true
+    umount -l "$part" >/dev/null 2>&1 || true
 done
+
+# Kill any processes using the device (suppress output)
+fuser -k "${USB_DEVICE}" >/dev/null 2>&1 || true
+fuser -k "${USB_DEVICE}1" >/dev/null 2>&1 || true
+fuser -k "${USB_DEVICE}2" >/dev/null 2>&1 || true
+sleep 2
+
+# Check if device is still busy
+if lsof "${USB_DEVICE}" >/dev/null 2>&1; then
+    log_error "Device $USB_DEVICE is still in use!"
+    log_error "Processes using device:"
+    lsof "${USB_DEVICE}"* 2>/dev/null | head -5
+    log_error ""
+    log_error "Please unplug and replug the USB drive, then try again."
+    exit 1
+fi
+
+log_timed $STEP_START "Partitions unmounted"
 
 # =============================================================================
 # Create partition table
 # =============================================================================
 
+STEP_START=$(date +%s)
 log_info "Creating GPT partition table..."
 
 # Wipe existing partition table
-wipefs -a "$USB_DEVICE" >/dev/null 2>&1 || true
+log_info "  Wiping existing partition table..."
+if ! wipefs -af "$USB_DEVICE" 2>&1; then
+    log_warn "wipefs failed, trying dd..."
+    dd if=/dev/zero of="$USB_DEVICE" bs=1M count=10 status=none 2>/dev/null || true
+fi
+sync
+sleep 1
 
 # Create GPT partition table with two partitions
-parted -s "$USB_DEVICE" mklabel gpt
+log_info "  Creating GPT label..."
 
-# Partition 1: EFI + Live system (8GB)
-parted -s "$USB_DEVICE" mkpart primary fat32 1MiB "$LIVE_PARTITION_SIZE"
-parted -s "$USB_DEVICE" set 1 boot on
-parted -s "$USB_DEVICE" set 1 esp on
+# Use timeout to prevent hanging
+if ! timeout 30 parted -s "$USB_DEVICE" mklabel gpt 2>&1; then
+    log_error "Failed to create GPT partition table (timeout or error)"
+    log_error ""
+    log_error "The device may be stuck. Try:"
+    log_error "  1. Unplug and replug the USB drive"
+    log_error "  2. Run: sudo kill -9 \$(pgrep -f 'parted.*$USB_DEVICE')"
+    log_error "  3. Try again: make usb-hybrid"
+    exit 1
+fi
 
-# Partition 2: Data (rest of disk)
-parted -s "$USB_DEVICE" mkpart primary ext4 "$LIVE_PARTITION_SIZE" 100%
+log_info "  Creating partition 1 (Live system, ${LIVE_PARTITION_SIZE})..."
+parted -s "$USB_DEVICE" mkpart primary fat32 1MiB "$LIVE_PARTITION_SIZE" >/dev/null 2>&1
+parted -s "$USB_DEVICE" set 1 boot on >/dev/null 2>&1
+parted -s "$USB_DEVICE" set 1 esp on >/dev/null 2>&1
+
+log_info "  Creating partition 2 (Data, remaining space)..."
+parted -s "$USB_DEVICE" mkpart primary ext4 "$LIVE_PARTITION_SIZE" 100% >/dev/null 2>&1
 
 # Wait for kernel to recognize partitions
-sleep 2
-partprobe "$USB_DEVICE"
-sleep 2
+log_info "  Syncing and waiting for kernel..."
+sync
+partprobe "$USB_DEVICE" >/dev/null 2>&1 || true
+sleep 3
 
 # Determine partition names (handles both /dev/sdX1 and /dev/nvme0n1p1 styles)
 if [[ "$USB_DEVICE" == *"nvme"* ]] || [[ "$USB_DEVICE" == *"mmcblk"* ]]; then
@@ -523,19 +704,20 @@ else
     PART2="${USB_DEVICE}2"
 fi
 
-log_success "Partitions created: $PART1, $PART2"
+log_timed $STEP_START "Partitions created: $PART1, $PART2"
 
 # =============================================================================
 # Format partitions
 # =============================================================================
 
+STEP_START=$(date +%s)
 log_info "Formatting partition 1 (FAT32 for EFI)..."
-mkfs.vfat -F 32 -n "$LIVE_LABEL" "$PART1"
+mkfs.vfat -F 32 -n "$LIVE_LABEL" "$PART1" >/dev/null 2>&1
 
 log_info "Formatting partition 2 (ext4 for data)..."
-mkfs.ext4 -L "$DATA_LABEL" -F "$PART2"
+mkfs.ext4 -L "$DATA_LABEL" -F "$PART2" >/dev/null 2>&1
 
-log_success "Partitions formatted"
+log_timed $STEP_START "Partitions formatted"
 
 # =============================================================================
 # Mount partitions
@@ -543,14 +725,6 @@ log_success "Partitions formatted"
 
 MOUNT_LIVE=$(mktemp -d)
 MOUNT_DATA=$(mktemp -d)
-
-cleanup() {
-    umount "$MOUNT_LIVE" 2>/dev/null || true
-    umount "$MOUNT_DATA" 2>/dev/null || true
-    rmdir "$MOUNT_LIVE" 2>/dev/null || true
-    rmdir "$MOUNT_DATA" 2>/dev/null || true
-}
-trap cleanup EXIT
 
 mount "$PART1" "$MOUNT_LIVE"
 mount "$PART2" "$MOUNT_DATA"
@@ -720,6 +894,7 @@ log_success "Desktop autostart created"
 # Copy project data
 # =============================================================================
 
+STEP_START=$(date +%s)
 log_info "Copying project data to partition 2..."
 
 # Create directory structure
@@ -782,7 +957,17 @@ if [ -d "$PROJECT_ROOT/streamware" ] && [ -f "$PROJECT_ROOT/pyproject.toml" ]; t
     wait $RSYNC_PID
     echo ""
     
-    log_success "Streamware project copied (development mode)"
+    log_timed $STEP_START "Streamware project copied (development mode)"
+    
+    # Copy .env file if exists (contains camera and scanner configuration)
+    if [ -f "$PROJECT_ROOT/.env" ]; then
+        log_info "Copying .env configuration..."
+        mkdir -p "$MOUNT_DATA/config"
+        cp "$PROJECT_ROOT/.env" "$MOUNT_DATA/config/.env"
+        # Also copy to streamware directory for development mode
+        cp "$PROJECT_ROOT/.env" "$MOUNT_DATA/streamware/.env"
+        log_success ".env configuration copied"
+    fi
     
     # Create activation script
     cat > "$MOUNT_DATA/streamware/activate-dev.sh" << 'DEVSCRIPT'
@@ -831,6 +1016,122 @@ fi
 # Copy cached models
 if [ -d "$CACHE_DIR/models" ] && [ "$(ls -A $CACHE_DIR/models/*.gguf 2>/dev/null)" ]; then
     copy_with_progress "$CACHE_DIR/models/" "$MOUNT_DATA/models/gguf/" "Cached models"
+fi
+
+# =============================================================================
+# Download and copy Chromium AppImage for kiosk mode
+# =============================================================================
+
+CHROMIUM_APPIMAGE="$CACHE_DIR/chromium.AppImage"
+CHROMIUM_URL="https://github.com/nicotine-plus/nicotine-plus/releases/download/3.3.0/nicotine-plus.AppImage"
+# Use ungoogled-chromium AppImage
+CHROMIUM_URL="https://github.com/nicotine-plus/nicotine-plus/releases/latest/download/nicotine-plus.AppImage"
+
+# Better: use a simple browser or just rely on Firefox which is in Fedora
+log_info "Setting up browser for kiosk mode..."
+mkdir -p "$MOUNT_DATA/bin"
+
+# Create a wrapper script that finds and uses available browser
+cat > "$MOUNT_DATA/bin/kiosk-browser.sh" << 'BROWSER_SCRIPT'
+#!/bin/bash
+# Kiosk browser wrapper - finds and launches available browser in fullscreen
+
+URL="${1:-http://localhost:8080}"
+
+# Find available browser (prefer Chromium/Chrome for better kiosk support)
+if command -v chromium-browser &> /dev/null; then
+    exec chromium-browser --start-fullscreen --disable-infobars --noerrdialogs \
+        --disable-session-crashed-bubble --disable-restore-session-state "$URL"
+elif command -v chromium &> /dev/null; then
+    exec chromium --start-fullscreen --disable-infobars --noerrdialogs \
+        --disable-session-crashed-bubble --disable-restore-session-state "$URL"
+elif command -v google-chrome &> /dev/null; then
+    exec google-chrome --start-fullscreen --disable-infobars --noerrdialogs \
+        --disable-session-crashed-bubble --disable-restore-session-state "$URL"
+elif command -v firefox &> /dev/null; then
+    # Firefox kiosk mode (F11 to exit fullscreen)
+    exec firefox --kiosk "$URL"
+else
+    echo "ERROR: No browser found!"
+    echo "Install firefox or chromium:"
+    echo "  sudo dnf install firefox    # Fedora"
+    echo "  sudo apt install firefox    # Ubuntu/Debian"
+    exit 1
+fi
+BROWSER_SCRIPT
+chmod +x "$MOUNT_DATA/bin/kiosk-browser.sh"
+log_success "Kiosk browser wrapper created"
+
+# =============================================================================
+# Pre-download Python dependencies for offline installation
+# =============================================================================
+
+log_info "Preparing Python dependencies for offline mode..."
+mkdir -p "$MOUNT_DATA/pip-cache"
+
+# Download wheel files for streamware and dependencies
+if command -v pip3 &> /dev/null; then
+    run_with_timeout 300 "Downloading pip packages" \
+        pip3 download -d "$MOUNT_DATA/pip-cache" \
+            requests aiohttp pydantic rich PyYAML click jinja2 jsonpath-ng \
+            flask opencv-python-headless pillow numpy av \
+        || log_warn "Some packages may not have been downloaded"
+    
+    # Download streamware itself if available on PyPI
+    pip3 download -d "$MOUNT_DATA/pip-cache" streamware 2>/dev/null || true
+    
+    log_success "Pip packages cached for offline installation"
+else
+    log_warn "pip3 not available - skipping package cache"
+fi
+
+# =============================================================================
+# Pre-download Ollama binary for offline installation
+# =============================================================================
+
+OLLAMA_BINARY="$CACHE_DIR/ollama-linux-amd64"
+if [ ! -f "$OLLAMA_BINARY" ]; then
+    mkdir -p "$CACHE_DIR"
+    run_with_timeout 120 "Downloading Ollama binary (~150MB)" \
+        curl -fsSL -o "$OLLAMA_BINARY" \
+            "https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64" \
+        || log_warn "Failed to download Ollama binary"
+fi
+
+if [ -f "$OLLAMA_BINARY" ]; then
+    log_info "Copying Ollama binary..."
+    cp "$OLLAMA_BINARY" "$MOUNT_DATA/bin/ollama"
+    chmod +x "$MOUNT_DATA/bin/ollama"
+    log_success "Ollama binary copied"
+fi
+
+# =============================================================================
+# Save Open-WebUI container image for offline use
+# =============================================================================
+
+OPENWEBUI_IMAGE="$CACHE_DIR/images/open-webui.tar"
+mkdir -p "$CACHE_DIR/images"
+
+if [ ! -f "$OPENWEBUI_IMAGE" ]; then
+    if command -v podman &> /dev/null; then
+        run_with_timeout 600 "Pulling Open-WebUI image (~1.5GB)" \
+            podman pull ghcr.io/open-webui/open-webui:latest && \
+        run_with_spinner "Saving Open-WebUI image" \
+            podman save -o "$OPENWEBUI_IMAGE" ghcr.io/open-webui/open-webui:latest || \
+        log_warn "Failed to save Open-WebUI image"
+    elif command -v docker &> /dev/null; then
+        run_with_timeout 600 "Pulling Open-WebUI image (~1.5GB)" \
+            docker pull ghcr.io/open-webui/open-webui:latest && \
+        run_with_spinner "Saving Open-WebUI image" \
+            docker save -o "$OPENWEBUI_IMAGE" ghcr.io/open-webui/open-webui:latest || \
+        log_warn "Failed to save Open-WebUI image"
+    fi
+fi
+
+if [ -f "$OPENWEBUI_IMAGE" ]; then
+    log_info "Copying Open-WebUI container image..."
+    cp "$OPENWEBUI_IMAGE" "$MOUNT_DATA/images/open-webui.tar"
+    log_success "Open-WebUI image copied"
 fi
 
 # =============================================================================
@@ -1056,10 +1357,10 @@ if [ -d "$DATA_PART/images" ]; then
 fi
 
 # =============================================================================
-# Install Python dependencies
+# Install Python dependencies (OFFLINE from cached packages)
 # =============================================================================
 
-echo "Setting up Python environment..."
+echo "Setting up Python environment (offline mode)..."
 
 # Install pip if missing
 if ! command -v pip3 &> /dev/null; then
@@ -1067,33 +1368,48 @@ if ! command -v pip3 &> /dev/null; then
     python3 -m ensurepip --upgrade 2>/dev/null || true
 fi
 
-# Install streamware from local project if available
+# Install from offline cache first
+if [ -d "$DATA_PART/pip-cache" ] && [ "$(ls -A $DATA_PART/pip-cache/*.whl 2>/dev/null)" ]; then
+    echo "Installing packages from offline cache..."
+    pip3 install --no-index --find-links="$DATA_PART/pip-cache" \
+        requests aiohttp pydantic rich PyYAML click jinja2 jsonpath-ng \
+        flask pillow numpy 2>/dev/null || true
+    
+    # Try opencv-python-headless from cache
+    pip3 install --no-index --find-links="$DATA_PART/pip-cache" \
+        opencv-python-headless 2>/dev/null || true
+fi
+
+# Install streamware from local project
 if [ -d "$DATA_PART/streamware" ] && [ -f "$DATA_PART/streamware/pyproject.toml" ]; then
     echo "Installing streamware from local project..."
     cd "$DATA_PART/streamware"
-    pip3 install -e . 2>/dev/null || pip3 install . 2>/dev/null || true
+    pip3 install --no-index --find-links="$DATA_PART/pip-cache" -e . 2>/dev/null || \
+    pip3 install -e . 2>/dev/null || \
+    pip3 install . 2>/dev/null || true
     cd -
-elif ! command -v sq &> /dev/null; then
-    echo "Installing streamware from PyPI..."
-    pip3 install streamware 2>/dev/null || true
 fi
 
-# Install additional dependencies for accounting
-pip3 install flask opencv-python pillow 2>/dev/null || true
+echo "Python environment ready"
 
 # =============================================================================
-# Install and start Ollama
+# Install and start Ollama (OFFLINE from pre-downloaded binary)
 # =============================================================================
 
-echo "Setting up Ollama..."
+echo "Setting up Ollama (offline mode)..."
 
-# Install Ollama if not present
+# Install Ollama from offline binary if not present
 if ! command -v ollama &> /dev/null; then
-    echo "Installing Ollama..."
-    curl -fsSL https://ollama.com/install.sh | sh 2>/dev/null || {
-        # Fallback: try snap or flatpak
-        snap install ollama 2>/dev/null || flatpak install -y flathub com.ollama.Ollama 2>/dev/null || true
-    }
+    if [ -x "$DATA_PART/bin/ollama" ]; then
+        echo "Installing Ollama from offline binary..."
+        sudo cp "$DATA_PART/bin/ollama" /usr/local/bin/ollama
+        sudo chmod +x /usr/local/bin/ollama
+        echo "Ollama installed from USB"
+    else
+        echo "WARNING: Ollama binary not found in offline cache"
+        echo "Trying online installation..."
+        curl -fsSL https://ollama.com/install.sh | sh 2>/dev/null || true
+    fi
 fi
 
 # Start Ollama service
@@ -1106,10 +1422,12 @@ if command -v ollama &> /dev/null; then
     OLLAMA_PID=$!
     sleep 5
     
-    # Pull default model if not present
-    if ! ollama list 2>/dev/null | grep -q "llava"; then
-        echo "Pulling llava model (this may take a while)..."
-        ollama pull llava:7b &
+    # Models should already be linked from USB - check if available
+    if ollama list 2>/dev/null | grep -q "llava"; then
+        echo "Model llava already available"
+    else
+        echo "NOTE: Model llava not found. Models should be pre-copied to USB."
+        echo "If online, run: ollama pull llava:7b"
     fi
 fi
 
@@ -1117,7 +1435,7 @@ fi
 # Start Open-WebUI container
 # =============================================================================
 
-echo "Setting up Open-WebUI..."
+echo "Setting up Open-WebUI (offline mode)..."
 
 # Check if podman or docker available
 CONTAINER_CMD=""
@@ -1128,11 +1446,19 @@ elif command -v docker &> /dev/null; then
 fi
 
 if [ -n "$CONTAINER_CMD" ]; then
+    # Load image from offline cache if not already loaded
+    if ! $CONTAINER_CMD images | grep -q "open-webui"; then
+        if [ -f "$DATA_PART/images/open-webui.tar" ]; then
+            echo "Loading Open-WebUI from offline cache..."
+            $CONTAINER_CMD load -i "$DATA_PART/images/open-webui.tar" 2>/dev/null || true
+        fi
+    fi
+    
     # Stop existing container
     $CONTAINER_CMD stop open-webui 2>/dev/null || true
     $CONTAINER_CMD rm open-webui 2>/dev/null || true
     
-    # Start Open-WebUI
+    # Start Open-WebUI (from local image)
     echo "Starting Open-WebUI container..."
     $CONTAINER_CMD run -d --name open-webui \
         -p 3000:8080 \
@@ -1144,8 +1470,11 @@ if [ -n "$CONTAINER_CMD" ]; then
                 -p 3000:8080 \
                 --network=host \
                 -e OLLAMA_BASE_URL=http://localhost:11434 \
-                ghcr.io/open-webui/open-webui:latest 2>/dev/null || true
+                ghcr.io/open-webui/open-webui:latest 2>/dev/null || \
+            echo "WARNING: Open-WebUI container not available"
         }
+else
+    echo "NOTE: No container runtime (podman/docker) - skipping Open-WebUI"
 fi
 
 # =============================================================================
@@ -1154,14 +1483,24 @@ fi
 
 echo "Starting streamware services..."
 
-# Load configuration
+# Load .env configuration (contains all settings including camera URL)
+if [ -f "$DATA_PART/config/.env" ]; then
+    echo "Loading configuration from .env..."
+    set -a  # Export all variables
+    source "$DATA_PART/config/.env"
+    set +a
+fi
+
+# Load additional overrides from accounting.conf
 if [ -f "$DATA_PART/config/accounting.conf" ]; then
     source "$DATA_PART/config/accounting.conf"
 fi
 
-PROJECT="${PROJECT:-faktury}"
-SOURCE="${SOURCE:-camera}"
-PORT="${PORT:-8080}"
+# Set defaults for kiosk mode
+PROJECT="${PROJECT:-faktury_2024}"
+PORT="${SQ_WEB_PORT:-8080}"
+KIOSK_ENABLED="${KIOSK_ENABLED:-true}"
+KIOSK_URL="${KIOSK_URL:-http://localhost:$PORT}"
 
 # Wait for Ollama to be ready
 echo "Waiting for Ollama to be ready..."
@@ -1175,18 +1514,52 @@ done
 
 # Start streamware accounting web interface
 if command -v sq &> /dev/null; then
-    echo "Starting: sq accounting web --project $PROJECT --source $SOURCE --port $PORT"
-    sq accounting web --project "$PROJECT" --source "$SOURCE" --port "$PORT" &
+    echo "Starting: sq accounting web --project $PROJECT --port $PORT"
+    sq accounting web --project "$PROJECT" --port "$PORT" &
     SQ_PID=$!
     echo "Streamware accounting started (PID: $SQ_PID)"
+    
+    # Wait for web interface to be ready
+    echo "Waiting for accounting web interface..."
+    for i in {1..20}; do
+        if curl -s "http://localhost:$PORT" > /dev/null 2>&1; then
+            echo "Accounting web ready!"
+            break
+        fi
+        sleep 1
+    done
 else
     echo "WARNING: sq command not found. Install with: pip install streamware"
+fi
+
+# Start kiosk browser if enabled
+if [ "$KIOSK_ENABLED" = "true" ]; then
+    echo "Starting kiosk browser at $KIOSK_URL ..."
+    
+    # Set display for GUI
+    export DISPLAY=${DISPLAY:-:0}
+    
+    # Use kiosk browser wrapper from data partition
+    if [ -x "$DATA_PART/bin/kiosk-browser.sh" ]; then
+        "$DATA_PART/bin/kiosk-browser.sh" "$KIOSK_URL" &
+        echo "Kiosk browser started (via wrapper)"
+    else
+        # Fallback: try Firefox directly (included in Fedora LXQt)
+        if command -v firefox &> /dev/null; then
+            firefox --kiosk "$KIOSK_URL" &
+            echo "Kiosk browser started (Firefox)"
+        else
+            echo "WARNING: No browser found. Install firefox:"
+            echo "  sudo dnf install firefox"
+        fi
+    fi
 fi
 
 echo ""
 echo "=========================================="
 echo "LLM Station started!"
-echo "Open: http://localhost:3000"
+echo "  Accounting: http://localhost:$PORT"
+echo "  Open-WebUI: http://localhost:3000"
 echo "=========================================="
 AUTOSTART
 
@@ -1269,29 +1642,38 @@ echo " done"
 log_success "Autostart service created"
 
 # =============================================================================
-# Calculate sizes
+# Calculate sizes and finalize
 # =============================================================================
 
 LIVE_SIZE=$(du -sh "$MOUNT_LIVE" | cut -f1)
 DATA_SIZE=$(du -sh "$MOUNT_DATA" | cut -f1)
 
 # Sync and unmount
-log_info "Syncing data..."
+STEP_START=$(date +%s)
+log_info "Syncing data to USB..."
 sync &
 SYNC_PID=$!
 SPIN='|/-\'
 i=0
 while kill -0 "$SYNC_PID" 2>/dev/null; do
+    elapsed=$(($(date +%s) - STEP_START))
     i=$(((i + 1) % 4))
-    printf "\r${BLUE}[INFO]${NC} Syncing data... %s" "${SPIN:$i:1}"
+    printf "\r${BLUE}[INFO]${NC} Syncing data... %s (%ds)" "${SPIN:$i:1}" "$elapsed"
     sleep 0.2
 done
 wait "$SYNC_PID"
 echo ""
+log_timed $STEP_START "Data synced to USB"
+
+# Calculate total time
+TOTAL_TIME=$(($(date +%s) - SCRIPT_START_TIME))
+TOTAL_MINS=$((TOTAL_TIME / 60))
+TOTAL_SECS=$((TOTAL_TIME % 60))
 
 echo ""
 echo "=========================================="
 echo "Hybrid USB creation complete!"
+echo "Total time: ${TOTAL_MINS}m ${TOTAL_SECS}s"
 echo "=========================================="
 
 # Ask to verify

@@ -86,6 +86,7 @@ Detailed documentation is available in the [docs/](docs/) directory:
 | [📚 Documentation Index](docs/README.md) | Main documentation hub |
 | [🎛️ Voice Shell Dashboard](docs/v2/VOICE_SHELL_DASHBOARD.md) | Interactive voice-controlled GUI (NEW!) |
 | [⚙️ Configuration](docs/CONFIGURATION.md) | Complete configuration reference |
+| [🧾 Accounting Scanner](docs/ACCOUNTING.md) | Document scanning (web UI + RTSP, one-shot scan) |
 | [🎬 Real-time Streaming](docs/REALTIME_STREAMING.md) | Browser viewer, WebSocket streaming |
 | [⚡ Performance](docs/PERFORMANCE.md) | Optimization, timing logs, benchmarks |
 | [🤖 LLM Integration](docs/LLM_INTEGRATION.md) | Vision models, async inference |

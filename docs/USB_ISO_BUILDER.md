@@ -154,7 +154,7 @@ make test-deep
 |---------|-----|-------------|
 | Open-WebUI | http://localhost:3000 | Chat interface for LLMs |
 | Ollama API | http://localhost:11434 | LLM inference API |
-| Accounting | http://localhost:8080 | `sq accounting web` |
+| Accounting | http://localhost:8080 | `sq accounting web` (see [docs/ACCOUNTING.md](ACCOUNTING.md)) |
 
 ### Service Management
 
