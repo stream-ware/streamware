@@ -73,6 +73,21 @@ class WebMixin:
             # Force immediate capture
             image_bytes = self.capture()
             if image_bytes:
+                is_dup, dup_meta = self._is_duplicate(image_bytes, "manual_capture")
+                if is_dup:
+                    sim = float((dup_meta or {}).get("similarity", 0.0))
+                    matched = (dup_meta or {}).get("matched")
+                    matched_id = None
+                    if isinstance(matched, dict):
+                        matched_id = matched.get("archived_id")
+                    await self.broadcast({
+                        "type": "duplicate",
+                        "message": f"🔄 Duplikat ({sim:.0%}) - pominięto skan",
+                        "similarity": sim,
+                        "reason": (dup_meta or {}).get("reason"),
+                        "matched_id": matched_id,
+                    })
+                    return
                 analysis = self.analyze_frame(image_bytes)
                 if analysis["detected"]:
                     await self.archive_document(image_bytes, analysis)

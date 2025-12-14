@@ -93,6 +93,23 @@ class ArchiveMixin:
             # Process document
             doc_info = self.scanner.process_document(file_path, auto_crop=True)
 
+            try:
+                if hasattr(self, "recent_documents") and isinstance(self.recent_documents, list) and image_bytes:
+                    new_hash = self._compute_image_hash(image_bytes)
+                    for d in reversed(self.recent_documents[-10:]):
+                        if not isinstance(d, dict):
+                            continue
+                        sim = 0.0
+                        try:
+                            sim = self._hash_similarity(new_hash, d.get("hash", ""))
+                        except Exception:
+                            sim = 0.0
+                        if sim >= 0.97 or (new_hash and new_hash == d.get("hash")):
+                            d["archived_id"] = doc_info.id
+                            break
+            except Exception:
+                pass
+
             # Notify clients
             await self.broadcast({
                 "type": "document",

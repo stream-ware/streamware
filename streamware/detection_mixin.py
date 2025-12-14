@@ -64,6 +64,7 @@ class DetectionMixin:
             t_r = time.time()
             receipt_result = self.document_detector.detect_receipt_features(frame)
             result["timing"]["receipt"] = (time.time() - t_r) * 1000
+            result["timing"]["receipt_detect"] = result["timing"]["receipt"]
             
             if receipt_result["is_receipt"] and receipt_result["confidence"] > 0.55:
                 result["detected"] = True
@@ -83,6 +84,7 @@ class DetectionMixin:
             t_i = time.time()
             invoice_result = self.document_detector.detect_invoice_features(frame)
             result["timing"]["invoice"] = (time.time() - t_i) * 1000
+            result["timing"]["invoice_detect"] = result["timing"]["invoice"]
             
             if invoice_result["is_invoice"] and invoice_result["confidence"] > 0.55:
                 result["detected"] = True
@@ -109,6 +111,7 @@ class DetectionMixin:
         
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         result["timing"]["opencv"] = (time.time() - t1) * 1000
+        result["timing"]["opencv_edge"] = result["timing"]["opencv"]
         
         best_score = 0
         best_result = None
@@ -144,14 +147,21 @@ class DetectionMixin:
                 best_result = {"bbox": (0, 0, w, h), "area_ratio": 1.0}
         
         if best_score > 0.3 and best_result:
-            result["detected"] = True
-            result["confidence"] = best_score
-            result["bbox"] = best_result["bbox"]
-            result["area_ratio"] = best_result["area_ratio"]
-            result["method"] = "opencv"
-            result["document_type"] = "dokument"
-            result["timing"]["total"] = (time.time() - t_start) * 1000
-            return result
+            t_v = time.time()
+            validation = self._validate_opencv_candidate(frame, best_result["bbox"])
+            result["timing"]["opencv_validate"] = (time.time() - t_v) * 1000
+            result["features"].extend(validation.get("features", []))
+
+            if validation.get("valid"):
+                result["detected"] = True
+                validation_score = float(validation.get("score", 0.0))
+                result["confidence"] = min(1.0, best_score * 0.7 + validation_score * 0.3)
+                result["bbox"] = best_result["bbox"]
+                result["area_ratio"] = best_result["area_ratio"]
+                result["method"] = "opencv"
+                result["document_type"] = "dokument"
+                result["timing"]["total"] = (time.time() - t_start) * 1000
+                return result
         
         # YOLO detection (slower but accurate)
         if self.use_yolo:
@@ -196,3 +206,116 @@ class DetectionMixin:
         
         result["timing"]["total"] = (time.time() - t_start) * 1000
         return result
+
+    def _validate_opencv_candidate(self, frame, bbox) -> Dict[str, Any]:
+        if frame is None or not HAS_CV2 or bbox is None:
+            return {"valid": False, "score": 0.0, "features": ["val:skip"]}
+
+        h, w = frame.shape[:2]
+        try:
+            x, y, bw, bh = bbox
+            x = max(0, min(int(x), w - 1))
+            y = max(0, min(int(y), h - 1))
+            bw = max(1, min(int(bw), w - x))
+            bh = max(1, min(int(bh), h - y))
+        except Exception:
+            return {"valid": False, "score": 0.0, "features": ["val:bbox_err"]}
+
+        roi = frame[y:y + bh, x:x + bw]
+        if roi.size == 0:
+            return {"valid": False, "score": 0.0, "features": ["val:empty"]}
+
+        margin = int(min(bw, bh) * 0.06)
+        if 2 * margin < bw and 2 * margin < bh and margin > 0:
+            roi = roi[margin:bh - margin, margin:bw - margin]
+            if roi.size == 0:
+                return {"valid": False, "score": 0.0, "features": ["val:inner_empty"]}
+
+        max_dim = 520
+        rh, rw = roi.shape[:2]
+        scale = float(max_dim) / float(max(rh, rw))
+        if scale < 1.0:
+            roi = cv2.resize(roi, (max(1, int(rw * scale)), max(1, int(rh * scale))), interpolation=cv2.INTER_AREA)
+
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        edges = cv2.Canny(gray, 60, 180)
+        edge_density = float(np.sum(edges > 0)) / float(edges.size)
+
+        b = max(2, int(min(edges.shape[:2]) * 0.07))
+        border_mask = np.zeros(edges.shape[:2], dtype=np.uint8)
+        border_mask[:b, :] = 1
+        border_mask[-b:, :] = 1
+        border_mask[:, :b] = 1
+        border_mask[:, -b:] = 1
+
+        border_edges = int(np.sum((edges > 0) & (border_mask == 1)))
+        inner_edges = int(np.sum((edges > 0) & (border_mask == 0)))
+        border_to_inner = float(border_edges) / float(inner_edges + 1)
+
+        binary = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 31, 5
+        )
+        inv = cv2.bitwise_not(binary)
+        inv = cv2.morphologyEx(inv, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8), iterations=1)
+
+        text_pixel_ratio = float(np.sum(inv > 0)) / float(inv.size)
+
+        try:
+            n_labels, _, stats, _ = cv2.connectedComponentsWithStats(inv, connectivity=8)
+            small_cc = 0
+            for i in range(1, int(n_labels)):
+                area = int(stats[i, cv2.CC_STAT_AREA])
+                if 12 <= area <= 900:
+                    small_cc += 1
+            small_cc_density = float(small_cc) / (float(inv.size) / 10000.0 + 1e-6)
+        except Exception:
+            small_cc = 0
+            small_cc_density = 0.0
+
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        mean_s = float(np.mean(hsv[:, :, 1]))
+        mean_v = float(np.mean(hsv[:, :, 2]))
+
+        score = 0.0
+
+        if edge_density >= 0.012:
+            score += 0.22
+        elif edge_density >= 0.007:
+            score += 0.12
+
+        if text_pixel_ratio >= 0.018:
+            score += 0.33
+        elif text_pixel_ratio >= 0.010:
+            score += 0.20
+        elif text_pixel_ratio >= 0.006:
+            score += 0.12
+
+        if small_cc_density >= 6.0:
+            score += 0.25
+        elif small_cc_density >= 3.0:
+            score += 0.15
+
+        if mean_s <= 95:
+            score += 0.10
+        if mean_v >= 105:
+            score += 0.10
+
+        if border_to_inner >= 6.0 and edge_density < 0.012:
+            score -= 0.22
+        if mean_s >= 150:
+            score -= 0.20
+
+        score = max(0.0, min(1.0, score))
+        valid = score >= 0.45
+
+        features = [
+            f"val:{'ok' if valid else 'reject'}",
+            f"val_s:{mean_s:.0f}",
+            f"val_v:{mean_v:.0f}",
+            f"val_ed:{edge_density:.3f}",
+            f"val_txt:{text_pixel_ratio:.3f}",
+            f"val_cc:{small_cc}",
+            f"val_bi:{border_to_inner:.1f}",
+        ]
+
+        return {"valid": valid, "score": score, "features": features}

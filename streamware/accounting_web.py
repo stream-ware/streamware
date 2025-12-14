@@ -134,6 +134,7 @@ class AccountingWebService(FrameCaptureMixin, ScannerDiagnosticsMixin, Detection
         self.last_detection_result: Optional[Dict] = None  # Store detection result for confirmation
         self.pending_documents: List[Dict] = []  # Documents waiting for user confirmation
         self.detection_cooldown = 0
+        self.queued_broadcasts: List[Dict[str, Any]] = []
         
         # Duplicate detection - keep best quality
         self.recent_documents: List[Dict] = []  # Recent docs for duplicate check
@@ -215,6 +216,10 @@ class AccountingWebService(FrameCaptureMixin, ScannerDiagnosticsMixin, Detection
                             "method": detection.get("method"),
                             "pending_count": len(self.pending_documents),
                         })
+
+                        while self.queued_broadcasts:
+                            payload = self.queued_broadcasts.pop(0)
+                            await self.broadcast(payload)
                         
                         # Send new pending documents to browser
                         while self.pending_documents:

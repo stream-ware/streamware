@@ -113,23 +113,53 @@ class FrameCaptureMixin:
                                         
                                         if detection["confidence"] >= self.auto_save_threshold:
                                             # High confidence - check for duplicates first
-                                            is_dup, better_idx = self._is_duplicate(image_data, doc_type)
+                                            is_dup, dup_meta = self._is_duplicate(image_data, doc_type)
                                             
-                                            if is_dup and better_idx is not None:
-                                                # Replace with better quality
-                                                self.recent_documents[better_idx]["image_bytes"] = image_data
-                                                self.recent_documents[better_idx]["quality"] = self._compute_image_quality(image_data)
-                                                self.last_document_frame = image_data
-                                                print(f"   📸 Zamieniono na lepszą jakość: {doc_type} (pewność: {detection['confidence']:.0%})")
-                                            elif not is_dup:
+                                            if is_dup:
+                                                sim = float((dup_meta or {}).get('similarity', 0.0))
+                                                replace = bool((dup_meta or {}).get('replace'))
+                                                matched = (dup_meta or {}).get('matched')
+                                                matched_archived_id = None
+                                                if isinstance(matched, dict):
+                                                    matched_archived_id = matched.get('archived_id')
+
+                                                if replace and isinstance(matched, dict):
+                                                    idx = None
+                                                    for i, d in enumerate(self.recent_documents):
+                                                        if d is matched:
+                                                            idx = i
+                                                            break
+                                                    if idx is not None:
+                                                        self.recent_documents[idx]["image_bytes"] = image_data
+                                                        self.recent_documents[idx]["quality"] = self._compute_image_quality(image_data)
+                                                        self.recent_documents[idx]["hash"] = self._compute_image_hash(image_data)
+                                                    self.last_document_frame = image_data
+                                                    self._enqueue_duplicate_notification({
+                                                        "type": "duplicate",
+                                                        "message": f"🔄 Duplikat ({sim:.0%}) - zamieniono na lepszą jakość",
+                                                        "similarity": sim,
+                                                        "reason": (dup_meta or {}).get('reason'),
+                                                        "doc_type": doc_type,
+                                                        "matched_id": matched_archived_id,
+                                                    })
+                                                    print(f"   📸 Zamieniono na lepszą jakość: {doc_type} (pewność: {detection['confidence']:.0%})")
+                                                else:
+                                                    self._enqueue_duplicate_notification({
+                                                        "type": "duplicate",
+                                                        "message": f"🔄 Duplikat ({sim:.0%}) - pominięto skan",
+                                                        "similarity": sim,
+                                                        "reason": (dup_meta or {}).get('reason'),
+                                                        "doc_type": doc_type,
+                                                        "matched_id": matched_archived_id,
+                                                    })
+                                                    print(f"   🔄 Duplikat pominięty: {doc_type}")
+                                            else:
                                                 # New document - auto save
                                                 self.last_document_frame = image_data
                                                 print(f"   📸 Auto-zapis: {doc_type} (pewność: {detection['confidence']:.0%}, metoda: {detection.get('method')}, {total_ms:.0f}ms)")
-                                            else:
-                                                print(f"   🔄 Duplikat pominięty (gorsza jakość): {doc_type}")
                                         elif detection["confidence"] >= self.confirm_threshold:
                                             # Medium confidence - check duplicates
-                                            is_dup, _ = self._is_duplicate(image_data, doc_type)
+                                            is_dup, dup_meta = self._is_duplicate(image_data, doc_type)
                                             if not is_dup:
                                                 self.pending_documents.append({
                                                     "frame": image_data,
@@ -138,6 +168,21 @@ class FrameCaptureMixin:
                                                     "doc_type": doc_type,
                                                 })
                                                 print(f"   🔍 Do potwierdzenia: {doc_type} (pewność: {detection['confidence']:.0%}, {total_ms:.0f}ms)")
+                                            else:
+                                                sim = float((dup_meta or {}).get('similarity', 0.0))
+                                                matched = (dup_meta or {}).get('matched')
+                                                matched_archived_id = None
+                                                if isinstance(matched, dict):
+                                                    matched_archived_id = matched.get('archived_id')
+                                                self._enqueue_duplicate_notification({
+                                                    "type": "duplicate",
+                                                    "message": f"🔄 Duplikat ({sim:.0%}) - pominięto skan",
+                                                    "similarity": sim,
+                                                    "reason": (dup_meta or {}).get('reason'),
+                                                    "doc_type": doc_type,
+                                                    "matched_id": matched_archived_id,
+                                                })
+                                                print(f"   🔄 Duplikat pominięty: {doc_type}")
                                         else:
                                             # Low confidence - just notify
                                             print(f"   👁️ Możliwy dokument: {doc_type} (pewność: {detection['confidence']:.0%}, {total_ms:.0f}ms)")
@@ -211,16 +256,74 @@ class FrameCaptureMixin:
                                     doc_type = detection.get('document_type') or detection.get('class_name') or 'dokument'
                                     
                                     if detection["confidence"] >= self.auto_save_threshold:
-                                        self.last_document_frame = jpeg.tobytes()
-                                        print(f"   📸 Auto-zapis: {doc_type} (pewność: {detection['confidence']:.0%}, {total_ms:.0f}ms)")
+                                        image_data = jpeg.tobytes()
+                                        is_dup, dup_meta = self._is_duplicate(image_data, doc_type)
+                                        if is_dup:
+                                            sim = float((dup_meta or {}).get('similarity', 0.0))
+                                            replace = bool((dup_meta or {}).get('replace'))
+                                            matched = (dup_meta or {}).get('matched')
+                                            matched_archived_id = None
+                                            if isinstance(matched, dict):
+                                                matched_archived_id = matched.get('archived_id')
+                                            if replace and isinstance(matched, dict):
+                                                idx = None
+                                                for i, d in enumerate(self.recent_documents):
+                                                    if d is matched:
+                                                        idx = i
+                                                        break
+                                                if idx is not None:
+                                                    self.recent_documents[idx]["image_bytes"] = image_data
+                                                    self.recent_documents[idx]["quality"] = self._compute_image_quality(image_data)
+                                                    self.recent_documents[idx]["hash"] = self._compute_image_hash(image_data)
+                                                self.last_document_frame = image_data
+                                                self._enqueue_duplicate_notification({
+                                                    "type": "duplicate",
+                                                    "message": f"🔄 Duplikat ({sim:.0%}) - zamieniono na lepszą jakość",
+                                                    "similarity": sim,
+                                                    "reason": (dup_meta or {}).get('reason'),
+                                                    "doc_type": doc_type,
+                                                    "matched_id": matched_archived_id,
+                                                })
+                                                print(f"   📸 Zamieniono na lepszą jakość: {doc_type} (pewność: {detection['confidence']:.0%}, {total_ms:.0f}ms)")
+                                            else:
+                                                self._enqueue_duplicate_notification({
+                                                    "type": "duplicate",
+                                                    "message": f"🔄 Duplikat ({sim:.0%}) - pominięto skan",
+                                                    "similarity": sim,
+                                                    "reason": (dup_meta or {}).get('reason'),
+                                                    "doc_type": doc_type,
+                                                    "matched_id": matched_archived_id,
+                                                })
+                                                print(f"   🔄 Duplikat pominięty: {doc_type}")
+                                        else:
+                                            self.last_document_frame = image_data
+                                            print(f"   📸 Auto-zapis: {doc_type} (pewność: {detection['confidence']:.0%}, {total_ms:.0f}ms)")
                                     elif detection["confidence"] >= self.confirm_threshold:
-                                        self.pending_documents.append({
-                                            "frame": jpeg.tobytes(),
-                                            "detection": detection,
-                                            "timestamp": time.time(),
-                                            "doc_type": doc_type,
-                                        })
-                                        print(f"   🔍 Do potwierdzenia: {doc_type} (pewność: {detection['confidence']:.0%}, {total_ms:.0f}ms)")
+                                        image_data = jpeg.tobytes()
+                                        is_dup, dup_meta = self._is_duplicate(image_data, doc_type)
+                                        if not is_dup:
+                                            self.pending_documents.append({
+                                                "frame": image_data,
+                                                "detection": detection,
+                                                "timestamp": time.time(),
+                                                "doc_type": doc_type,
+                                            })
+                                            print(f"   🔍 Do potwierdzenia: {doc_type} (pewność: {detection['confidence']:.0%}, {total_ms:.0f}ms)")
+                                        else:
+                                            sim = float((dup_meta or {}).get('similarity', 0.0))
+                                            matched = (dup_meta or {}).get('matched')
+                                            matched_archived_id = None
+                                            if isinstance(matched, dict):
+                                                matched_archived_id = matched.get('archived_id')
+                                            self._enqueue_duplicate_notification({
+                                                "type": "duplicate",
+                                                "message": f"🔄 Duplikat ({sim:.0%}) - pominięto skan",
+                                                "similarity": sim,
+                                                "reason": (dup_meta or {}).get('reason'),
+                                                "doc_type": doc_type,
+                                                "matched_id": matched_archived_id,
+                                            })
+                                            print(f"   🔄 Duplikat pominięty: {doc_type}")
                                     else:
                                         print(f"   👁️ Możliwy dokument: {doc_type} (pewność: {detection['confidence']:.0%}, {total_ms:.0f}ms)")
                                     

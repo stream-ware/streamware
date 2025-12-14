@@ -436,6 +436,26 @@ def get_scanner_javascript() -> str:
                 case 'frame':
                     updatePreview(data);
                     break;
+                case 'duplicate':
+                    {
+                        const sim = data.similarity != null ? Math.round(data.similarity * 100) : null;
+                        const msg = data.message || (sim != null ? `🔄 Duplikat (${sim}%)` : '🔄 Duplikat');
+                        log(msg, 'warning');
+
+                        // Brief overlay hint
+                        const info = document.getElementById('detection-info');
+                        if (info) {
+                            const prevText = info.textContent;
+                            const prevBg = info.style.background;
+                            info.textContent = msg;
+                            info.style.background = 'rgba(239, 68, 68, 0.85)';
+                            setTimeout(() => {
+                                info.textContent = prevText;
+                                info.style.background = prevBg;
+                            }, 1200);
+                        }
+                    }
+                    break;
                 case 'document':
                     addDocument(data.document);
                     log(`Zarchiwizowano: ${data.document.type} - ${data.document.id}`, 'success');

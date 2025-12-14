@@ -11,6 +11,10 @@
 
 set -e
 
+ if [ -z "${BASH_VERSION:-}" ]; then
+     exec /bin/bash "$0" "$@"
+ fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_DIR="$(dirname "$SCRIPT_DIR")"
 CACHE_DIR="${CACHE_DIR:-$SCRIPT_DIR/cache}"
@@ -41,8 +45,16 @@ show_progress() {
     
     # Build progress bar
     local bar=""
-    for ((i=0; i<filled; i++)); do bar+="█"; done
-    for ((i=0; i<empty; i++)); do bar+="░"; done
+    local i=0
+    while [ "$i" -lt "$filled" ]; do
+        bar="${bar}█"
+        i=$((i + 1))
+    done
+    i=0
+    while [ "$i" -lt "$empty" ]; do
+        bar="${bar}░"
+        i=$((i + 1))
+    done
     
     # Calculate ETA if start_time provided
     local eta=""
@@ -1230,16 +1242,24 @@ cat > "$MOUNT_DATA/config/accounting.conf" << 'CONFIG'
 # Edit this file to customize autostart behavior
 
 # Project name for accounting
-PROJECT="faktury"
-
-# Video source (camera, screen, or RTSP URL)
-SOURCE="camera"
+PROJECT="faktury_2024"
 
 # Web interface port
 PORT="8080"
 
-# Enable TTS announcements
-TTS_ENABLED="false"
+# RTSP camera URL (leave empty for local USB camera /dev/video0)
+# Example: rtsp://admin:password@192.168.1.100:554/h264Preview_01_main
+RTSP_URL=""
+
+# Scanner settings
+SCANNER_FPS="2"
+MIN_CONFIDENCE="0.25"
+CONFIRM_THRESHOLD="0.60"
+AUTO_SAVE_THRESHOLD="0.85"
+
+# Enable kiosk mode (auto-open browser)
+KIOSK_ENABLED="true"
+KIOSK_URL="http://localhost:8080"
 
 # Ollama model for analysis
 MODEL="llava:7b"
@@ -1257,7 +1277,17 @@ DATA_SIZE=$(du -sh "$MOUNT_DATA" | cut -f1)
 
 # Sync and unmount
 log_info "Syncing data..."
-sync
+sync &
+SYNC_PID=$!
+SPIN='|/-\'
+i=0
+while kill -0 "$SYNC_PID" 2>/dev/null; do
+    i=$(((i + 1) % 4))
+    printf "\r${BLUE}[INFO]${NC} Syncing data... %s" "${SPIN:$i:1}"
+    sleep 0.2
+done
+wait "$SYNC_PID"
+echo ""
 
 echo ""
 echo "=========================================="
