@@ -715,11 +715,56 @@ log_timed $STEP_START "Partitions created: $PART1, $PART2"
 # =============================================================================
 
 STEP_START=$(date +%s)
+log_info "Waiting for kernel to recognize partitions..."
+partprobe "$USB_DEVICE" >/dev/null 2>&1 || true
+udevadm settle 2>/dev/null || true
+
+for i in {1..20}; do
+    if [ -b "$PART1" ] && [ -b "$PART2" ]; then
+        break
+    fi
+    sleep 0.5
+done
+
+if [ ! -b "$PART1" ] || [ ! -b "$PART2" ]; then
+    log_error "Partitions not ready: $PART1 or $PART2 not found"
+    lsblk "$USB_DEVICE" 2>/dev/null || true
+    exit 1
+fi
+
+umount "$PART1" 2>/dev/null || true
+umount "$PART2" 2>/dev/null || true
+
+MKFS_VFAT="mkfs.vfat"
+if ! command -v mkfs.vfat &> /dev/null; then
+    if command -v mkfs.fat &> /dev/null; then
+        MKFS_VFAT="mkfs.fat"
+    else
+        log_error "mkfs.vfat not found (dosfstools). Please install dosfstools and re-run."
+        if command -v dnf &> /dev/null; then
+            log_error "  sudo dnf install -y dosfstools"
+        elif command -v apt-get &> /dev/null; then
+            log_error "  sudo apt-get install -y dosfstools"
+        else
+            log_error "  Install dosfstools using your distro's package manager"
+        fi
+        exit 1
+    fi
+fi
+
 log_info "Formatting partition 1 (FAT32 for EFI)..."
-mkfs.vfat -F 32 -n "$LIVE_LABEL" "$PART1" >/dev/null 2>&1
+if ! MKFS_OUT=$($MKFS_VFAT -F 32 -n "$LIVE_LABEL" "$PART1" 2>&1); then
+    log_error "Failed to format $PART1 as FAT32"
+    echo "$MKFS_OUT"
+    exit 1
+fi
 
 log_info "Formatting partition 2 (ext4 for data)..."
-mkfs.ext4 -L "$DATA_LABEL" -F "$PART2" >/dev/null 2>&1
+if ! MKFS_OUT=$(mkfs.ext4 -L "$DATA_LABEL" -F "$PART2" 2>&1); then
+    log_error "Failed to format $PART2 as ext4"
+    echo "$MKFS_OUT"
+    exit 1
+fi
 
 log_timed $STEP_START "Partitions formatted"
 
@@ -947,7 +992,22 @@ log_success "usb-builder copied"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 if [ -d "$PROJECT_ROOT/streamware" ] && [ -f "$PROJECT_ROOT/pyproject.toml" ]; then
-    PROJECT_SIZE=$(du -sb "$PROJECT_ROOT" --exclude='__pycache__' --exclude='.pytest_cache' --exclude='environments/usb-builder/cache' --exclude='environments/usb-builder/output' 2>/dev/null | cut -f1)
+    PROJECT_SIZE=$(du -sb "$PROJECT_ROOT" \
+        --exclude='__pycache__' \
+        --exclude='.pytest_cache' \
+        --exclude='environments/usb-builder/cache' \
+        --exclude='environments/usb-builder/output' \
+        --exclude='venv' \
+        --exclude='.venv' \
+        --exclude='video' \
+        --exclude='*.mp4' \
+        --exclude='*.mkv' \
+        --exclude='*.avi' \
+        --exclude='*.mov' \
+        --exclude='*.webm' \
+        --exclude='dist' \
+        --exclude='build' \
+        2>/dev/null | cut -f1)
     log_info "  → streamware project: $(numfmt --to=iec-i --suffix=B $PROJECT_SIZE 2>/dev/null || echo "${PROJECT_SIZE} bytes")"
     log_info "Copying streamware project (development mode)..."
     
@@ -962,13 +1022,36 @@ if [ -d "$PROJECT_ROOT/streamware" ] && [ -f "$PROJECT_ROOT/pyproject.toml" ]; t
         --exclude='*.egg-info/' \
         --exclude='dist/' \
         --exclude='build/' \
+        --exclude='venv/' \
+        --exclude='.venv/' \
+        --exclude='video/' \
+        --exclude='*.mp4' \
+        --exclude='*.mkv' \
+        --exclude='*.avi' \
+        --exclude='*.mov' \
+        --exclude='*.webm' \
         --exclude='environments/usb-builder/cache/' \
         --exclude='environments/usb-builder/output/' \
         --exclude='*.iso' \
         "$PROJECT_ROOT/" "$MOUNT_DATA/streamware/" 2>/dev/null &
     
     RSYNC_PID=$!
-    PROJECT_SIZE=$(du -sb "$PROJECT_ROOT" 2>/dev/null | cut -f1)
+    PROJECT_SIZE=$(du -sb "$PROJECT_ROOT" \
+        --exclude='__pycache__' \
+        --exclude='.pytest_cache' \
+        --exclude='environments/usb-builder/cache' \
+        --exclude='environments/usb-builder/output' \
+        --exclude='venv' \
+        --exclude='.venv' \
+        --exclude='video' \
+        --exclude='*.mp4' \
+        --exclude='*.mkv' \
+        --exclude='*.avi' \
+        --exclude='*.mov' \
+        --exclude='*.webm' \
+        --exclude='dist' \
+        --exclude='build' \
+        2>/dev/null | cut -f1)
     START_TIME=$(date +%s)
     
     while kill -0 $RSYNC_PID 2>/dev/null; do
@@ -1009,7 +1092,7 @@ fi
 source venv/bin/activate
 
 # Install in development mode
-pip install -e . 2>/dev/null
+python -m pip install -e . 2>/dev/null
 
 echo ""
 echo "Streamware development environment activated!"
@@ -1024,7 +1107,29 @@ fi
 if [ -d "$CACHE_DIR/images" ] && [ "$(ls -A $CACHE_DIR/images/*.tar 2>/dev/null)" ]; then
     IMAGES_SIZE=$(du -sb "$CACHE_DIR/images" 2>/dev/null | cut -f1)
     log_info "  → container images: $(numfmt --to=iec-i --suffix=B $IMAGES_SIZE 2>/dev/null || echo "${IMAGES_SIZE} bytes")"
-    copy_with_progress "$CACHE_DIR/images/" "$MOUNT_DATA/images/" "Container images"
+
+    for image_tar in "$CACHE_DIR/images/"*.tar; do
+        [ -f "$image_tar" ] || continue
+        tar_base=$(basename "$image_tar")
+
+        if [ "$tar_base" = "open-webui.tar" ]; then
+            continue
+        fi
+
+        IMAGE_SIZE_BYTES=$(stat -c%s "$image_tar" 2>/dev/null || echo 0)
+        DATA_AVAIL_NOW=$(df -B1 --output=avail "$MOUNT_DATA" 2>/dev/null | tail -1 | tr -d ' ')
+        [ -z "$DATA_AVAIL_NOW" ] && DATA_AVAIL_NOW=0
+
+        IMAGE_REQUIRED_BYTES=$((IMAGE_SIZE_BYTES + 104857600))
+        if [ "$DATA_AVAIL_NOW" -lt "$IMAGE_REQUIRED_BYTES" ]; then
+            IMAGE_REQUIRED_HUMAN=$(numfmt --to=iec-i --suffix=B "$IMAGE_REQUIRED_BYTES" 2>/dev/null || echo "${IMAGE_REQUIRED_BYTES} bytes")
+            DATA_AVAIL_HUMAN=$(numfmt --to=iec-i --suffix=B "$DATA_AVAIL_NOW" 2>/dev/null || echo "${DATA_AVAIL_NOW} bytes")
+            log_warn "Skipping container image $tar_base (need $IMAGE_REQUIRED_HUMAN, have $DATA_AVAIL_HUMAN)"
+            continue
+        fi
+
+        copy_with_progress "$image_tar" "$MOUNT_DATA/images/" "Container image: $tar_base"
+    done
 fi
 
 if [ "${ENABLE_OPENWEBUI:-true}" != "true" ]; then
@@ -1103,8 +1208,6 @@ fi
 BROWSER_SCRIPT
 chmod +x "$MOUNT_DATA/bin/kiosk-browser.sh"
 log_success "Kiosk browser wrapper created"
-
-# =============================================================================
 # Pre-download Python dependencies for offline installation
 # =============================================================================
 
@@ -1113,15 +1216,33 @@ mkdir -p "$MOUNT_DATA/pip-cache"
 
 # Download wheel files for streamware and dependencies
 if command -v pip3 &> /dev/null; then
-    run_with_timeout 300 "Downloading pip packages" \
-        pip3 download -d "$MOUNT_DATA/pip-cache" \
-            requests aiohttp pydantic rich PyYAML click jinja2 jsonpath-ng \
-            flask opencv-python-headless pillow numpy av \
+    PIP_CACHE_PACKAGES=(
+        pip
+        streamware
+        requests aiohttp pydantic rich PyYAML click jinja2 jsonpath-ng
+        flask opencv-python-headless pillow numpy av
+        setuptools wheel
+    )
+
+    run_with_timeout 300 "Downloading pip packages (host Python)" \
+        pip3 download -d "$MOUNT_DATA/pip-cache" "${PIP_CACHE_PACKAGES[@]}" \
         || log_warn "Some packages may not have been downloaded"
-    
-    # Download streamware itself if available on PyPI
-    pip3 download -d "$MOUNT_DATA/pip-cache" streamware 2>/dev/null || true
-    
+
+    run_with_timeout 600 "Downloading pip packages (Fedora Live Python 3.12)" \
+        pip3 download -d "$MOUNT_DATA/pip-cache" \
+            --only-binary=:all: \
+            --platform manylinux_2_28_x86_64 \
+            --platform manylinux2014_x86_64 \
+            --platform linux_x86_64 \
+            --platform any \
+            --implementation cp \
+            --python-version 3.12 \
+            --abi cp312 \
+            --abi abi3 \
+            --abi none \
+            "${PIP_CACHE_PACKAGES[@]}" \
+        || log_warn "Some Fedora Live (cp312) wheels may not have been downloaded"
+
     log_success "Pip packages cached for offline installation"
 else
     log_warn "pip3 not available - skipping package cache"
@@ -1172,8 +1293,23 @@ if [ "${ENABLE_OPENWEBUI:-true}" = "true" ]; then
 
     if [ -f "$OPENWEBUI_IMAGE" ]; then
         log_info "Copying Open-WebUI container image..."
-        cp "$OPENWEBUI_IMAGE" "$MOUNT_DATA/images/open-webui.tar"
-        log_success "Open-WebUI image copied"
+        OPENWEBUI_SIZE_BYTES=$(stat -c%s "$OPENWEBUI_IMAGE" 2>/dev/null || echo 0)
+        DATA_AVAIL_NOW=$(df -B1 --output=avail "$MOUNT_DATA" 2>/dev/null | tail -1 | tr -d ' ')
+        [ -z "$DATA_AVAIL_NOW" ] && DATA_AVAIL_NOW=0
+        OPENWEBUI_REQUIRED_BYTES=$((OPENWEBUI_SIZE_BYTES + 104857600))
+
+        if [ "$DATA_AVAIL_NOW" -lt "$OPENWEBUI_REQUIRED_BYTES" ]; then
+            OPENWEBUI_REQUIRED_HUMAN=$(numfmt --to=iec-i --suffix=B "$OPENWEBUI_REQUIRED_BYTES" 2>/dev/null || echo "${OPENWEBUI_REQUIRED_BYTES} bytes")
+            DATA_AVAIL_HUMAN=$(numfmt --to=iec-i --suffix=B "$DATA_AVAIL_NOW" 2>/dev/null || echo "${DATA_AVAIL_NOW} bytes")
+            log_warn "Not enough space for Open-WebUI image (need $OPENWEBUI_REQUIRED_HUMAN, have $DATA_AVAIL_HUMAN) - skipping"
+        else
+            if cp "$OPENWEBUI_IMAGE" "$MOUNT_DATA/images/open-webui.tar" 2>/dev/null; then
+                log_success "Open-WebUI image copied"
+            else
+                log_warn "Failed to copy Open-WebUI image - continuing without it"
+                rm -f "$MOUNT_DATA/images/open-webui.tar" 2>/dev/null || true
+            fi
+        fi
     fi
 else
     log_info "Open-WebUI disabled (ENABLE_OPENWEBUI=false) - skipping image cache"
@@ -1195,13 +1331,22 @@ cat > "$MOUNT_DATA/setup.sh" << 'SETUP'
 
 set -e
 
+if [ "$EUID" -ne 0 ]; then
+    if command -v sudo &> /dev/null; then
+        exec sudo -E bash "$0" "$@"
+    else
+        echo "Error: This script must be run as root (sudo not found)"
+        exit 1
+    fi
+fi
+
 echo "=========================================="
 echo "LLM Station Setup"
 echo "=========================================="
 
 # Find data partition
 DATA_PART=""
-for mount in /run/media/*/LLM-DATA /media/*/LLM-DATA /mnt/LLM-DATA; do
+for mount in /run/media/*/LLM-DATA /media/*/LLM-DATA /mnt/LLM-DATA /opt/llm-data; do
     if [ -d "$mount" ]; then
         DATA_PART="$mount"
         break
@@ -1210,11 +1355,11 @@ done
 
 if [ -z "$DATA_PART" ]; then
     echo "Data partition not found. Mounting..."
-    DATA_DEV=$(lsblk -o NAME,LABEL | grep LLM-DATA | awk '{print $1}')
+    DATA_DEV=$(lsblk -o NAME,LABEL -n | grep LLM-DATA | awk '{print $1}' | head -n1)
     if [ -n "$DATA_DEV" ]; then
-        mkdir -p /mnt/llm-data
-        mount "/dev/$DATA_DEV" /mnt/llm-data
-        DATA_PART="/mnt/llm-data"
+        mkdir -p /opt/llm-data
+        mount "/dev/$DATA_DEV" /opt/llm-data
+        DATA_PART="/opt/llm-data"
     else
         echo "Error: Cannot find LLM-DATA partition"
         exit 1
@@ -1228,10 +1373,17 @@ echo "Creating symlinks..."
 mkdir -p /opt
 ln -sf "$DATA_PART/environments" /opt/llm-station
 
+RUN_USER="${SUDO_USER:-$USER}"
+RUN_HOME="$HOME"
+if [ -n "$SUDO_USER" ] && [ -d "/home/$SUDO_USER" ]; then
+    RUN_HOME="/home/$SUDO_USER"
+fi
+
 # Set up Ollama models
 if [ -d "$DATA_PART/models/ollama" ]; then
-    mkdir -p ~/.ollama
-    ln -sf "$DATA_PART/models/ollama" ~/.ollama/models
+    mkdir -p "$RUN_HOME/.ollama"
+    ln -sf "$DATA_PART/models/ollama" "$RUN_HOME/.ollama/models"
+    chown -R "$RUN_USER:$RUN_USER" "$RUN_HOME/.ollama" 2>/dev/null || true
     echo "✓ Ollama models linked"
 fi
 
@@ -1246,10 +1398,64 @@ fi
 
 # Install streamware if not present
 if ! command -v sq &> /dev/null; then
-    echo "Installing streamware..."
-    pip install streamware 2>/dev/null || pip3 install streamware 2>/dev/null || {
-        echo "⚠ Could not install streamware. Install manually: pip install streamware"
+    echo "Installing streamware (offline)..."
+    PIP_CMD=""
+    if command -v pip3 &> /dev/null; then
+        PIP_CMD="pip3"
+    elif command -v pip &> /dev/null; then
+        PIP_CMD="pip"
+    elif python3 -m pip --version &> /dev/null; then
+        PIP_CMD="python3 -m pip"
+    else
+        python3 -m ensurepip --upgrade 2>/dev/null || true
+        if command -v pip3 &> /dev/null; then
+            PIP_CMD="pip3"
+        elif command -v pip &> /dev/null; then
+            PIP_CMD="pip"
+        elif python3 -m pip --version &> /dev/null; then
+            PIP_CMD="python3 -m pip"
+        fi
+    fi
+
+    PIP_WHL=""
+    if [ -d "$DATA_PART/pip-cache" ]; then
+        PIP_WHL=$(ls "$DATA_PART/pip-cache"/pip-*.whl 2>/dev/null | head -n1)
+    fi
+
+    run_pip_from_whl() {
+        local whl="$1"
+        shift
+        python3 - "$whl" "$@" << 'PY'
+import runpy, sys
+whl = sys.argv[1]
+sys.path.insert(0, whl)
+sys.argv = ['pip'] + sys.argv[2:]
+runpy.run_module('pip', run_name='__main__')
+PY
     }
+
+    pip_install() {
+        if [ -n "$PIP_CMD" ]; then
+            $PIP_CMD "$@"
+        elif [ -n "$PIP_WHL" ]; then
+            run_pip_from_whl "$PIP_WHL" "$@"
+        else
+            return 127
+        fi
+    }
+
+    if [ -z "$PIP_CMD" ] && [ -z "$PIP_WHL" ]; then
+        echo "⚠ Could not find pip. Install manually: sudo dnf install -y python3-pip"
+    elif [ -d "$DATA_PART/pip-cache" ]; then
+        pip_install install --break-system-packages --no-index --find-links="$DATA_PART/pip-cache" streamware 2>/dev/null || \
+        pip_install install --break-system-packages --no-index --find-links="$DATA_PART/pip-cache" "$DATA_PART/streamware" 2>/dev/null || \
+        pip_install install --no-index --find-links="$DATA_PART/pip-cache" streamware 2>/dev/null || \
+        pip_install install --no-index --find-links="$DATA_PART/pip-cache" "$DATA_PART/streamware" 2>/dev/null || {
+            echo "⚠ Could not install streamware from offline cache"
+        }
+    else
+        echo "⚠ Offline pip-cache not found at: $DATA_PART/pip-cache"
+    fi
 fi
 
 echo ""
@@ -1407,31 +1613,79 @@ fi
 
 echo "Setting up Python environment (offline mode)..."
 
-# Install pip if missing
-if ! command -v pip3 &> /dev/null; then
+PIP_CMD=""
+if command -v pip3 &> /dev/null; then
+    PIP_CMD="pip3"
+elif command -v pip &> /dev/null; then
+    PIP_CMD="pip"
+elif python3 -m pip --version &> /dev/null; then
+    PIP_CMD="python3 -m pip"
+else
     echo "Installing pip..."
     python3 -m ensurepip --upgrade 2>/dev/null || true
+    if command -v pip3 &> /dev/null; then
+        PIP_CMD="pip3"
+    elif command -v pip &> /dev/null; then
+        PIP_CMD="pip"
+    elif python3 -m pip --version &> /dev/null; then
+        PIP_CMD="python3 -m pip"
+    fi
 fi
 
+PIP_WHL=""
+if [ -d "$DATA_PART/pip-cache" ]; then
+    PIP_WHL=$(ls "$DATA_PART/pip-cache"/pip-*.whl 2>/dev/null | head -n1)
+fi
+
+run_pip_from_whl() {
+    local whl="$1"
+    shift
+    python3 - "$whl" "$@" << 'PY'
+import runpy, sys
+whl = sys.argv[1]
+sys.path.insert(0, whl)
+sys.argv = ['pip'] + sys.argv[2:]
+runpy.run_module('pip', run_name='__main__')
+PY
+}
+
+pip_install() {
+    if [ -n "$PIP_CMD" ]; then
+        $PIP_CMD "$@"
+    elif [ -n "$PIP_WHL" ]; then
+        run_pip_from_whl "$PIP_WHL" "$@"
+    else
+        return 127
+    fi
+}
+
 # Install from offline cache first
-if [ -d "$DATA_PART/pip-cache" ] && [ "$(ls -A $DATA_PART/pip-cache/*.whl 2>/dev/null)" ]; then
+if [ -d "$DATA_PART/pip-cache" ] && [ "$(ls -A $DATA_PART/pip-cache/*.whl 2>/dev/null)" ] && { [ -n "$PIP_CMD" ] || [ -n "$PIP_WHL" ]; }; then
     echo "Installing packages from offline cache..."
-    pip3 install --no-index --find-links="$DATA_PART/pip-cache" \
+    pip_install install --break-system-packages --no-index --find-links="$DATA_PART/pip-cache" \
+        requests aiohttp pydantic rich PyYAML click jinja2 jsonpath-ng \
+        flask pillow numpy 2>/dev/null || \
+    pip_install install --no-index --find-links="$DATA_PART/pip-cache" \
         requests aiohttp pydantic rich PyYAML click jinja2 jsonpath-ng \
         flask pillow numpy 2>/dev/null || true
-    
+
     # Try opencv-python-headless from cache
-    pip3 install --no-index --find-links="$DATA_PART/pip-cache" \
+    pip_install install --break-system-packages --no-index --find-links="$DATA_PART/pip-cache" \
+        opencv-python-headless 2>/dev/null || \
+    pip_install install --no-index --find-links="$DATA_PART/pip-cache" \
         opencv-python-headless 2>/dev/null || true
 fi
 
 # Install streamware from local project
-if [ -d "$DATA_PART/streamware" ] && [ -f "$DATA_PART/streamware/pyproject.toml" ]; then
+if [ -d "$DATA_PART/streamware" ] && [ -f "$DATA_PART/streamware/pyproject.toml" ] && { [ -n "$PIP_CMD" ] || [ -n "$PIP_WHL" ]; }; then
     echo "Installing streamware from local project..."
     cd "$DATA_PART/streamware"
-    pip3 install --no-index --find-links="$DATA_PART/pip-cache" -e . 2>/dev/null || \
-    pip3 install -e . 2>/dev/null || \
-    pip3 install . 2>/dev/null || true
+    pip_install install --break-system-packages --no-index --find-links="$DATA_PART/pip-cache" -e . 2>/dev/null || \
+    pip_install install --break-system-packages -e . 2>/dev/null || \
+    pip_install install --break-system-packages . 2>/dev/null || \
+    pip_install install --no-index --find-links="$DATA_PART/pip-cache" -e . 2>/dev/null || \
+    pip_install install -e . 2>/dev/null || \
+    pip_install install . 2>/dev/null || true
     cd -
 fi
 
@@ -1443,11 +1697,6 @@ if [ -f "$DATA_PART/config/.env" ]; then
     set -a  # Export all variables
     source "$DATA_PART/config/.env"
     set +a
-fi
-
-# Load additional overrides from accounting.conf
-if [ -f "$DATA_PART/config/accounting.conf" ]; then
-    source "$DATA_PART/config/accounting.conf"
 fi
 
 ENABLE_OPENWEBUI="${ENABLE_OPENWEBUI:-true}"
@@ -1716,6 +1965,14 @@ done
 wait "$SYNC_PID"
 echo ""
 log_timed $STEP_START "Data synced to USB"
+
+log_info "Unmounting USB partitions..."
+if [ -n "$MOUNT_LIVE" ] && mountpoint -q "$MOUNT_LIVE" 2>/dev/null; then
+    umount "$MOUNT_LIVE" 2>/dev/null || true
+fi
+if [ -n "$MOUNT_DATA" ] && mountpoint -q "$MOUNT_DATA" 2>/dev/null; then
+    umount "$MOUNT_DATA" 2>/dev/null || true
+fi
 
 # Calculate total time
 TOTAL_TIME=$(($(date +%s) - SCRIPT_START_TIME))

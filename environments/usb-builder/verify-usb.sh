@@ -244,10 +244,11 @@ fi
 section "Phase 4: Boot Configuration"
 
 # Mount partition 1 temporarily
+umount "$PART1" 2>/dev/null || true
 MOUNT1=$(mktemp -d -p "$CACHE_DIR/tmp" usb-verify-mnt1-XXXXXX)
 mount -o ro "$PART1" "$MOUNT1" 2>/dev/null || {
     fail "Cannot mount partition 1"
-    rmdir "$MOUNT1"
+    rmdir "$MOUNT1" 2>/dev/null || true
     MOUNT1=""
 }
 
@@ -322,8 +323,8 @@ if [ -n "$MOUNT1" ]; then
         [ -f "$MOUNT1/llm-data/autorun.sh" ] && pass "  autorun.sh present"
     fi
     
-    umount "$MOUNT1"
-    rmdir "$MOUNT1"
+    umount "$MOUNT1" 2>/dev/null || true
+    rmdir "$MOUNT1" 2>/dev/null || true
 fi
 
 # =============================================================================
@@ -333,10 +334,11 @@ fi
 if [ -b "$PART2" ]; then
     section "Phase 5: Data Partition Content"
     
+    umount "$PART2" 2>/dev/null || true
     MOUNT2=$(mktemp -d -p "$CACHE_DIR/tmp" usb-verify-mnt2-XXXXXX)
     mount -o ro "$PART2" "$MOUNT2" 2>/dev/null || {
         fail "Cannot mount partition 2"
-        rmdir "$MOUNT2"
+        rmdir "$MOUNT2" 2>/dev/null || true
         MOUNT2=""
     }
     
@@ -411,8 +413,8 @@ if [ -b "$PART2" ]; then
         DATA_SIZE=$(du -sh "$MOUNT2" 2>/dev/null | cut -f1)
         info "Total data partition size: $DATA_SIZE"
         
-        umount "$MOUNT2"
-        rmdir "$MOUNT2"
+        umount "$MOUNT2" 2>/dev/null || true
+        rmdir "$MOUNT2" 2>/dev/null || true
     fi
 fi
 
@@ -510,15 +512,20 @@ section "Phase 7: Setup Scripts Validation"
 
 if [ -b "$PART2" ]; then
     DATA_MOUNT=$(mktemp -d -p "$CACHE_DIR/tmp" usb-verify-data-XXXXXX)
-    mount -o ro "$PART2" "$DATA_MOUNT" 2>/dev/null
-    
-    if [ -f "$DATA_MOUNT/setup.sh" ]; then
-        bash -n "$DATA_MOUNT/setup.sh" 2>/dev/null && pass "setup.sh syntax OK" || fail "setup.sh syntax ERROR"
-        grep -q "podman\|docker" "$DATA_MOUNT/setup.sh" && pass "Container setup included"
+    umount "$PART2" 2>/dev/null || true
+
+    if mount -o ro "$PART2" "$DATA_MOUNT" 2>/dev/null; then
+        if [ -f "$DATA_MOUNT/setup.sh" ]; then
+            bash -n "$DATA_MOUNT/setup.sh" 2>/dev/null && pass "setup.sh syntax OK" || fail "setup.sh syntax ERROR"
+            grep -q "podman\|docker" "$DATA_MOUNT/setup.sh" && pass "Container setup included"
+        fi
+
+        umount "$DATA_MOUNT" 2>/dev/null || true
+    else
+        warn "Cannot mount partition 2 for script validation"
     fi
-    
-    umount "$DATA_MOUNT" 2>/dev/null
-    rmdir "$DATA_MOUNT" 2>/dev/null
+
+    rmdir "$DATA_MOUNT" 2>/dev/null || true
 fi
 
 # =============================================================================
@@ -532,8 +539,11 @@ echo ""
 echo "  sudo qemu-system-x86_64 \\"
 echo "    -enable-kvm \\"
 echo "    -m 4G \\"
-echo "    -drive file=$USB_DEVICE,format=raw,if=virtio \\"
 echo "    -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd \\"
+echo "    -drive if=pflash,format=raw,file=/usr/share/OVMF/OVMF_VARS_4M.fd \\"
+echo "    -device qemu-xhci,id=xhci \\"
+echo "    -drive if=none,id=usbdisk,file=$USB_DEVICE,format=raw,cache=none \\"
+echo "    -device usb-storage,drive=usbdisk \\"
 echo "    -display gtk"
 echo ""
 
@@ -559,17 +569,40 @@ if command -v qemu-system-x86_64 &> /dev/null; then
         for path in "/usr/share/OVMF/OVMF_CODE_4M.fd" "/usr/share/OVMF/OVMF_CODE.fd" "/usr/share/edk2/ovmf/OVMF_CODE.fd"; do
             [ -f "$path" ] && OVMF="$path" && break
         done
+
+        OVMF_VARS=""
+        for path in "/usr/share/OVMF/OVMF_VARS_4M.fd" "/usr/share/OVMF/OVMF_VARS.fd" "/usr/share/edk2/ovmf/OVMF_VARS.fd"; do
+            [ -f "$path" ] && OVMF_VARS="$path" && break
+        done
         
         if [ -n "$OVMF" ]; then
-            qemu-system-x86_64 \
-                -enable-kvm \
-                -m 4G \
-                -smp 2 \
-                -drive file="$USB_DEVICE",format=raw,if=virtio \
-                -drive if=pflash,format=raw,readonly=on,file="$OVMF" \
-                -display gtk \
-                -usb \
+            if [ -n "$OVMF_VARS" ]; then
+                OVMF_VARS_COPY=$(mktemp -p "$CACHE_DIR/tmp" ovmf-vars-XXXXXX.fd)
+                cp "$OVMF_VARS" "$OVMF_VARS_COPY"
+            else
+                warn "OVMF_VARS not found; UEFI boot entries may not persist"
+                OVMF_VARS_COPY=""
+            fi
+
+            QEMU_ARGS=(
+                -enable-kvm
+                -m 4G
+                -smp 2
+                -drive if=pflash,format=raw,readonly=on,file="$OVMF"
+            )
+            if [ -n "$OVMF_VARS_COPY" ]; then
+                QEMU_ARGS+=( -drive if=pflash,format=raw,file="$OVMF_VARS_COPY" )
+            fi
+
+            QEMU_ARGS+=(
+                -device qemu-xhci,id=xhci
+                -drive if=none,id=usbdisk,file="$USB_DEVICE",format=raw,cache=none
+                -device usb-storage,drive=usbdisk
+                -display gtk
                 -device usb-tablet
+            )
+
+            qemu-system-x86_64 "${QEMU_ARGS[@]}"
         else
             warn "OVMF not found, trying BIOS mode..."
             qemu-system-x86_64 \
