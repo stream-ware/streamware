@@ -8,6 +8,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ISO_FILE="${1:-$SCRIPT_DIR/output/llm-station-um790pro.iso}"
+CACHE_DIR="${CACHE_DIR:-$SCRIPT_DIR/cache}"
+mkdir -p "$CACHE_DIR/tmp"
 
 # Colors
 RED='\033[0;31m'
@@ -74,7 +76,7 @@ echo ""
 echo "## Phase 2: ISO Structure"
 
 # Extract to temp for inspection
-TEMP_DIR=$(mktemp -d)
+TEMP_DIR=$(mktemp -d -p "$CACHE_DIR/tmp" iso-deep-XXXXXX)
 trap "rm -rf $TEMP_DIR" EXIT
 
 info "Extracting ISO for inspection..."

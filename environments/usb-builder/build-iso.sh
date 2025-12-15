@@ -29,7 +29,7 @@ echo "Cache directory: $CACHE_DIR"
 echo "Output directory: $OUTPUT_DIR"
 
 # Create cache and output directories
-mkdir -p "$CACHE_DIR/iso" "$CACHE_DIR/images" "$OUTPUT_DIR"
+mkdir -p "$CACHE_DIR/iso" "$CACHE_DIR/images" "$CACHE_DIR/tmp" "$OUTPUT_DIR"
 
 # Check dependencies
 check_deps() {
@@ -82,7 +82,8 @@ fi
 check_deps
 
 # Create working directories
-WORK_DIR="/tmp/iso-builder-$$"
+mkdir -p "$CACHE_DIR/tmp"
+WORK_DIR=$(mktemp -d -p "$CACHE_DIR/tmp" iso-builder-XXXXXX)
 ISO_ROOT="$WORK_DIR/iso"
 SQUASH_ROOT="$WORK_DIR/squashfs"
 
@@ -389,7 +390,7 @@ if [ -z "$EFI_IMG" ] && [ -d "$ISO_ROOT/EFI/BOOT" ]; then
     mkfs.vfat "$ISO_ROOT/$EFI_IMG" >/dev/null 2>&1
     
     # Mount and copy EFI files
-    EFI_MNT=$(mktemp -d)
+    EFI_MNT=$(mktemp -d -p "$CACHE_DIR/tmp" efi-mnt-XXXXXX)
     mount -o loop "$ISO_ROOT/$EFI_IMG" "$EFI_MNT"
     cp -r "$ISO_ROOT/EFI" "$EFI_MNT/"
     umount "$EFI_MNT"

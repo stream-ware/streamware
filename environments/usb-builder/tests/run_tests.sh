@@ -7,6 +7,9 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$(dirname "$SCRIPT_DIR")/lib"
+CACHE_DIR="${CACHE_DIR:-$(dirname "$SCRIPT_DIR")/cache}"
+
+mkdir -p "$CACHE_DIR/tmp"
 
 # Colors
 RED='\033[0;31m'
@@ -110,13 +113,13 @@ test_common() {
     assert_true "! command_exists nonexistent_command_xyz" "command_exists returns false for missing"
     
     # Test ensure_dir
-    local test_dir="/tmp/usb-builder-test-$$"
+    local test_dir=$(mktemp -d -p "$CACHE_DIR/tmp" usb-builder-test-XXXXXX)
     ensure_dir "$test_dir"
     assert_true "[ -d '$test_dir' ]" "ensure_dir creates directory"
     rm -rf "$test_dir"
     
     # Test file_size
-    local test_file="/tmp/usb-builder-test-file-$$"
+    local test_file=$(mktemp -p "$CACHE_DIR/tmp" usb-builder-test-file-XXXXXX)
     echo "test content" > "$test_file"
     local size=$(file_size "$test_file")
     assert_true "[ '$size' -gt 0 ]" "file_size returns size > 0"
@@ -221,7 +224,7 @@ test_boot() {
     assert_true "type generate_autorun_script &>/dev/null" "generate_autorun_script function exists"
     
     # Test script generation
-    local test_script="/tmp/usb-builder-test-firstboot-$$"
+    local test_script=$(mktemp -p "$CACHE_DIR/tmp" usb-builder-test-firstboot-XXXXXX)
     generate_first_boot_script "$test_script"
     assert_file_exists "$test_script" "generate_first_boot_script creates file"
     assert_true "[ -x '$test_script' ]" "generated script is executable"

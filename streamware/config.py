@@ -360,9 +360,8 @@ class Config:
             self._load_env_file(self._env_file)
         
         # Override with environment variables
-        for key in DEFAULTS.keys():
-            env_val = os.environ.get(key)
-            if env_val is not None:
+        for key, env_val in os.environ.items():
+            if key.startswith("SQ_"):
                 self._config[key] = env_val
     
     def _load_env_file(self, path: Path):
@@ -377,7 +376,7 @@ class Config:
                         key, _, value = line.partition("=")
                         key = key.strip()
                         value = value.strip().strip('"').strip("'")
-                        if key in DEFAULTS:
+                        if key in DEFAULTS or key.startswith("SQ_"):
                             self._config[key] = value
         except Exception:
             pass

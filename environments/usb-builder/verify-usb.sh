@@ -10,6 +10,8 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CACHE_DIR="${CACHE_DIR:-$SCRIPT_DIR/cache}"
+mkdir -p "$CACHE_DIR/tmp"
 
 # Colors
 RED='\033[0;31m'
@@ -242,7 +244,7 @@ fi
 section "Phase 4: Boot Configuration"
 
 # Mount partition 1 temporarily
-MOUNT1=$(mktemp -d)
+MOUNT1=$(mktemp -d -p "$CACHE_DIR/tmp" usb-verify-mnt1-XXXXXX)
 mount -o ro "$PART1" "$MOUNT1" 2>/dev/null || {
     fail "Cannot mount partition 1"
     rmdir "$MOUNT1"
@@ -331,7 +333,7 @@ fi
 if [ -b "$PART2" ]; then
     section "Phase 5: Data Partition Content"
     
-    MOUNT2=$(mktemp -d)
+    MOUNT2=$(mktemp -d -p "$CACHE_DIR/tmp" usb-verify-mnt2-XXXXXX)
     mount -o ro "$PART2" "$MOUNT2" 2>/dev/null || {
         fail "Cannot mount partition 2"
         rmdir "$MOUNT2"
@@ -423,7 +425,7 @@ section "Phase 6: Boot Simulation (No QEMU)"
 info "Simulating boot process statically..."
 
 # Mount partition 1 for analysis
-BOOT_MOUNT=$(mktemp -d)
+BOOT_MOUNT=$(mktemp -d -p "$CACHE_DIR/tmp" usb-verify-boot-XXXXXX)
 mount -o ro "$PART1" "$BOOT_MOUNT" 2>/dev/null || {
     warn "Cannot mount boot partition for analysis"
     BOOT_MOUNT=""
@@ -507,7 +509,7 @@ fi
 section "Phase 7: Setup Scripts Validation"
 
 if [ -b "$PART2" ]; then
-    DATA_MOUNT=$(mktemp -d)
+    DATA_MOUNT=$(mktemp -d -p "$CACHE_DIR/tmp" usb-verify-data-XXXXXX)
     mount -o ro "$PART2" "$DATA_MOUNT" 2>/dev/null
     
     if [ -f "$DATA_MOUNT/setup.sh" ]; then

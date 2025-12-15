@@ -152,6 +152,9 @@ log_success() { echo -e "${GREEN}✓${NC} $*"; }
 log_warn() { echo -e "${YELLOW}⚠${NC} $*"; }
 log_error() { echo -e "${RED}✗${NC} $*"; }
 
+mkdir -p "$CACHE_DIR/tmp"
+export TMPDIR="$CACHE_DIR/tmp"
+
 # Timing helper - returns elapsed time in human readable format
 format_duration() {
     local seconds=$1
@@ -320,7 +323,8 @@ extract_iso_with_progress() {
         echo ""
     else
         # Mount and copy with progress
-        local mnt=$(mktemp -d)
+        mkdir -p "$CACHE_DIR/tmp"
+        local mnt=$(mktemp -d -p "$CACHE_DIR/tmp")
         mount -o loop,ro "$iso" "$mnt"
         
         local total=$(du -sb "$mnt" 2>/dev/null | cut -f1)
@@ -723,13 +727,19 @@ log_timed $STEP_START "Partitions formatted"
 # Mount partitions
 # =============================================================================
 
-MOUNT_LIVE=$(mktemp -d)
-MOUNT_DATA=$(mktemp -d)
+mkdir -p "$CACHE_DIR/tmp"
+MOUNT_LIVE=$(mktemp -d -p "$CACHE_DIR/tmp")
+MOUNT_DATA=$(mktemp -d -p "$CACHE_DIR/tmp")
 
 mount "$PART1" "$MOUNT_LIVE"
 mount "$PART2" "$MOUNT_DATA"
 
 log_success "Partitions mounted"
+
+# Diagnostic: Show partition sizes
+log_info "Partition sizes:"
+log_info "  Live partition ($PART1): $(df -h "$MOUNT_LIVE" | tail -1 | awk '{print $2 " total, " $4 " available"}')"
+log_info "  Data partition ($PART2): $(df -h "$MOUNT_DATA" | tail -1 | awk '{print $2 " total, " $4 " available"}')"
 
 # =============================================================================
 # Copy Live system
@@ -848,7 +858,9 @@ if [ -f "$DATA_PART/install-service.sh" ]; then
     echo "LLM Station installed successfully!"
     echo ""
     echo "Services:"
-    echo "  Open-WebUI:  http://localhost:3000"
+    if [ "${ENABLE_OPENWEBUI:-true}" = "true" ]; then
+        echo "  Open-WebUI:  http://localhost:3000"
+    fi
     echo "  Ollama API:  http://localhost:11434"
     echo "  Accounting:  http://localhost:8080"
     echo ""
@@ -897,6 +909,10 @@ log_success "Desktop autostart created"
 STEP_START=$(date +%s)
 log_info "Copying project data to partition 2..."
 
+# Diagnostic: Show available space before copying
+DATA_AVAIL_BEFORE=$(df -B1 --output=avail "$MOUNT_DATA" 2>/dev/null | tail -1)
+log_info "Available space on data partition: $(numfmt --to=iec-i --suffix=B $DATA_AVAIL_BEFORE 2>/dev/null || echo "${DATA_AVAIL_BEFORE} bytes")"
+
 # Create directory structure
 mkdir -p "$MOUNT_DATA/environments"
 mkdir -p "$MOUNT_DATA/models/ollama"
@@ -905,15 +921,20 @@ mkdir -p "$MOUNT_DATA/images"
 
 # Copy environments with progress
 if [ -d "$ENV_DIR/ollama-webui" ]; then
+    DIR_SIZE=$(du -sb "$ENV_DIR/ollama-webui" 2>/dev/null | cut -f1)
+    log_info "  → ollama-webui: $(numfmt --to=iec-i --suffix=B $DIR_SIZE 2>/dev/null || echo "${DIR_SIZE} bytes")"
     copy_with_progress "$ENV_DIR/ollama-webui/" "$MOUNT_DATA/environments/ollama-webui/" "ollama-webui"
 fi
 
 if [ -d "$ENV_DIR/llama-cpp-rocm" ]; then
+    DIR_SIZE=$(du -sb "$ENV_DIR/llama-cpp-rocm" 2>/dev/null | cut -f1)
+    log_info "  → llama-cpp-rocm: $(numfmt --to=iec-i --suffix=B $DIR_SIZE 2>/dev/null || echo "${DIR_SIZE} bytes")"
     copy_with_progress "$ENV_DIR/llama-cpp-rocm/" "$MOUNT_DATA/environments/llama-cpp-rocm/" "llama-cpp-rocm"
 fi
 
 # Copy usb-builder (small, no progress needed)
-log_info "Copying usb-builder..."
+DIR_SIZE=$(du -sb "$SCRIPT_DIR" --exclude='cache' --exclude='output' 2>/dev/null | cut -f1 || echo "0")
+log_info "  → usb-builder: $(numfmt --to=iec-i --suffix=B $DIR_SIZE 2>/dev/null || echo "small")"
 rsync -a --exclude='cache/' --exclude='output/' --exclude='*.iso' \
     "$SCRIPT_DIR/" "$MOUNT_DATA/environments/usb-builder/" 2>/dev/null || true
 log_success "usb-builder copied"
@@ -926,6 +947,8 @@ log_success "usb-builder copied"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 if [ -d "$PROJECT_ROOT/streamware" ] && [ -f "$PROJECT_ROOT/pyproject.toml" ]; then
+    PROJECT_SIZE=$(du -sb "$PROJECT_ROOT" --exclude='__pycache__' --exclude='.pytest_cache' --exclude='environments/usb-builder/cache' --exclude='environments/usb-builder/output' 2>/dev/null | cut -f1)
+    log_info "  → streamware project: $(numfmt --to=iec-i --suffix=B $PROJECT_SIZE 2>/dev/null || echo "${PROJECT_SIZE} bytes")"
     log_info "Copying streamware project (development mode)..."
     
     mkdir -p "$MOUNT_DATA/streamware"
@@ -999,24 +1022,43 @@ fi
 
 # Copy container images if cached
 if [ -d "$CACHE_DIR/images" ] && [ "$(ls -A $CACHE_DIR/images/*.tar 2>/dev/null)" ]; then
+    IMAGES_SIZE=$(du -sb "$CACHE_DIR/images" 2>/dev/null | cut -f1)
+    log_info "  → container images: $(numfmt --to=iec-i --suffix=B $IMAGES_SIZE 2>/dev/null || echo "${IMAGES_SIZE} bytes")"
     copy_with_progress "$CACHE_DIR/images/" "$MOUNT_DATA/images/" "Container images"
+fi
+
+if [ "${ENABLE_OPENWEBUI:-true}" != "true" ]; then
+    rm -f "$MOUNT_DATA/images/open-webui.tar" 2>/dev/null || true
+    log_info "  (Open-WebUI disabled - removed open-webui.tar)"
 fi
 
 # Copy Ollama models if exist
 OLLAMA_HOME="${OLLAMA_HOME:-$HOME/.ollama}"
 if [ -d "$OLLAMA_HOME/models" ] && [ "$(ls -A $OLLAMA_HOME/models 2>/dev/null)" ]; then
+    MODELS_SIZE=$(du -sb "$OLLAMA_HOME/models" 2>/dev/null | cut -f1)
+    log_info "  → Ollama models: $(numfmt --to=iec-i --suffix=B $MODELS_SIZE 2>/dev/null || echo "${MODELS_SIZE} bytes")"
     copy_with_progress "$OLLAMA_HOME/models/" "$MOUNT_DATA/models/ollama/" "Ollama models"
 fi
 
 # Copy GGUF models if exist
 if [ -d "$ENV_DIR/llama-cpp-rocm/models" ] && [ "$(ls -A $ENV_DIR/llama-cpp-rocm/models/*.gguf 2>/dev/null)" ]; then
+    GGUF_SIZE=$(du -sb "$ENV_DIR/llama-cpp-rocm/models" 2>/dev/null | cut -f1)
+    log_info "  → GGUF models: $(numfmt --to=iec-i --suffix=B $GGUF_SIZE 2>/dev/null || echo "${GGUF_SIZE} bytes")"
     copy_with_progress "$ENV_DIR/llama-cpp-rocm/models/" "$MOUNT_DATA/models/gguf/" "GGUF models"
 fi
 
 # Copy cached models
 if [ -d "$CACHE_DIR/models" ] && [ "$(ls -A $CACHE_DIR/models/*.gguf 2>/dev/null)" ]; then
+    CACHED_SIZE=$(du -sb "$CACHE_DIR/models" 2>/dev/null | cut -f1)
+    log_info "  → cached models: $(numfmt --to=iec-i --suffix=B $CACHED_SIZE 2>/dev/null || echo "${CACHED_SIZE} bytes")"
     copy_with_progress "$CACHE_DIR/models/" "$MOUNT_DATA/models/gguf/" "Cached models"
 fi
+
+# Diagnostic: Show available space after copying data
+DATA_AVAIL_AFTER=$(df -B1 --output=avail "$MOUNT_DATA" 2>/dev/null | tail -1)
+DATA_USED=$((DATA_AVAIL_BEFORE - DATA_AVAIL_AFTER))
+log_info "Space used for project data: $(numfmt --to=iec-i --suffix=B $DATA_USED 2>/dev/null || echo "${DATA_USED} bytes")"
+log_info "Remaining space on data partition: $(numfmt --to=iec-i --suffix=B $DATA_AVAIL_AFTER 2>/dev/null || echo "${DATA_AVAIL_AFTER} bytes")"
 
 # =============================================================================
 # Download and copy Chromium AppImage for kiosk mode
@@ -1089,49 +1131,52 @@ fi
 # Pre-download Ollama binary for offline installation
 # =============================================================================
 
-OLLAMA_BINARY="$CACHE_DIR/ollama-linux-amd64"
-if [ ! -f "$OLLAMA_BINARY" ]; then
+OLLAMA_ARCHIVE="$CACHE_DIR/ollama-linux-amd64.tgz"
+if [ ! -f "$OLLAMA_ARCHIVE" ]; then
     mkdir -p "$CACHE_DIR"
-    run_with_timeout 120 "Downloading Ollama binary (~150MB)" \
-        curl -fsSL -o "$OLLAMA_BINARY" \
-            "https://github.com/ollama/ollama/releases/latest/download/ollama-linux-amd64" \
-        || log_warn "Failed to download Ollama binary"
+    run_with_timeout 600 "Downloading Ollama archive (~150MB)" \
+        curl -fsSL -o "$OLLAMA_ARCHIVE" \
+            "https://ollama.com/download/ollama-linux-amd64.tgz" \
+        || log_warn "Failed to download Ollama archive"
 fi
 
-if [ -f "$OLLAMA_BINARY" ]; then
-    log_info "Copying Ollama binary..."
-    cp "$OLLAMA_BINARY" "$MOUNT_DATA/bin/ollama"
-    chmod +x "$MOUNT_DATA/bin/ollama"
-    log_success "Ollama binary copied"
+if [ -f "$OLLAMA_ARCHIVE" ]; then
+    log_info "Copying Ollama archive..."
+    cp "$OLLAMA_ARCHIVE" "$MOUNT_DATA/bin/ollama-linux-amd64.tgz"
+    log_success "Ollama archive copied"
 fi
 
 # =============================================================================
 # Save Open-WebUI container image for offline use
 # =============================================================================
 
-OPENWEBUI_IMAGE="$CACHE_DIR/images/open-webui.tar"
-mkdir -p "$CACHE_DIR/images"
+if [ "${ENABLE_OPENWEBUI:-true}" = "true" ]; then
+    OPENWEBUI_IMAGE="$CACHE_DIR/images/open-webui.tar"
+    mkdir -p "$CACHE_DIR/images"
 
-if [ ! -f "$OPENWEBUI_IMAGE" ]; then
-    if command -v podman &> /dev/null; then
-        run_with_timeout 600 "Pulling Open-WebUI image (~1.5GB)" \
-            podman pull ghcr.io/open-webui/open-webui:latest && \
-        run_with_spinner "Saving Open-WebUI image" \
-            podman save -o "$OPENWEBUI_IMAGE" ghcr.io/open-webui/open-webui:latest || \
-        log_warn "Failed to save Open-WebUI image"
-    elif command -v docker &> /dev/null; then
-        run_with_timeout 600 "Pulling Open-WebUI image (~1.5GB)" \
-            docker pull ghcr.io/open-webui/open-webui:latest && \
-        run_with_spinner "Saving Open-WebUI image" \
-            docker save -o "$OPENWEBUI_IMAGE" ghcr.io/open-webui/open-webui:latest || \
-        log_warn "Failed to save Open-WebUI image"
+    if [ ! -f "$OPENWEBUI_IMAGE" ]; then
+        if command -v podman &> /dev/null; then
+            run_with_timeout 600 "Pulling Open-WebUI image (~1.5GB)" \
+                podman pull ghcr.io/open-webui/open-webui:main && \
+            run_with_spinner "Saving Open-WebUI image" \
+                podman save -o "$OPENWEBUI_IMAGE" ghcr.io/open-webui/open-webui:main || \
+            log_warn "Failed to save Open-WebUI image"
+        elif command -v docker &> /dev/null; then
+            run_with_timeout 600 "Pulling Open-WebUI image (~1.5GB)" \
+                docker pull ghcr.io/open-webui/open-webui:main && \
+            run_with_spinner "Saving Open-WebUI image" \
+                docker save -o "$OPENWEBUI_IMAGE" ghcr.io/open-webui/open-webui:main || \
+            log_warn "Failed to save Open-WebUI image"
+        fi
     fi
-fi
 
-if [ -f "$OPENWEBUI_IMAGE" ]; then
-    log_info "Copying Open-WebUI container image..."
-    cp "$OPENWEBUI_IMAGE" "$MOUNT_DATA/images/open-webui.tar"
-    log_success "Open-WebUI image copied"
+    if [ -f "$OPENWEBUI_IMAGE" ]; then
+        log_info "Copying Open-WebUI container image..."
+        cp "$OPENWEBUI_IMAGE" "$MOUNT_DATA/images/open-webui.tar"
+        log_success "Open-WebUI image copied"
+    fi
+else
+    log_info "Open-WebUI disabled (ENABLE_OPENWEBUI=false) - skipping image cache"
 fi
 
 # =============================================================================
@@ -1392,6 +1437,21 @@ fi
 
 echo "Python environment ready"
 
+# Load .env configuration (contains all settings including camera URL)
+if [ -f "$DATA_PART/config/.env" ]; then
+    echo "Loading configuration from .env..."
+    set -a  # Export all variables
+    source "$DATA_PART/config/.env"
+    set +a
+fi
+
+# Load additional overrides from accounting.conf
+if [ -f "$DATA_PART/config/accounting.conf" ]; then
+    source "$DATA_PART/config/accounting.conf"
+fi
+
+ENABLE_OPENWEBUI="${ENABLE_OPENWEBUI:-true}"
+
 # =============================================================================
 # Install and start Ollama (OFFLINE from pre-downloaded binary)
 # =============================================================================
@@ -1400,13 +1460,12 @@ echo "Setting up Ollama (offline mode)..."
 
 # Install Ollama from offline binary if not present
 if ! command -v ollama &> /dev/null; then
-    if [ -x "$DATA_PART/bin/ollama" ]; then
-        echo "Installing Ollama from offline binary..."
-        sudo cp "$DATA_PART/bin/ollama" /usr/local/bin/ollama
-        sudo chmod +x /usr/local/bin/ollama
+    if [ -f "$DATA_PART/bin/ollama-linux-amd64.tgz" ]; then
+        echo "Installing Ollama from offline archive..."
+        sudo tar -C /usr -xzf "$DATA_PART/bin/ollama-linux-amd64.tgz"
         echo "Ollama installed from USB"
     else
-        echo "WARNING: Ollama binary not found in offline cache"
+        echo "WARNING: Ollama archive not found in offline cache"
         echo "Trying online installation..."
         curl -fsSL https://ollama.com/install.sh | sh 2>/dev/null || true
     fi
@@ -1435,46 +1494,50 @@ fi
 # Start Open-WebUI container
 # =============================================================================
 
-echo "Setting up Open-WebUI (offline mode)..."
+if [ "$ENABLE_OPENWEBUI" = "true" ]; then
+    echo "Setting up Open-WebUI (offline mode)..."
 
-# Check if podman or docker available
-CONTAINER_CMD=""
-if command -v podman &> /dev/null; then
-    CONTAINER_CMD="podman"
-elif command -v docker &> /dev/null; then
-    CONTAINER_CMD="docker"
-fi
-
-if [ -n "$CONTAINER_CMD" ]; then
-    # Load image from offline cache if not already loaded
-    if ! $CONTAINER_CMD images | grep -q "open-webui"; then
-        if [ -f "$DATA_PART/images/open-webui.tar" ]; then
-            echo "Loading Open-WebUI from offline cache..."
-            $CONTAINER_CMD load -i "$DATA_PART/images/open-webui.tar" 2>/dev/null || true
-        fi
+    # Check if podman or docker available
+    CONTAINER_CMD=""
+    if command -v podman &> /dev/null; then
+        CONTAINER_CMD="podman"
+    elif command -v docker &> /dev/null; then
+        CONTAINER_CMD="docker"
     fi
-    
-    # Stop existing container
-    $CONTAINER_CMD stop open-webui 2>/dev/null || true
-    $CONTAINER_CMD rm open-webui 2>/dev/null || true
-    
-    # Start Open-WebUI (from local image)
-    echo "Starting Open-WebUI container..."
-    $CONTAINER_CMD run -d --name open-webui \
-        -p 3000:8080 \
-        -e OLLAMA_BASE_URL=http://host.containers.internal:11434 \
-        --add-host=host.containers.internal:host-gateway \
-        ghcr.io/open-webui/open-webui:latest 2>/dev/null || {
-            # Try with localhost if host.containers.internal fails
-            $CONTAINER_CMD run -d --name open-webui \
-                -p 3000:8080 \
-                --network=host \
-                -e OLLAMA_BASE_URL=http://localhost:11434 \
-                ghcr.io/open-webui/open-webui:latest 2>/dev/null || \
-            echo "WARNING: Open-WebUI container not available"
-        }
+
+    if [ -n "$CONTAINER_CMD" ]; then
+        # Load image from offline cache if not already loaded
+        if ! $CONTAINER_CMD images | grep -q "open-webui"; then
+            if [ -f "$DATA_PART/images/open-webui.tar" ]; then
+                echo "Loading Open-WebUI from offline cache..."
+                $CONTAINER_CMD load -i "$DATA_PART/images/open-webui.tar" 2>/dev/null || true
+            fi
+        fi
+        
+        # Stop existing container
+        $CONTAINER_CMD stop open-webui 2>/dev/null || true
+        $CONTAINER_CMD rm open-webui 2>/dev/null || true
+        
+        # Start Open-WebUI (from local image)
+        echo "Starting Open-WebUI container..."
+        $CONTAINER_CMD run -d --name open-webui \
+            -p 3000:8080 \
+            -e OLLAMA_BASE_URL=http://host.containers.internal:11434 \
+            --add-host=host.containers.internal:host-gateway \
+            ghcr.io/open-webui/open-webui:main 2>/dev/null || {
+                # Try with localhost if host.containers.internal fails
+                $CONTAINER_CMD run -d --name open-webui \
+                    -p 3000:8080 \
+                    --network=host \
+                    -e OLLAMA_BASE_URL=http://localhost:11434 \
+                    ghcr.io/open-webui/open-webui:main 2>/dev/null || \
+                echo "WARNING: Open-WebUI container not available"
+            }
+    else
+        echo "NOTE: No container runtime (podman/docker) - skipping Open-WebUI"
+    fi
 else
-    echo "NOTE: No container runtime (podman/docker) - skipping Open-WebUI"
+    echo "Open-WebUI disabled (ENABLE_OPENWEBUI=$ENABLE_OPENWEBUI) - skipping"
 fi
 
 # =============================================================================
@@ -1482,19 +1545,6 @@ fi
 # =============================================================================
 
 echo "Starting streamware services..."
-
-# Load .env configuration (contains all settings including camera URL)
-if [ -f "$DATA_PART/config/.env" ]; then
-    echo "Loading configuration from .env..."
-    set -a  # Export all variables
-    source "$DATA_PART/config/.env"
-    set +a
-fi
-
-# Load additional overrides from accounting.conf
-if [ -f "$DATA_PART/config/accounting.conf" ]; then
-    source "$DATA_PART/config/accounting.conf"
-fi
 
 # Set defaults for kiosk mode
 PROJECT="${PROJECT:-faktury_2024}"
@@ -1559,7 +1609,9 @@ echo ""
 echo "=========================================="
 echo "LLM Station started!"
 echo "  Accounting: http://localhost:$PORT"
-echo "  Open-WebUI: http://localhost:3000"
+if [ "$ENABLE_OPENWEBUI" = "true" ]; then
+    echo "  Open-WebUI: http://localhost:3000"
+fi
 echo "=========================================="
 AUTOSTART
 

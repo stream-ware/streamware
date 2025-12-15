@@ -15,6 +15,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_DIR="$(dirname "$SCRIPT_DIR")"
+CACHE_DIR="${CACHE_DIR:-$SCRIPT_DIR/cache}"
 
 echo "=========================================="
 echo "USB Builder for UM790 Pro LLM Station"
@@ -65,8 +66,8 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
 fi
 
 # Create working directory
-WORK_DIR="/tmp/usb-builder-$$"
-mkdir -p "$WORK_DIR"
+mkdir -p "$CACHE_DIR/tmp"
+WORK_DIR=$(mktemp -d -p "$CACHE_DIR/tmp" usb-builder-XXXXXX)
 trap "rm -rf $WORK_DIR" EXIT
 
 echo ""

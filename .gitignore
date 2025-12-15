@@ -33,7 +33,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+
 lib64/
 parts/
 sdist/
@@ -44,7 +44,9 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-
+yolo11n.pt
+yolo11n
+yolo11n_openvino_model/
 # PyInstaller
 *.manifest
 *.spec

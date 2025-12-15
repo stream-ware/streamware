@@ -37,10 +37,10 @@ echo "Output: $OUTPUT_DIR/$MODELS_ISO_NAME"
 echo ""
 
 # Create directories
-mkdir -p "$CACHE_DIR/models" "$OUTPUT_DIR"
+mkdir -p "$CACHE_DIR/models" "$CACHE_DIR/tmp" "$OUTPUT_DIR"
 
 # Temp directory for ISO content
-WORK_DIR=$(mktemp -d -t models-iso-XXXXXX)
+WORK_DIR=$(mktemp -d -p "$CACHE_DIR/tmp" models-iso-XXXXXX)
 MODELS_ROOT="$WORK_DIR/models"
 mkdir -p "$MODELS_ROOT"
 

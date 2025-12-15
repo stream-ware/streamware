@@ -81,14 +81,20 @@ get_base_iso_name() {
 # Container images to include
 CONTAINER_IMAGES=(
     "ollama/ollama:rocm"
-    "ghcr.io/open-webui/open-webui:main"
 )
+
+if [ "${ENABLE_OPENWEBUI:-true}" = "true" ]; then
+    CONTAINER_IMAGES+=("ghcr.io/open-webui/open-webui:main")
+fi
 
 # Fallback images (if ROCm not available)
 CONTAINER_IMAGES_FALLBACK=(
     "ollama/ollama:latest"
-    "ghcr.io/open-webui/open-webui:main"
 )
+
+if [ "${ENABLE_OPENWEBUI:-true}" = "true" ]; then
+    CONTAINER_IMAGES_FALLBACK+=("ghcr.io/open-webui/open-webui:main")
+fi
 
 # =============================================================================
 # Hardware Configuration
@@ -159,6 +165,8 @@ VERBOSE="${VERBOSE:-false}"
 
 # Dry run mode (don't actually build)
 DRY_RUN="${DRY_RUN:-false}"
+
+ENABLE_OPENWEBUI="${ENABLE_OPENWEBUI:-true}"
 
 # =============================================================================
 # Helper Functions

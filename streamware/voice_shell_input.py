@@ -5,7 +5,10 @@ Input processing mixin for the voice shell server.
 Extracted from voice_shell_server.py for modularity.
 """
 
+import json
+
 from .voice_shell_events import EventType, Event
+from .llm_shell import ShellResult
 
 
 class VoiceInputProcessorMixin:

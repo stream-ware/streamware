@@ -8,6 +8,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CACHE_DIR="$SCRIPT_DIR/cache/images"
 
+source "$SCRIPT_DIR/config.sh" 2>/dev/null || true
+ENABLE_OPENWEBUI="${ENABLE_OPENWEBUI:-true}"
+
 echo "=========================================="
 echo "Loading offline container images"
 echo "=========================================="
@@ -28,12 +31,16 @@ else
 fi
 
 echo ""
-echo "[2/3] Loading Open-WebUI image..."
-if [ -f "$CACHE_DIR/open-webui.tar" ]; then
-    podman load -i "$CACHE_DIR/open-webui.tar"
-    echo "  ✓ Loaded"
+if [ "$ENABLE_OPENWEBUI" = "true" ]; then
+    echo "[2/3] Loading Open-WebUI image..."
+    if [ -f "$CACHE_DIR/open-webui.tar" ]; then
+        podman load -i "$CACHE_DIR/open-webui.tar"
+        echo "  ✓ Loaded"
+    else
+        echo "  ⚠ Not found"
+    fi
 else
-    echo "  ⚠ Not found"
+    echo "[2/3] Skipping Open-WebUI image (ENABLE_OPENWEBUI=$ENABLE_OPENWEBUI)"
 fi
 
 echo ""

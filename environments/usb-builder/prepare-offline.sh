@@ -12,6 +12,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_DIR="$(dirname "$SCRIPT_DIR")"
 CACHE_DIR="${CACHE_DIR:-$SCRIPT_DIR/cache}"
 
+source "$SCRIPT_DIR/config.sh" 2>/dev/null || true
+ENABLE_OPENWEBUI="${ENABLE_OPENWEBUI:-true}"
+
 echo "=========================================="
 echo "Preparing Offline LLM Station"
 echo "=========================================="
@@ -79,11 +82,15 @@ if [ -n "$CONTAINER_CMD" ]; then
     fi
     
     # Open-WebUI image
-    if ! check_cached "$CACHE_DIR/images/open-webui.tar" "open-webui"; then
-        echo "  Pulling ghcr.io/open-webui/open-webui:main..."
-        $CONTAINER_CMD pull ghcr.io/open-webui/open-webui:main
-        echo "  Saving to cache..."
-        $CONTAINER_CMD save ghcr.io/open-webui/open-webui:main -o "$CACHE_DIR/images/open-webui.tar"
+    if [ "$ENABLE_OPENWEBUI" = "true" ]; then
+        if ! check_cached "$CACHE_DIR/images/open-webui.tar" "open-webui"; then
+            echo "  Pulling ghcr.io/open-webui/open-webui:main..."
+            $CONTAINER_CMD pull ghcr.io/open-webui/open-webui:main
+            echo "  Saving to cache..."
+            $CONTAINER_CMD save ghcr.io/open-webui/open-webui:main -o "$CACHE_DIR/images/open-webui.tar"
+        fi
+    else
+        echo "  Skipping Open-WebUI image cache (ENABLE_OPENWEBUI=$ENABLE_OPENWEBUI)"
     fi
 fi
 
