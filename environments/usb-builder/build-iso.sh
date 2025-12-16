@@ -192,6 +192,13 @@ else
     echo "  No squashfs found - will add data as overlay"
 fi
 
+for grub_cfg in "$ISO_ROOT/EFI/BOOT/grub.cfg" "$ISO_ROOT/boot/grub2/grub.cfg" "$ISO_ROOT/boot/grub/grub.cfg"; do
+    if [ -f "$grub_cfg" ]; then
+        sed -i 's/^set default="1"/set default="0"/' "$grub_cfg" 2>/dev/null || true
+        sed -i 's/^set default=1$/set default=0/' "$grub_cfg" 2>/dev/null || true
+    fi
+done
+
 echo ""
 echo "[4/7] Adding LLM Station files..."
 

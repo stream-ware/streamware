@@ -803,12 +803,15 @@ log_info "Updating GRUB configuration for new volume label..."
 for grub_cfg in "$MOUNT_LIVE/EFI/BOOT/grub.cfg" "$MOUNT_LIVE/boot/grub2/grub.cfg" "$MOUNT_LIVE/boot/grub/grub.cfg"; do
     if [ -f "$grub_cfg" ]; then
         log_info "  Updating: $grub_cfg"
+        LIVE_OVERLAY_ARGS="rd.live.overlay=LABEL=$DATA_LABEL:/LiveOS/overlay rd.live.overlay.overlayfs=1 rd.live.overlay.nouserconfirmprompt"
         # Replace old label with new label in GRUB config
         sed -i "s/CDLABEL=$ORIG_ISO_LABEL/CDLABEL=$LIVE_LABEL/g" "$grub_cfg"
         sed -i "s/LABEL=$ORIG_ISO_LABEL/LABEL=$LIVE_LABEL/g" "$grub_cfg"
         # Also handle URL-encoded versions (spaces as %20, etc)
         ORIG_ENCODED=$(echo "$ORIG_ISO_LABEL" | sed 's/ /%20/g; s/-/\\x2d/g')
         sed -i "s/$ORIG_ENCODED/$LIVE_LABEL/g" "$grub_cfg" 2>/dev/null || true
+        sed -i -E "/^[[:space:]]*(linux|linuxefi)[[:space:]]/ { /rd\\.live\\.image/ { /rd\\.live\\.overlay=/! s|$| $LIVE_OVERLAY_ARGS| } }" "$grub_cfg" 2>/dev/null || true
+        sed -i 's/^set default="1"/set default="0"/' "$grub_cfg" 2>/dev/null || true
     fi
 done
 
@@ -818,6 +821,8 @@ for syslinux_cfg in "$MOUNT_LIVE/isolinux/isolinux.cfg" "$MOUNT_LIVE/syslinux/sy
         log_info "  Updating: $syslinux_cfg"
         sed -i "s/CDLABEL=$ORIG_ISO_LABEL/CDLABEL=$LIVE_LABEL/g" "$syslinux_cfg"
         sed -i "s/LABEL=$ORIG_ISO_LABEL/LABEL=$LIVE_LABEL/g" "$syslinux_cfg"
+        LIVE_OVERLAY_ARGS="rd.live.overlay=LABEL=$DATA_LABEL:/LiveOS/overlay rd.live.overlay.overlayfs=1 rd.live.overlay.nouserconfirmprompt"
+        sed -i -E "/^[[:space:]]*[Aa][Pp][Pp][Ee][Nn][Dd][[:space:]]/ { /rd\\.live\\.image/ { /rd\\.live\\.overlay=/! s|$| $LIVE_OVERLAY_ARGS| } }" "$syslinux_cfg" 2>/dev/null || true
     fi
 done
 
@@ -963,6 +968,8 @@ mkdir -p "$MOUNT_DATA/environments"
 mkdir -p "$MOUNT_DATA/models/ollama"
 mkdir -p "$MOUNT_DATA/models/gguf"
 mkdir -p "$MOUNT_DATA/images"
+mkdir -p "$MOUNT_DATA/LiveOS/overlay"
+mkdir -p "$MOUNT_DATA/LiveOS/ovlwork"
 
 # Copy environments with progress
 if [ -d "$ENV_DIR/ollama-webui" ]; then

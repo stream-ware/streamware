@@ -347,6 +347,8 @@ if [ -b "$PART2" ]; then
         [ -d "$MOUNT2/environments" ] && pass "environments/ directory" || warn "environments/ missing"
         [ -d "$MOUNT2/models" ] && pass "models/ directory" || warn "models/ missing"
         [ -d "$MOUNT2/images" ] && pass "images/ directory" || info "images/ not present"
+        [ -d "$MOUNT2/LiveOS/overlay" ] && pass "LiveOS/overlay directory" || warn "LiveOS/overlay missing"
+        [ -d "$MOUNT2/LiveOS/ovlwork" ] && pass "LiveOS/ovlwork directory" || warn "LiveOS/ovlwork missing"
         
         # Check environments
         if [ -d "$MOUNT2/environments" ]; then
@@ -461,6 +463,24 @@ if [ -n "$BOOT_MOUNT" ] && [ -d "$BOOT_MOUNT" ]; then
         # Check boot parameters
         grep -q "rd.live.image" "$GRUB_CFG" 2>/dev/null && pass "Live boot parameter present"
         grep -q "root=live" "$GRUB_CFG" 2>/dev/null && pass "Root parameter configured"
+        grep -q "rd.live.overlay=" "$GRUB_CFG" 2>/dev/null && pass "LiveOS overlay parameter present" || fail "LiveOS overlay parameter missing (rd.live.overlay=...)"
+        grep -q "rd.live.overlay.overlayfs=1" "$GRUB_CFG" 2>/dev/null && pass "OverlayFS mode enabled" || fail "OverlayFS mode missing (rd.live.overlay.overlayfs=1)"
+        grep -q "rd.live.overlay=LABEL=LLM-DATA:/LiveOS/overlay" "$GRUB_CFG" 2>/dev/null && pass "Persistent overlay target: LLM-DATA:/LiveOS/overlay" || fail "Persistent overlay target missing (LABEL=LLM-DATA:/LiveOS/overlay)"
+        grep -q "rd.live.overlay.nouserconfirmprompt" "$GRUB_CFG" 2>/dev/null && pass "Overlay prompt disabled" || warn "Overlay prompt flag missing (rd.live.overlay.nouserconfirmprompt)"
+    fi
+
+    SYSLINUX_CFG=""
+    for cfg in "isolinux/isolinux.cfg" "syslinux/syslinux.cfg"; do
+        [ -f "$BOOT_MOUNT/$cfg" ] && SYSLINUX_CFG="$BOOT_MOUNT/$cfg" && break
+    done
+    
+    if [ -n "$SYSLINUX_CFG" ]; then
+        pass "Syslinux config present"
+        grep -q "rd.live.overlay=" "$SYSLINUX_CFG" 2>/dev/null && pass "Syslinux: overlay parameter present" || warn "Syslinux: overlay parameter missing"
+        grep -q "rd.live.overlay.overlayfs=1" "$SYSLINUX_CFG" 2>/dev/null && pass "Syslinux: OverlayFS mode enabled" || warn "Syslinux: OverlayFS mode missing"
+        grep -q "rd.live.overlay=LABEL=LLM-DATA:/LiveOS/overlay" "$SYSLINUX_CFG" 2>/dev/null && pass "Syslinux: persistent overlay target configured" || warn "Syslinux: persistent overlay target missing"
+    else
+        warn "No syslinux config found (BIOS boot may not be available)"
     fi
     
     # EFI chain validation
